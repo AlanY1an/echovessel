@@ -8,6 +8,7 @@ import {
 import { Chat } from './screens/Chat'
 import { Onboarding } from './screens/Onboarding'
 import { Admin } from './screens/Admin'
+import { ImportScreen } from './screens/Import'
 import { usePersona } from './hooks/usePersona'
 import type {
   DaemonState,
@@ -126,14 +127,29 @@ function AdminRoute({
   toggleVoice: (enabled: boolean) => Promise<void>
 }) {
   const navigate = useNavigate()
+  // Nested routes inside the /admin/* wildcard. `index` renders the
+  // main Admin tabbed shell; `import` renders the 3-step import wizard
+  // — both share the same top-level /admin/* mount from AppShell.
   return (
-    <Admin
-      persona={persona}
-      daemonState={daemonState}
-      updatePersona={updatePersona}
-      toggleVoice={toggleVoice}
-      onBackToChat={() => navigate('/chat')}
-    />
+    <Routes>
+      <Route
+        index
+        element={
+          <Admin
+            persona={persona}
+            daemonState={daemonState}
+            updatePersona={updatePersona}
+            toggleVoice={toggleVoice}
+            onBackToChat={() => navigate('/chat')}
+          />
+        }
+      />
+      <Route
+        path="import"
+        element={<ImportScreen onBack={() => navigate('/admin')} />}
+      />
+      <Route path="*" element={<Navigate to="/admin" replace />} />
+    </Routes>
   )
 }
 

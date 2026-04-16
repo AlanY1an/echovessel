@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { TopBar } from '../components/TopBar'
 import type { AdminTab } from '../types'
 import type {
@@ -141,6 +142,7 @@ function PersonaTab({
   persona: PersonaStateApi
   onUpdate: (payload: PersonaUpdatePayload) => Promise<void>
 }) {
+  const navigate = useNavigate()
   return (
     <div className="admin-section">
       <div className="admin-section-head">
@@ -148,6 +150,25 @@ function PersonaTab({
         <p className="admin-section-lead">
           persona 的 5 个"长期画像"。改这些会直接影响下次对话时 persona 的行为。
         </p>
+      </div>
+
+      <div className="admin-hint-card">
+        <div className="admin-hint-glyph">📥</div>
+        <div className="admin-hint-body">
+          <div className="admin-hint-title">有历史材料想让 persona 记住？</div>
+          <div className="admin-hint-desc">
+            聊天记录、日记、文档——<strong>导入器</strong>
+            会让 LLM 读完之后，把具体事件、身边的人、
+            你身上的事实分别写到对应的记忆层。
+          </div>
+        </div>
+        <button
+          type="button"
+          className="admin-hint-btn"
+          onClick={() => navigate('/admin/import')}
+        >
+          导入历史材料 →
+        </button>
       </div>
 
       <div className="admin-blocks">

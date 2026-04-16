@@ -82,3 +82,6 @@ Thumbs.db
 *.sqlite
 *.sqlite-journal
 *.db
+
+# TS incremental build cache
+src/echovessel/channels/web/frontend/tsconfig.tsbuildinfo

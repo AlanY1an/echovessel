@@ -812,6 +812,7 @@ class Runtime:
             broadcaster=broadcaster,
             runtime=self,
             voice_service=self.ctx.voice_service,
+            importer_facade=self._importer_facade,
         )
 
         config = uvicorn.Config(

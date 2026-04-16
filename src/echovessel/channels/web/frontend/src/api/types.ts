@@ -219,6 +219,153 @@ export const KNOWN_CHAT_EVENT_NAMES: readonly ChatEvent['event'][] = [
   'chat.message.error',
 ] as const
 
+// ─── HTTP · POST /api/admin/import/* ─────────────────────────────────────
+
+/**
+ * Client-side file/paste submission to kick off an import. `source_label`
+ * is a human-readable name shown back in the UI and persisted on the
+ * pipeline report (e.g. file name, or "粘贴 2026-04-16"). `content` is
+ * raw UTF-8 text — MVP only handles text; audio transcription + binary
+ * file parsing is deferred.
+ */
+export interface ImportUploadPayload {
+  source_label: string
+  content: string
+}
+
+/**
+ * Response from POST /api/admin/import/upload. The `upload_id` is the
+ * opaque handle the frontend passes to /estimate and /start — the raw
+ * bytes stay server-side. `total_chunks` is an up-front estimate based
+ * on byte size; the authoritative count comes back from /estimate.
+ */
+export interface ImportUploadResponse {
+  upload_id: string
+  source_label: string
+  size_bytes: number
+  total_chunks: number
+}
+
+export interface ImportEstimatePayload {
+  upload_id: string
+}
+
+/**
+ * Response from POST /api/admin/import/estimate. Shown to the user as a
+ * "这次导入会用 ≈X tokens · $Y" confirmation card before /start fires.
+ */
+export interface ImportEstimateResponse {
+  upload_id: string
+  total_chunks: number
+  estimated_input_tokens: number
+  estimated_output_tokens: number
+  estimated_cost_usd: number
+  model: string
+}
+
+export interface ImportStartPayload {
+  upload_id: string
+}
+
+export interface ImportStartResponse {
+  pipeline_id: string
+}
+
+export interface ImportCancelPayload {
+  pipeline_id: string
+}
+
+export interface ImportCancelResponse {
+  ok: true
+  pipeline_id: string
+}
+
+// ─── SSE · /api/admin/import/events ──────────────────────────────────────
+
+/**
+ * Lifecycle shape for every SSE frame on the import stream. A single
+ * pipeline run emits:
+ *
+ *   progress × N chunks (possibly with write / dropped interleaved)
+ *   → done (on success / partial_success / cancelled)
+ *   OR
+ *   → error (on unrecoverable failure)
+ */
+export type ImportPipelineState =
+  | 'running'
+  | 'paused'
+  | 'cancelled'
+  | 'done'
+  | 'failed'
+
+export interface ImportProgressData {
+  pipeline_id: string
+  current_chunk: number
+  total_chunks: number
+  state: ImportPipelineState
+}
+
+/**
+ * Emitted when a single LLM-output write lands in memory. Frontend uses
+ * these to accumulate a live "写入" tally per content_type without
+ * waiting for the final done payload.
+ */
+export interface ImportWriteData {
+  pipeline_id: string
+  chunk_index: number
+  content_type: string
+}
+
+export interface ImportDroppedData {
+  pipeline_id: string
+  chunk_index: number
+  reason: string
+  raw_target: string
+  payload_excerpt: string
+}
+
+/**
+ * Final summary payload. Shape mirrors
+ * `echovessel.import_.models.PipelineReport` but collapses the long
+ * concept-node-id lists down to counts, which is all the UI renders.
+ */
+export type ImportFinalStatus =
+  | 'success'
+  | 'partial_success'
+  | 'failed'
+  | 'cancelled'
+
+export interface ImportDoneData {
+  pipeline_id: string
+  source_label: string
+  status: ImportFinalStatus
+  total_chunks: number
+  processed_chunks: number
+  writes_by_target: Record<string, number>
+  dropped_count: number
+  error_message: string
+}
+
+export interface ImportErrorData {
+  pipeline_id: string
+  error: string
+}
+
+export type ImportEvent =
+  | { event: 'import.progress'; data: ImportProgressData }
+  | { event: 'import.write'; data: ImportWriteData }
+  | { event: 'import.dropped'; data: ImportDroppedData }
+  | { event: 'import.done'; data: ImportDoneData }
+  | { event: 'import.error'; data: ImportErrorData }
+
+export const KNOWN_IMPORT_EVENT_NAMES: readonly ImportEvent['event'][] = [
+  'import.progress',
+  'import.write',
+  'import.dropped',
+  'import.done',
+  'import.error',
+] as const
+
 // ─── Error class ─────────────────────────────────────────────────────────
 
 /**

@@ -29,6 +29,7 @@ from fastapi import FastAPI
 
 from echovessel.channels.web.channel import WebChannel
 from echovessel.channels.web.routes.admin import build_admin_router
+from echovessel.channels.web.routes.admin_import import build_admin_import_router
 from echovessel.channels.web.routes.chat import build_chat_router
 from echovessel.channels.web.sse import SSEBroadcaster
 
@@ -41,6 +42,7 @@ def build_web_app(
     broadcaster: SSEBroadcaster,
     runtime: Any = None,
     voice_service: Any | None = None,
+    importer_facade: Any | None = None,
     heartbeat_seconds: float = 30.0,
 ) -> FastAPI:
     """Assemble the FastAPI application for the Web channel.
@@ -59,6 +61,12 @@ def build_web_app(
         to the chat router so the ``GET /api/chat/voice/{id}.mp3``
         endpoint can locate the voice cache directory. When ``None``
         (voice disabled), the endpoint returns 404.
+    importer_facade
+        Optional :class:`ImporterFacade` instance. When supplied
+        alongside ``runtime``, the admin-import router (upload /
+        estimate / start / cancel / events) is mounted. When either
+        is missing, the endpoints are not registered — so tests that
+        exercise the chat surface alone still work.
     heartbeat_seconds
         Interval for the heartbeat broadcast. Tests can use a small
         value to exercise the heartbeat path without waiting 30s.
@@ -97,6 +105,18 @@ def build_web_app(
     # ``runtime=None`` and skip the admin surface entirely.
     if runtime is not None:
         app.include_router(build_admin_router(runtime=runtime))
+
+    # Worker E (v0.0.2) · admin-import routes are mounted only when
+    # both the runtime and a live ImporterFacade are available. The
+    # facade construction in runtime/app.py is best-effort; if it
+    # failed at boot (no LLM, etc.) we simply skip the router rather
+    # than 503-ing every handler.
+    if runtime is not None and importer_facade is not None:
+        app.include_router(
+            build_admin_import_router(
+                runtime=runtime, importer_facade=importer_facade
+            )
+        )
 
     # Serve the built React frontend as static files. The vite build
     # outputs into channels/web/static/ (see vite.config.ts build.outDir).

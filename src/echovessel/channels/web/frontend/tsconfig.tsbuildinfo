@@ -1,1 +1,0 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/types.ts","./src/vite-env.d.ts","./src/api/client.ts","./src/api/types.ts","./src/components/topbar.tsx","./src/hooks/usechat.ts","./src/hooks/usepersona.ts","./src/hooks/usesse.ts","./src/screens/admin.tsx","./src/screens/chat.tsx","./src/screens/onboarding.tsx"],"version":"5.9.3"}

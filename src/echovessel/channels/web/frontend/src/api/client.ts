@@ -19,6 +19,14 @@
 import type {
   ChatSendPayload,
   DaemonState,
+  ImportCancelPayload,
+  ImportCancelResponse,
+  ImportEstimatePayload,
+  ImportEstimateResponse,
+  ImportStartPayload,
+  ImportStartResponse,
+  ImportUploadPayload,
+  ImportUploadResponse,
   OnboardingPayload,
   OnboardingResponse,
   PersonaStateApi,
@@ -145,6 +153,63 @@ export async function postChatSend(
   payload: ChatSendPayload,
 ): Promise<{ ok: true }> {
   return fetchJson<{ ok: true }>('/api/chat/send', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+// ─── Import endpoints ──────────────────────────────────────────────────
+
+/**
+ * POST /api/admin/import/upload — stage the source text server-side and
+ * return an opaque `upload_id`. Raw bytes never re-travel the wire; the
+ * frontend only holds the id until /start fires the pipeline.
+ */
+export async function postImportUpload(
+  payload: ImportUploadPayload,
+): Promise<ImportUploadResponse> {
+  return fetchJson<ImportUploadResponse>('/api/admin/import/upload', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/**
+ * POST /api/admin/import/estimate — run the chunker + token counter and
+ * return estimated token / cost numbers. Cheap dry-run; no LLM calls.
+ */
+export async function postImportEstimate(
+  payload: ImportEstimatePayload,
+): Promise<ImportEstimateResponse> {
+  return fetchJson<ImportEstimateResponse>('/api/admin/import/estimate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/**
+ * POST /api/admin/import/start — kick off the pipeline and return the
+ * `pipeline_id` the client uses to open the SSE stream at
+ * `/api/admin/import/events?pipeline_id=...`.
+ */
+export async function postImportStart(
+  payload: ImportStartPayload,
+): Promise<ImportStartResponse> {
+  return fetchJson<ImportStartResponse>('/api/admin/import/start', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/**
+ * POST /api/admin/import/cancel — ask the pipeline to stop at the next
+ * chunk boundary. Already-written memory is kept; the pipeline emits a
+ * final `import.done` with `status=cancelled` once it has wound down.
+ */
+export async function postImportCancel(
+  payload: ImportCancelPayload,
+): Promise<ImportCancelResponse> {
+  return fetchJson<ImportCancelResponse>('/api/admin/import/cancel', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

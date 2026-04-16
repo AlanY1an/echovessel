@@ -65,7 +65,7 @@ to a backend (see **Known Limitations**).
 
 #### Tests
 
-- 760 tests pass (10 skipped), covering memory, runtime, voice, channels, proactive policy, and import pipeline modules. Coverage is unit-level and module-integration-level; see **Known Limitations** for what is and isn't tested.
+- 772 tests pass (10 skipped), covering memory, runtime, voice, channels, proactive policy, and import pipeline modules. Coverage is unit-level and module-integration-level; see **Known Limitations** for what is and isn't tested.
 - GitHub Actions CI enforces `ruff check`, `lint-imports`, and `pytest` on every PR and push to `main`, across ubuntu-latest + macos-latest × Python 3.11.
 
 ### Known Limitations
