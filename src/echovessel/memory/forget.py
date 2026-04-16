@@ -15,6 +15,7 @@ separate cron job 30 days later (not implemented yet — v1.1).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -30,6 +31,8 @@ from echovessel.memory.models import (
     CoreBlockAppend,
     RecallMessage,
 )
+
+log = logging.getLogger(__name__)
 
 
 class DeletionChoice(StrEnum):
@@ -195,12 +198,16 @@ def delete_concept_node(
     filling_rows = list(db.exec(filling_stmt))
     dependent_thought_ids = [row.parent_id for row in filling_rows]
 
+    # Collect vector-table ids to scrub AFTER the outer db.commit() — opening
+    # a second SQLite connection (via backend._engine) while this session
+    # still holds a write lock is a classic "database is locked" deadlock.
+    vector_ids_to_delete: list[int] = []
+
     if choice == DeletionChoice.CASCADE:
         # Soft-delete the node and every thought that depended on it
         node.deleted_at = now
         db.add(node)
-        if backend is not None:
-            backend.delete_vector(node.id)
+        vector_ids_to_delete.append(node.id)
 
         if dependent_thought_ids:
             stmt = select(ConceptNode).where(
@@ -210,16 +217,14 @@ def delete_concept_node(
             for thought in db.exec(stmt):
                 thought.deleted_at = now
                 db.add(thought)
-                if backend is not None:
-                    backend.delete_vector(thought.id)
+                vector_ids_to_delete.append(thought.id)
 
     elif choice == DeletionChoice.ORPHAN:
         # Soft-delete just the node; mark its filling links as orphaned so
         # thoughts survive but can't retrace to a deleted event.
         node.deleted_at = now
         db.add(node)
-        if backend is not None:
-            backend.delete_vector(node.id)
+        vector_ids_to_delete.append(node.id)
 
         for row in filling_rows:
             row.orphaned = True
@@ -227,6 +232,21 @@ def delete_concept_node(
             db.add(row)
 
     db.commit()
+
+    # Best-effort vector scrub. Safe to fail: the concept_nodes join filters
+    # by deleted_at, so a leaked vector row is never returned to retrieve().
+    if backend is not None:
+        for vec_id in vector_ids_to_delete:
+            try:
+                backend.delete_vector(vec_id)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "delete_concept_node: vector scrub failed "
+                    "node_id=%s: %s: %s",
+                    vec_id,
+                    type(exc).__name__,
+                    exc,
+                )
 
 
 # ---------------------------------------------------------------------------
