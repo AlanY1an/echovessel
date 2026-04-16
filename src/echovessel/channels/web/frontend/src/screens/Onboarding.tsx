@@ -37,6 +37,7 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
   const [step, setStep] = useState<Step>('welcome')
 
   // Blank-write state.
+  const [name, setName] = useState('')
   const [text, setText] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -63,7 +64,7 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
     setSubmitting(true)
     try {
       await completeOnboarding({
-        display_name: DEFAULT_DISPLAY_NAME,
+        display_name: name.trim() || DEFAULT_DISPLAY_NAME,
         persona_block: text.trim(),
         self_block: '',
         user_block: '',
@@ -229,6 +230,19 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
             <br />
             其他的(你的身份、发生过的事、你身边的人)之后可以慢慢告诉 ta。
           </p>
+
+          <label className="onboarding-name-label">
+            叫 ta 什么 <span className="onboarding-name-hint">(可选 · 留空默认"她")</span>
+          </label>
+          <input
+            className="onboarding-name-input"
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="她 · 小林 · 阿南 · 任何你想叫的名字"
+            maxLength={64}
+            disabled={submitting}
+          />
 
           <textarea
             className="onboarding-textarea"

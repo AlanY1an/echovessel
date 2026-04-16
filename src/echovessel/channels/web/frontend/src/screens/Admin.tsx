@@ -239,6 +239,24 @@ function PersonaTab({
   onUpdate: (payload: PersonaUpdatePayload) => Promise<void>
 }) {
   const navigate = useNavigate()
+  const [nameDraft, setNameDraft] = useState(persona.display_name)
+  const [nameSaving, setNameSaving] = useState(false)
+  const [nameSavedAt, setNameSavedAt] = useState<number | null>(null)
+  const nameDirty = nameDraft.trim() !== persona.display_name
+
+  const handleSaveName = async () => {
+    const trimmed = nameDraft.trim()
+    if (!trimmed || !nameDirty) return
+    setNameSaving(true)
+    try {
+      await onUpdate({ display_name: trimmed } as PersonaUpdatePayload)
+      setNameSavedAt(Date.now())
+      window.setTimeout(() => setNameSavedAt(null), 2000)
+    } finally {
+      setNameSaving(false)
+    }
+  }
+
   return (
     <div className="admin-section">
       <div className="admin-section-head">
@@ -246,6 +264,31 @@ function PersonaTab({
         <p className="admin-section-lead">
           persona 的 5 个"长期画像"。改这些会直接影响下次对话时 persona 的行为。
         </p>
+      </div>
+
+      <div className="admin-name-row">
+        <label className="admin-name-label">
+          显示名
+          <span className="admin-name-hint">persona 在 Web / Discord / 任何 channel 上的称呼</span>
+        </label>
+        <div className="admin-name-controls">
+          <input
+            className="admin-name-input"
+            value={nameDraft}
+            onChange={(e) => setNameDraft(e.target.value)}
+            placeholder="她"
+            maxLength={256}
+            disabled={nameSaving}
+          />
+          <button
+            type="button"
+            className="block-editor-save"
+            disabled={!nameDirty || nameSaving || !nameDraft.trim()}
+            onClick={() => void handleSaveName()}
+          >
+            {nameSaving ? '⋯' : nameSavedAt ? '已保存 ✓' : '改名'}
+          </button>
+        </div>
       </div>
 
       <div className="admin-hint-card">
@@ -1074,8 +1117,8 @@ function VoiceTab({
         <div className="admin-hint-body">
           <div className="admin-hint-title">想让 persona 用你的声音说话？</div>
           <div className="admin-hint-desc">
-            上传 3 段以上的纯净录音，
-            训练一个属于你自己的 voice · 20-60s 完成 · 可以试听后再激活。
+            上传一段 10-60s 的纯净录音(多段更好)，训练一个属于你自己的
+            voice · 可以试听后再激活。没克隆的话就用 FishAudio 内置默认音。
           </div>
         </div>
         <button
@@ -1120,14 +1163,6 @@ function VoiceTab({
         </div>
       </div>
 
-      <div className="voice-empty">
-        <div className="voice-empty-glyph">🎙</div>
-        <div className="voice-empty-title">即将推出:声音克隆 / 自定义样本上传</div>
-        <p className="voice-empty-desc">
-          下一版会支持上传一段 30-60 秒的纯净录音，
-          Persona 之后的回复就可以用这个声音读出来。
-        </p>
-      </div>
     </div>
   )
 }

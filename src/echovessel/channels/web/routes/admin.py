@@ -1724,7 +1724,7 @@ def _collect_channel_status(runtime: Any) -> list[dict[str, Any]]:
 # (a future cron can sweep anything older than 7 days; for MVP we leave
 # housekeeping to the user).
 
-_VOICE_SAMPLE_MIN_COUNT = 3
+_VOICE_SAMPLE_MIN_COUNT = 1  # FishAudio accepts a single sample · more is better quality but not required
 _VOICE_SAMPLE_MAX_BYTES = 50 * 1024 * 1024  # 50 MB per sample
 _VOICE_PREVIEW_TEXT = "你好，我是你刚刚克隆出的声音。"
 

@@ -85,11 +85,18 @@ First startup downloads the sentence-transformers embedder (~90MB, one-time). Su
 Expected log on clean boot:
 ```
 schema migration: created table core_block_appends
+voice service: <enabled | disabled> (config.voice.enabled=...)
+proactive scheduler: <enabled | disabled> (config.proactive.enabled=...)
 importer facade: built
+static frontend: mounted from .../channels/web/static
+web channel: serving on http://127.0.0.1:7777 (debounce_ms=2000)
 memory observer: registered
-EchoVessel runtime started | ...
-local-first disclosure: outbound = only <llm endpoint>; embedder runs locally; no telemetry
+EchoVessel runtime started | data_dir=... persona=... llm_provider=... channels=...
+local-first disclosure: outbound = only <llm endpoint>; embedder runs locally; no telemetry; logs stay in <data_dir>/logs
+first launch: opened browser at http://127.0.0.1:7777/
 ```
+
+That last line means the daemon **auto-opens your default browser** on first run — you should land on the onboarding screen without having to paste the URL yourself.
 
 Data lives in `~/.echovessel/memory.db` (SQLite + sqlite-vec). Logs in `~/.echovessel/logs/`.
 
@@ -168,7 +175,8 @@ src/echovessel/
 - ✅ **Proactive**: policy engine · four gates including `no_in_flight_turn` · delivery inherits `persona.voice_enabled`
 - ✅ **Runtime**: streaming turn loop (IncomingTurn + text delta) · atomic persona voice toggle · `SIGHUP` hot reload · memory observer wiring
 - ✅ **Web channel** (production paths): FastAPI + SSE streaming · embedded React 19 bundle · onboarding flow · chat with token streaming · admin → persona core-block editing · admin → voice toggle
-- 🚧 **Web channel** (placeholders this release): admin → events / thoughts / voice cloning / config tabs render section chrome only; the Onboarding "上传材料" import path is a coming-soon screen
+- ✅ **Web channel** (onboarding): both entry paths work — blank-write (fill the 5 persona blocks by hand) and upload-material (paste a bio/journal, LLM drafts the 5 blocks for your review)
+- 🚧 **Web channel** (placeholders this release): admin → events list / thoughts list / voice cloning wizard / config tabs exist but most render section chrome only; a few are fully wired (Persona blocks · Voice toggle · Memory search · Cost breakdown · etc. — see CHANGELOG for the exact map)
 - ✅ **Discord channel**: DM ingestion with debounce · text replies · native OGG Opus voice messages (ffmpeg required)
 - ✅ **Import pipeline** (library only): universal LLM importer · five content-type classification · `self_block` side path · mandatory embed pass — *no HTTP route is exposed yet, so neither the Web SPA nor the CLI can drive a real import in this release*
 - ⚠️ **Platform**: macOS and Linux tested; Windows is not yet supported

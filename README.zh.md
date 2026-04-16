@@ -84,11 +84,18 @@ uv run echovessel run
 干净启动时预期的 log:
 ```
 schema migration: created table core_block_appends
+voice service: <enabled | disabled> (config.voice.enabled=...)
+proactive scheduler: <enabled | disabled> (config.proactive.enabled=...)
 importer facade: built
+static frontend: mounted from .../channels/web/static
+web channel: serving on http://127.0.0.1:7777 (debounce_ms=2000)
 memory observer: registered
-EchoVessel runtime started | ...
-local-first disclosure: outbound = only <llm endpoint>; embedder runs locally; no telemetry
+EchoVessel runtime started | data_dir=... persona=... llm_provider=... channels=...
+local-first disclosure: outbound = only <llm endpoint>; embedder runs locally; no telemetry; logs stay in <data_dir>/logs
+first launch: opened browser at http://127.0.0.1:7777/
 ```
+
+最后那行意思是 daemon 首次启动**自动打开默认浏览器**到 onboarding 屏 —— 不用自己粘 URL。
 
 数据住在 `~/.echovessel/memory.db`(SQLite + sqlite-vec)· 日志在 `~/.echovessel/logs/`。
 
@@ -167,7 +174,8 @@ src/echovessel/
 - ✅ **Proactive**:policy 引擎 · 四条 gate(含 `no_in_flight_turn`)· delivery 从 `persona.voice_enabled` 继承
 - ✅ **Runtime**:流式 turn loop(IncomingTurn + text delta)· 原子 persona voice toggle · `SIGHUP` 热重载 · memory observer 接线
 - ✅ **Web channel**(本版本生产路径):FastAPI + SSE 流式 · 内嵌 React 19 bundle · onboarding 流程 · 流式 token 对话 · admin → 人格 core block 编辑 · admin → 语音开关
-- 🚧 **Web channel**(本版本 placeholder):admin → 发生过的事 / 长期印象 / 声音克隆 / 配置 等 tab 只渲染骨架,无后端联动;Onboarding 的"上传材料"路径是 coming-soon 占位屏
+- ✅ **Web channel**(onboarding):两条入口都能用 —— 手填 5 个 persona block,或上传一段自传/日记让 LLM 自动起草 5 个 block 让你审核
+- 🚧 **Web channel**(本版本 placeholder):admin 的部分 tab(发生过的事 / 长期印象 / 声音克隆 / 配置)已有骨架 · 部分功能(人格 block / 语音开关 / 记忆搜索 / 成本统计)已完整联动 —— 具体对照见 CHANGELOG
 - ✅ **Discord channel**:DM 接入 + debounce · 文本回复 · 原生 OGG Opus 语音消息(需 ffmpeg)
 - ✅ **Import pipeline**(仅库,未挂路由):通用 LLM importer · 五类 content type 分类 · `self_block` 侧路径 · 强制 embed pass —— *本版本未暴露 HTTP 路由,Web SPA / CLI 都还无法触发真实 import*
 - ⚠️ **平台**:macOS 和 Linux 已测试;Windows 暂不支持

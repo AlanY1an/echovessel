@@ -386,6 +386,83 @@ input, textarea {
   opacity: 0.8;
 }
 
+.onboarding-name-label {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--cream-soft);
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+  margin-top: 4px;
+}
+.onboarding-name-hint {
+  font-style: italic;
+  color: var(--cream-dim);
+  font-weight: 400;
+  margin-left: 6px;
+}
+.onboarding-name-input {
+  width: 100%;
+  background: var(--dusk);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  color: var(--cream);
+  font-family: var(--font-serif);
+  font-size: 16px;
+  outline: none;
+  margin-bottom: 20px;
+  transition: border-color 0.3s ease;
+}
+.onboarding-name-input:focus {
+  border-color: var(--ember-soft);
+}
+
+.admin-name-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  background: var(--dusk);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 20px;
+}
+.admin-name-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cream);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.admin-name-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--cream-soft);
+  font-style: italic;
+}
+.admin-name-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.admin-name-input {
+  flex: 1;
+  background: var(--twilight);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: var(--cream);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.3s ease;
+}
+.admin-name-input:focus {
+  border-color: var(--ember-soft);
+}
+
 .onboarding-textarea {
   width: 100%;
   background: var(--dusk);

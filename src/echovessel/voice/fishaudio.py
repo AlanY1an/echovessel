@@ -143,7 +143,9 @@ class FishAudioProvider:
                 )
 
             try:
-                voice = client.voices.create(  # type: ignore[attr-defined]
+                # fish_audio_sdk >= 2024.x · flat method on Session.
+                # Older '.voices.create' is gone.
+                voice = client.create_model(  # type: ignore[attr-defined]
                     title=name,
                     voices=[sample_bytes],
                     description=f"EchoVessel clone: {name}",
@@ -151,7 +153,7 @@ class FishAudioProvider:
             except Exception as e:  # noqa: BLE001
                 raise _classify_fishaudio_error(e) from e
 
-            # SDK attribute names vary across versions; probe both.
+            # ModelEntity exposes id (aliased from _id). Probe both for safety.
             voice_id = getattr(voice, "id", None) or getattr(voice, "_id", None)
             if not voice_id:
                 raise VoicePermanentError(
@@ -166,10 +168,13 @@ class FishAudioProvider:
 
         def _sync_list() -> list[VoiceMeta]:
             try:
-                voices_iter = client.voices.list()  # type: ignore[attr-defined]
+                # fish_audio_sdk >= 2024.x · flat list_models on Session.
+                # Returns PaginatedResponse[ModelEntity]; iterate .items.
+                page = client.list_models(self_only=True, page_size=100)  # type: ignore[attr-defined]
             except Exception as e:  # noqa: BLE001
                 raise _classify_fishaudio_error(e) from e
 
+            voices_iter = getattr(page, "items", page)
             result: list[VoiceMeta] = []
             for v in voices_iter:
                 raw_id = getattr(v, "id", None) or getattr(v, "_id", None) or ""

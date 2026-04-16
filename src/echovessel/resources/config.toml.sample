@@ -22,10 +22,15 @@ display_name = "Your Companion"
 # Leave unset for the blank onboarding flow.
 # initial_core_blocks_path = "/path/to/seed.md"
 
-# Voice binding — optional; a voice_id produced by
-# `echovessel voice clone` or copy-pasted from FishAudio's console.
-# Leave unset to use the provider's default voice.
-# voice_id = "fishmodel_xxxxxxxx"
+# Voice binding — optional. Leave this line commented out to use
+# FishAudio's built-in default voice (model s2-pro) — no cloning
+# required for first-run TTS. Three ways to set a custom voice:
+#   1. Run the Web admin Voice tab's clone wizard; the "activate"
+#      step writes your new voice_id here automatically.
+#   2. Paste an id you already have in FishAudio's console.
+#   3. Edit this line by hand.
+# Any of the three overrides the built-in default.
+# voice_id = "paste-your-voice-id-here"
 # voice_provider = "fishaudio"
 
 # Main voice switch. When true, reactive replies and proactive nudges
@@ -112,17 +117,20 @@ worker_max_retries = 3
 interval_seconds = 60
 
 [voice]
-# Voice subsystem master switch. When false the daemon boots with
-# voice_service=None and every voice codepath gracefully degrades to
-# text — even if persona.voice_enabled=true.
-enabled = false
+# Voice subsystem master switch. When true the daemon loads the TTS
+# provider at startup so admin-UI voice toggles are instant. When
+# false, every voice codepath gracefully degrades to text even if
+# persona.voice_enabled=true. Default true — flip to false only if
+# you want to run text-only or do not have a TTS API key yet.
+enabled = true
 # TTS provider. One of "fishaudio" | "stub".
 tts_provider = "fishaudio"
 # STT provider. One of "whisper_api" | "stub".
 stt_provider = "whisper_api"
 # Environment variable holding the TTS API key. Unset or "" disables
-# the check for stub providers.
-tts_api_key_env = "FISH_API_KEY"
+# the check for stub providers. Must match the key name in ./.env
+# (env.sample ships FISH_AUDIO_KEY by default).
+tts_api_key_env = "FISH_AUDIO_KEY"
 # Environment variable holding the STT API key (OpenAI-compatible).
 stt_api_key_env = "OPENAI_API_KEY"
 # Audio format for synthesized output. One of "mp3" | "wav" | "pcm16".

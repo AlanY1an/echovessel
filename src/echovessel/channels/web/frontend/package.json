@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "postbuild": "node -e \"require('fs').writeFileSync(require('path').join('..','static','.gitkeep'),'')\"",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit"
   },
@@ -15,6 +16,7 @@
     "react-router-dom": "^7.14.1"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",

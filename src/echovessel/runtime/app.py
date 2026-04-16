@@ -1304,7 +1304,11 @@ class Runtime:
         voice_id = getattr(self.ctx.persona, "voice_id", None)
         voice_service = self.ctx.voice_service
 
-        if voice_enabled and voice_id and voice_service is not None:
+        # voice_id is OPTIONAL — FishAudio (and the stub) use a provider-side
+        # default voice when no reference_id is passed. Requiring voice_id
+        # here would silently break the out-of-the-box flow for anyone who
+        # flips the admin toggle without first running the clone wizard.
+        if voice_enabled and voice_service is not None:
             try:
                 from echovessel.runtime.interaction import _pending_id_for_turn
 
