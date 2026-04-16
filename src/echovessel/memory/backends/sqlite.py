@@ -115,8 +115,6 @@ class SQLiteBackend(StorageBackend):
         Wrapping each whitespace-delimited token in double quotes neutralises
         all operators except the quote itself, which we strip.
         """
-        import re
-
         # Remove any double-quotes (they would break the quoting)
         cleaned = raw.replace('"', " ")
         # Split into tokens, wrap each in quotes, rejoin

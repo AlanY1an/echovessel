@@ -193,8 +193,8 @@ export function useChat(): UseChatResult {
         }
 
         default:
-          // Other known events (connection, settings, session boundary,
-          // mood) are handled by other hooks.
+          // Other known events (connection, settings) are handled by
+          // other hooks.
           return
       }
     })

@@ -37,7 +37,6 @@ from echovessel.memory.consolidate import (
 from echovessel.memory.models import RecallMessage, Session
 from echovessel.memory.retrieve import retrieve
 
-
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
@@ -267,7 +266,7 @@ async def _reflect_one(events, reason):
     return [
         ExtractedThought(
             description=f"reflection({reason})",
-            filling_ids=[],
+            emotional_impact=0,
         )
     ]
 

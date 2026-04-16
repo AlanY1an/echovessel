@@ -122,8 +122,7 @@ class MemoryEventObserver(Protocol):
 
         Fired through the module-level `_observers` registry. Note that
         `CLOSING` is an intermediate state for async extraction; the
-        lifecycle hook fires only on `CLOSED` (terminal), which is the
-        signal runtime needs to push a `chat.session.boundary` SSE.
+        lifecycle hook fires only on `CLOSED` (terminal).
         """
         ...
 

@@ -12,9 +12,9 @@ flight). Either way, runtime needs a **single** entry point that:
    blocks which `append_to_core_block` handles).
 3. Commits the transaction as one unit.
 4. Fires the `on_mood_updated` lifecycle hook via the memory-level
-   observer registry, so the web channel's SSE bridge
-   (`RuntimeMemoryObserver.on_mood_updated`) can push a
-   `chat.mood.update` event to connected clients.
+   observer registry so downstream subscribers (e.g. the runtime-side
+   observer, or future analytics consumers) learn the mood row
+   changed.
 
 Intentionally a separate function (not a special case in
 `append_to_core_block`) because the semantics differ:
@@ -123,10 +123,9 @@ def update_mood_block(
     db.refresh(block)
 
     # Round 4 lifecycle hook. Fires strictly after commit, via the
-    # module-level observer registry — runtime's `RuntimeMemoryObserver`
-    # consumes this to push `chat.mood.update` SSE events. Observer
-    # exceptions are swallowed by `_fire_lifecycle`; mood write stays
-    # committed regardless.
+    # module-level observer registry — downstream subscribers learn the
+    # mood row changed. Observer exceptions are swallowed by
+    # `_fire_lifecycle`; mood write stays committed regardless.
     _fire_lifecycle(
         "on_mood_updated",
         persona_id,

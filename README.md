@@ -23,9 +23,9 @@ It is a vessel for presence.
 
 ---
 
-## Getting Started (v0.1.0)
+## Getting Started (v0.0.1)
 
-v0.1.0 ships a local-first daemon with the full 5-module stack (memory / voice / channels / proactive / runtime). The daemon serves the built-in React Web UI directly and includes a working Discord DM channel out of the box. Tested on macOS and Linux; Windows is not yet supported.
+v0.0.1 is an early-alpha tagged release. It ships a local-first daemon built on the full 5-module stack (memory / voice / channels / proactive / runtime), with a working Web channel (chat + persona-block admin + voice toggle + first-run onboarding) and a working Discord DM channel. Several admin surfaces are intentional placeholders in this release — see **Known Limitations** in [`CHANGELOG.md`](./CHANGELOG.md) for the full list of what's deferred to v0.0.2+. Tested on macOS and Linux; Windows is not yet supported.
 
 ### Install
 
@@ -129,7 +129,7 @@ EchoVessel uses [FishAudio](https://fish.audio) for TTS. Put `FISH_AUDIO_KEY` in
 ### Running Tests
 
 ```bash
-uv run pytest tests/ -q                # 741+ tests across memory / runtime / voice / proactive / channels / import / integration
+uv run pytest tests/ -q                # 760 tests across memory / runtime / voice / proactive / channels / import / integration
 uv run ruff check src/ tests/          # lint
 uv run lint-imports                    # layered architecture contracts
 ```
@@ -153,18 +153,19 @@ src/echovessel/
 └── runtime/         — daemon · turn dispatcher · LLM providers · CLI
 ```
 
-### Current Status (v0.1.0)
+### Current Status (v0.0.1)
 
-- ✅ **Daemon**: boots end-to-end, all startup wiring verified in log, 741+ tests green
+- ✅ **Daemon**: boots end-to-end, all startup wiring verified in log, 760 tests passing (10 skipped)
 - ✅ **Memory**: L1–L4 hierarchy, idempotent schema migration, observer hooks, 4/4 MVP eval metrics passing (Over-recall FP Rate 0.08 ≤ 0.15 target)
-- ✅ **Voice**: FishAudio TTS + Whisper STT + stub providers · `VoiceService.generate_voice()` facade · on-disk cache
+- ✅ **Voice**: FishAudio TTS + stub TTS provider · `VoiceService.generate_voice()` facade · per-persona `voice_id` · on-disk MP3 cache
 - ✅ **Proactive**: policy engine · four gates including `no_in_flight_turn` · delivery inherits `persona.voice_enabled`
-- ✅ **Runtime**: streaming turn loop (IncomingTurn + text delta) · atomic persona voice toggle · ImporterFacade · memory observer wiring
-- ✅ **Import pipeline**: universal LLM importer · five content-type classification · `self_block` side path · mandatory embed pass
-- ✅ **Web channel**: FastAPI + SSE streaming · embedded React 19 bundle · onboarding / chat / admin / import wizard
+- ✅ **Runtime**: streaming turn loop (IncomingTurn + text delta) · atomic persona voice toggle · `SIGHUP` hot reload · memory observer wiring
+- ✅ **Web channel** (production paths): FastAPI + SSE streaming · embedded React 19 bundle · onboarding flow · chat with token streaming · admin → persona core-block editing · admin → voice toggle
+- 🚧 **Web channel** (placeholders this release): admin → events / thoughts / voice cloning / config tabs render section chrome only; the Onboarding "上传材料" import path is a coming-soon screen
 - ✅ **Discord channel**: DM ingestion with debounce · text replies · native OGG Opus voice messages (ffmpeg required)
+- ✅ **Import pipeline** (library only): universal LLM importer · five content-type classification · `self_block` side path · mandatory embed pass — *no HTTP route is exposed yet, so neither the Web SPA nor the CLI can drive a real import in this release*
 - ⚠️ **Platform**: macOS and Linux tested; Windows is not yet supported
-- 🔜 **Next**: iMessage / WeChat channels · persona self-selecting voice delivery · multi-persona · valence-aware retrieve
+- 🔜 **v0.0.2 targets**: wire `/api/admin/import/*` routes + Web import wizard · Admin events / thoughts list views · live mood / session-boundary SSE feed on the Web chat
 
 ---
 
@@ -304,13 +305,14 @@ This project is built on the belief that digital presence, memory systems, and i
 
 ## Current Status
 
-EchoVessel v0.1.0 is functionally complete. See the **Getting Started** section near the top of this README for the full current state breakdown.
+EchoVessel **v0.0.1** is an early-alpha tagged release — the core 5-module stack is in place, the daemon boots end-to-end, and the Web + Discord channels work for chat. Several admin surfaces are placeholders this release; see **Known Limitations** in [`CHANGELOG.md`](./CHANGELOG.md) and the **Current Status (v0.0.1)** breakdown near the top of this README.
 
 - ✅ 5-module architecture (memory / voice / channels / proactive / runtime) implemented and tested
 - ✅ CLI daemon boots and runs end-to-end
-- ✅ 741+ tests green · layered import contracts enforced · 4/4 MVP eval metrics passing
-- ✅ Web channel: daemon serves the embedded React bundle on port 7777
-- ✅ Discord DM channel: text + native OGG Opus voice messages
+- ✅ 760 tests passing (10 skipped) · layered import contracts enforced · 4/4 MVP eval metrics passing
+- ✅ Web channel: daemon serves the embedded React bundle on port 7777 (chat + onboarding + persona-block admin + voice toggle)
+- ✅ Discord DM channel: text + native OGG Opus voice messages (requires ffmpeg)
+- 🚧 Import flow not yet wired into the daemon · admin Events / Thoughts / Voice cloning / Config tabs are placeholders · targeted for v0.0.2
 - ⚠️ macOS / Linux only — Windows not yet supported
 - 🔜 iMessage / WeChat channels, persona self-selecting voice delivery, and multi-persona are scheduled for later releases
 

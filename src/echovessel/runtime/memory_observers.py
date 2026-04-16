@@ -4,12 +4,12 @@
 Protocol so runtime can plug into memory's lifecycle hooks
 (`on_session_closed` / `on_new_session_started` / `on_mood_updated`).
 
-Round-β trim: the three previous SSE broadcasts
-(`chat.session.boundary` / `chat.mood.update`) were dropped because no
-frontend consumer listens for them. The hooks stay as Protocol-satisfying
-no-ops so memory's `_fire_lifecycle` loop keeps working and future
-features can reintroduce broadcast work without touching the
-registration wiring in `Runtime.start()`.
+Round-β trim: the previous SSE broadcasts for session boundaries and
+mood updates were dropped because no frontend consumer listened for
+them. The hooks stay as Protocol-satisfying no-ops so memory's
+`_fire_lifecycle` loop keeps working and future features can reintroduce
+broadcast work without touching the registration wiring in
+`Runtime.start()`.
 
 See:
 

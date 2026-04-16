@@ -5,20 +5,48 @@
 # *_env fields to reference environment variables.
 
 [runtime]
-# Optional override for the data directory. Defaults to ~/.echovessel when unset.
-# Must be an absolute path if set.
+# Data directory for SQLite DB, voice cache, logs, embedder cache.
+# Defaults to ~/.echovessel when unset. Absolute paths are honoured.
 data_dir = "~/.echovessel"
+# Root logger level. One of "debug" | "info" | "warn" | "error".
 log_level = "info"
 
 [persona]
+# Stable internal id for this persona. Changing it after the first
+# boot creates a fresh persona with an empty memory — the old rows
+# stay in the DB keyed by the old id.
 id = "default"
+# Human-readable name shown in the chat UI.
 display_name = "Your Companion"
+# Optional path to a starter core-blocks file loaded at first launch.
+# Leave unset for the blank onboarding flow.
+# initial_core_blocks_path = "/path/to/seed.md"
+
+# Voice binding — optional; a voice_id produced by
+# `echovessel voice clone` or copy-pasted from FishAudio's console.
+# Leave unset to use the provider's default voice.
+# voice_id = "fishmodel_xxxxxxxx"
+# voice_provider = "fishaudio"
+
+# Main voice switch. When true, reactive replies and proactive nudges
+# are delivered as neutral voice; when false, everything stays text.
+# This can be flipped live via the admin toggle without a restart.
+voice_enabled = false
 
 [memory]
+# SQLite database file, relative to runtime.data_dir (or an absolute
+# path). Use ":memory:" for tests.
 db_path = "memory.db"
+# sentence-transformers model name. Downloaded on first boot (~90 MB)
+# and cached under <data_dir>/embedder.cache.
 embedder = "all-MiniLM-L6-v2"
+# Default top-K for the L3/L4 retrieval reranker.
 retrieve_k = 10
+# Weight applied to the relational-bonus term in the rerank formula.
+# Raise to bias toward relationally-tagged events; 0 removes the bias.
 relational_bonus_weight = 1.0
+# Number of most-recent L2 messages injected into each prompt in
+# addition to retrieved memories.
 recent_window_size = 20
 
 [llm]
@@ -60,37 +88,105 @@ api_key_env = "OPENAI_API_KEY"
 # medium = "gpt-4o"
 # large  = "gpt-4o"
 
+# Per-request LLM tuning knobs.
 max_tokens = 1024
 temperature = 0.7
 timeout_seconds = 60
 
 [consolidate]
+# Trivial-session skip thresholds. Sessions below BOTH limits (and
+# without strong-emotion keywords) are marked trivial without LLM
+# extraction.
 trivial_message_count = 3
 trivial_token_count = 200
+# Hard ceiling on reflections fired inside any rolling 24h window.
+# The gate applies across SHOCK + TIMER triggers combined.
 reflection_hard_gate_24h = 3
+# Background consolidate worker polling + retry policy.
 worker_poll_seconds = 5
 worker_max_retries = 3
 
 [idle_scanner]
+# How often the idle scanner scans for sessions ready to transition
+# from "open" → "closing" based on inactivity rules.
 interval_seconds = 60
 
-[proactive]
+[voice]
+# Voice subsystem master switch. When false the daemon boots with
+# voice_service=None and every voice codepath gracefully degrades to
+# text — even if persona.voice_enabled=true.
 enabled = false
-tick_interval_seconds = 60
+# TTS provider. One of "fishaudio" | "stub".
+tts_provider = "fishaudio"
+# STT provider. One of "whisper_api" | "stub".
+stt_provider = "whisper_api"
+# Environment variable holding the TTS API key. Unset or "" disables
+# the check for stub providers.
+tts_api_key_env = "FISH_API_KEY"
+# Environment variable holding the STT API key (OpenAI-compatible).
+stt_api_key_env = "OPENAI_API_KEY"
+# Audio format for synthesized output. One of "mp3" | "wav" | "pcm16".
+default_audio_format = "mp3"
 
-# Channels — disable everything except web for MVP.
+[proactive]
+# Autonomous-message scheduler master switch. Keep false unless you
+# have explicitly opted in to proactive nudges.
+enabled = false
+# Interval between scheduler ticks. 60s matches the idle scanner so
+# the two stay in rough lockstep.
+tick_interval_seconds = 60
+# Quiet hours (local time, 24-hour clock). The range wraps midnight,
+# so start=23 end=7 means "from 23:00 until 07:00 the following day".
+quiet_hours_start = 23
+quiet_hours_end = 7
+# Rate-limit ceiling: max proactive messages sent in any rolling 24h
+# window. Gate evaluated before send.
+max_per_24h = 3
+# Cold-user detection: if the user ignored this many proactive pings
+# inside `cold_user_response_window_hours`, pause proactive until the
+# user speaks first.
+cold_user_threshold = 2
+cold_user_response_window_hours = 6
+# Long-silence trigger: send a gentle nudge after this many hours of
+# total inactivity. Still subject to quiet-hours and rate-limit gates.
+long_silence_hours = 48
+# Hard ceiling on the in-memory event queue; excess events are
+# dropped oldest-first so the scheduler never OOMs under load.
+max_events_in_queue = 64
+# When voice is available (VoiceService built, persona has a voice_id,
+# persona.voice_enabled=true), deliver proactive messages as voice.
+# When false, proactive stays text-only even if voice is otherwise on.
+use_voice_when_available = true
+# Audit sink for ProactiveDecision records. MVP only supports "jsonl";
+# v1.x may add "memory_db" to pipe decisions into the same SQLite DB.
+audit_sink = "jsonl"
+# Timeout given to the scheduler to drain in-flight sends on graceful
+# shutdown before the runtime hard-cancels its task.
+stop_grace_seconds = 10
+
+# --- Channels -------------------------------------------------------
+# MVP ships with Web enabled; flip individual channels on as needed.
+
 [channels.web]
 enabled = true
 channel_id = "web"
+# Bind address — keep on 127.0.0.1 unless you explicitly need remote
+# access; the daemon has no auth.
 host = "127.0.0.1"
 port = 7777
+# Where the built React frontend lives. "embedded" uses the wheel's
+# bundled static/ output; an absolute path lets you point at your
+# own dev build.
 static_dir = "embedded"
+# How long the debounce state machine waits before flushing a burst
+# of user messages as one IncomingTurn.
+debounce_ms = 2000
 
 [channels.discord]
-# Discord DM channel (optional · requires `uv sync --extra discord`).
+# Discord DM channel (optional · requires `pip install echovessel[discord]`).
 # Create a Discord application in the Developer Portal, enable the
-# Message Content Intent, get the bot token, and put it in the env var
-# named by `token_env` (never in this file). See docs/en/channels.md
+# Message Content Intent, get the bot token, and put it in the env
+# var named by `token_env` (never in this file). See docs/en/channels.md
 # "Discord DM channel setup" for the full walkthrough.
 enabled = false
 channel_id = "discord"
@@ -101,9 +197,11 @@ token_env = "ECHOVESSEL_DISCORD_TOKEN"
 debounce_ms = 2000
 
 [channels.imessage]
+# Placeholder — not functional in v0.1.0.
 enabled = false
 channel_id = "imessage"
 
 [channels.wechat]
+# Placeholder — not functional in v0.1.0.
 enabled = false
 channel_id = "wechat"

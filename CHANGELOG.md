@@ -65,7 +65,8 @@ to a backend (see **Known Limitations**).
 
 #### Tests
 
-- 736 tests pass (10 skipped), covering memory, runtime, voice, channels, proactive policy, and import pipeline modules. Coverage is unit-level and module-integration-level; see **Known Limitations** for what is and isn't tested.
+- 760 tests pass (10 skipped), covering memory, runtime, voice, channels, proactive policy, and import pipeline modules. Coverage is unit-level and module-integration-level; see **Known Limitations** for what is and isn't tested.
+- GitHub Actions CI enforces `ruff check`, `lint-imports`, and `pytest` on every PR and push to `main`, across ubuntu-latest + macos-latest × Python 3.11.
 
 ### Known Limitations
 
@@ -74,11 +75,10 @@ in v0.0.1; each is tracked for **v0.0.2** or later.
 
 - **Import flow is not wired into the daemon.** The Onboarding "上传材料让它自动生成" path lands on a placeholder screen. The `import_/` pipeline module is implemented and unit-tested, and an `ImporterFacade` exists on the runtime, but no `/api/admin/import/*` HTTP routes are exposed yet, so neither the Web SPA nor the CLI can drive a real import. **Targeted for v0.0.2.**
 - **Admin → Events / Thoughts / Config tabs are placeholders.** They render the section chrome and (for Events / Thoughts) a server-side row count from `/api/state`, but there is no list view, no per-row delete, and no live cost / model display. The underlying `memory/forget.py` deletion API is implemented in code but has no production caller yet.
-- **The `chat.session.boundary` and `chat.mood.update` SSE events are emitted by the runtime but not consumed by the Web SPA**, so live mood changes and session-rollover markers are not reflected in the chat timeline.
-- **No CI enforcement.** The repo runs `pytest`, `ruff check`, and `lint-imports` cleanly today, but there is no GitHub Actions / pre-commit / merge gate enforcing this. **Targeted for v0.0.2.**
+- **Live mood updates and session-rollover markers are not surfaced in the Web chat timeline.** The underlying signals exist inside the runtime but are not broadcast to the frontend; Web chat shows a snapshot mood at render time only. **Targeted for v0.0.2.**
 - **LLM error handling has only classification-level test coverage.** The provider error hierarchy (`LLMTransientError` / `LLMPermanentError` / `LLMBudgetError`) is exercised via helper unit tests; end-to-end retry / degradation behaviour under real network failures is not yet covered.
-- **Runtime CLI tests are smoke-level only.** `echovessel run` is exercised by an integration test that spins the daemon under stub providers and verifies boot order; longer-lived behaviours (24 h-window reflection gating, multi-day idle scanner, real provider failure recovery) are not in the test matrix.
-- **Several `runtime/config.py` fields are defined but not consumed yet** (`memory.relational_bonus_weight`, `consolidate.trivial_message_count`, `consolidate.trivial_token_count`, `consolidate.reflection_hard_gate_24h`, `persona.initial_core_blocks_path`, `channels.web.static_dir`). The corresponding code paths use module-level constants today; the config fields will be wired in v0.0.2 alongside the missing `config.toml.sample` entries for `[voice]`, `[proactive]`, and the unwritten `[persona]` voice fields.
+- **Runtime CLI tests are smoke-level only.** `echovessel init`, `run`, `status`, `stop`, and `reload` are exercised by the launcher test suite (17 cases: config file round-trip, pidfile lifecycle, signal dispatch, subprocess SIGTERM path), but longer-lived behaviours (24 h-window reflection gating, multi-day idle scanner, real provider failure recovery) are not in the matrix.
+- **Two `runtime/config.py` fields remain informational-only** (`persona.initial_core_blocks_path`, `channels.web.static_dir`). The rest of the schema — including the four `[memory]` / `[consolidate]` tuning knobs — is now consumed by the runtime.
 - **Platform support: macOS and Linux only.** Windows is untested and unsupported in this release.
 - **Discord voice messages require `ffmpeg`** on PATH (`brew install ffmpeg` on macOS, `apt install ffmpeg` on Debian/Ubuntu). Without it the Discord channel silently falls back to text replies.
 - **iMessage and WeChat channel scaffolds are not present in v0.0.1.** They are listed in the long-term roadmap but no code ships in this release.

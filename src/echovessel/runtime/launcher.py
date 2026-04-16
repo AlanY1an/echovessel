@@ -27,7 +27,16 @@ from pathlib import Path
 
 import click
 
-log = logging.getLogger(__name__)
+from echovessel.runtime.app import (
+    Runtime,
+    build_sentence_transformers_embedder,
+    build_zero_embedder,
+)
+from echovessel.runtime.config import load_config
+
+DEFAULT_CONFIG_PATH = Path("~/.echovessel/config.toml").expanduser()
+
+log = logging.getLogger("echovessel.launcher")
 
 
 def _load_dotenv() -> None:
@@ -65,18 +74,6 @@ def _load_dotenv() -> None:
 
     if loaded > 0:
         log.info("loaded %d env vars from %s", loaded, env_path)
-
-
-from echovessel.runtime.app import (
-    Runtime,
-    build_sentence_transformers_embedder,
-    build_zero_embedder,
-)
-from echovessel.runtime.config import load_config
-
-DEFAULT_CONFIG_PATH = Path("~/.echovessel/config.toml").expanduser()
-
-log = logging.getLogger("echovessel.launcher")
 
 
 @click.group()
