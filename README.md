@@ -129,7 +129,7 @@ EchoVessel uses [FishAudio](https://fish.audio) for TTS. Put `FISH_AUDIO_KEY` in
 ### Running Tests
 
 ```bash
-uv run pytest tests/ -q                # 772 tests across memory / runtime / voice / proactive / channels / import / integration
+uv run pytest tests/ -q                # 839 tests across memory / runtime / voice / proactive / channels / import / integration
 uv run ruff check src/ tests/          # lint
 uv run lint-imports                    # layered architecture contracts
 ```
@@ -155,7 +155,7 @@ src/echovessel/
 
 ### Current Status (v0.0.1)
 
-- ✅ **Daemon**: boots end-to-end, all startup wiring verified in log, 772 tests passing (10 skipped)
+- ✅ **Daemon**: boots end-to-end, all startup wiring verified in log, 839 tests passing (10 skipped)
 - ✅ **Memory**: L1–L4 hierarchy, idempotent schema migration, observer hooks, 4/4 MVP eval metrics passing (Over-recall FP Rate 0.08 ≤ 0.15 target)
 - ✅ **Voice**: FishAudio TTS + stub TTS provider · `VoiceService.generate_voice()` facade · per-persona `voice_id` · on-disk MP3 cache
 - ✅ **Proactive**: policy engine · four gates including `no_in_flight_turn` · delivery inherits `persona.voice_enabled`
@@ -309,7 +309,7 @@ EchoVessel **v0.0.1** is an early-alpha tagged release — the core 5-module sta
 
 - ✅ 5-module architecture (memory / voice / channels / proactive / runtime) implemented and tested
 - ✅ CLI daemon boots and runs end-to-end
-- ✅ 772 tests passing (10 skipped) · layered import contracts enforced · 4/4 MVP eval metrics passing
+- ✅ 839 tests passing (10 skipped) · layered import contracts enforced · 4/4 MVP eval metrics passing
 - ✅ Web channel: daemon serves the embedded React bundle on port 7777 (chat + onboarding + persona-block admin + voice toggle)
 - ✅ Discord DM channel: text + native OGG Opus voice messages (requires ffmpeg)
 - 🚧 Import flow not yet wired into the daemon · admin Events / Thoughts / Voice cloning / Config tabs are placeholders · targeted for v0.0.2

@@ -261,6 +261,25 @@ class Channel(Protocol):
         triggered it.
         """
 
+    def is_ready(self) -> bool:
+        """Return True if the channel is currently operational.
+
+        Distinguishes "registered and started" from "actually able to
+        send/receive right now". A channel like :class:`WebChannel`
+        owns its transport and is ready the moment ``start()`` returns,
+        so its implementation returns ``True`` unconditionally. A
+        channel like :class:`DiscordChannel` holds an external gateway
+        connection and is only ready after the remote handshake
+        completes, so its implementation delegates to the underlying
+        client.
+
+        Consumers (admin ``/api/state``) read this purely as a status
+        hint — it is a synchronous snapshot with no guaranteed freshness
+        after it returns. Callers that care about transient blips
+        should poll.
+        """
+        ...
+
 
 __all__ = [
     "IncomingMessage",

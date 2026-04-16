@@ -107,6 +107,17 @@ class WebChannel:
 
     # ---- Lifecycle --------------------------------------------------------
 
+    def is_ready(self) -> bool:
+        """Web channel has no external dependency — always ready.
+
+        The browser-facing SSE transport lives inside the same asyncio
+        event loop as runtime, so there is no remote handshake to wait
+        on. Returns ``True`` unconditionally so ``/api/state`` can
+        render "Web · 就绪" from the moment the daemon serves its
+        first request.
+        """
+        return True
+
     async def start(self) -> None:
         """No-op for Stage 1.
 

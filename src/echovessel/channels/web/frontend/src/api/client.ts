@@ -19,18 +19,24 @@
 import type {
   ChatSendPayload,
   DaemonState,
+  DeleteChoice,
+  DeleteResponse,
   ImportCancelPayload,
   ImportCancelResponse,
   ImportEstimatePayload,
   ImportEstimateResponse,
   ImportStartPayload,
   ImportStartResponse,
-  ImportUploadPayload,
   ImportUploadResponse,
+  ImportUploadTextPayload,
+  MemoryEvent,
+  MemoryListResponse,
+  MemoryThought,
   OnboardingPayload,
   OnboardingResponse,
   PersonaStateApi,
   PersonaUpdatePayload,
+  PreviewDeleteResponse,
   VoiceToggleResponse,
 } from './types'
 import { ApiError } from './types'
@@ -161,14 +167,19 @@ export async function postChatSend(
 // ─── Import endpoints ──────────────────────────────────────────────────
 
 /**
- * POST /api/admin/import/upload — stage the source text server-side and
- * return an opaque `upload_id`. Raw bytes never re-travel the wire; the
- * frontend only holds the id until /start fires the pipeline.
+ * POST /api/admin/import/upload_text — stage text content (paste or
+ * file-read-as-text) server-side and return an opaque `upload_id`.
+ *
+ * The sibling multipart endpoint (`/upload`) is for raw file bytes;
+ * because the MVP frontend reads every file into a string before
+ * submitting, we only need the JSON path here. If we later add binary
+ * formats (PDF / audio) we'll add a parallel `postImportUploadFile`
+ * that uses `FormData` against `/upload`.
  */
-export async function postImportUpload(
-  payload: ImportUploadPayload,
+export async function postImportUploadText(
+  payload: ImportUploadTextPayload,
 ): Promise<ImportUploadResponse> {
-  return fetchJson<ImportUploadResponse>('/api/admin/import/upload', {
+  return fetchJson<ImportUploadResponse>('/api/admin/import/upload_text', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
@@ -213,5 +224,88 @@ export async function postImportCancel(
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+// ─── Memory list + delete endpoints (Worker α / W-β) ────────────────────
+
+/** Build a path with `?limit=&offset=` query string. */
+function _memoryListPath(
+  base: string,
+  limit: number,
+  offset: number,
+): string {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  })
+  return `${base}?${params.toString()}`
+}
+
+/**
+ * GET /api/admin/memory/events — paginated L3 list for the admin
+ * Events tab. ``limit`` is server-capped at 100; ``offset`` is the
+ * number of newer rows to skip from the head of the DESC order.
+ */
+export async function getMemoryEvents(
+  limit = 20,
+  offset = 0,
+): Promise<MemoryListResponse<MemoryEvent>> {
+  return fetchJson<MemoryListResponse<MemoryEvent>>(
+    _memoryListPath('/api/admin/memory/events', limit, offset),
+  )
+}
+
+/** GET /api/admin/memory/thoughts — paginated L4 list for the admin Thoughts tab. */
+export async function getMemoryThoughts(
+  limit = 20,
+  offset = 0,
+): Promise<MemoryListResponse<MemoryThought>> {
+  return fetchJson<MemoryListResponse<MemoryThought>>(
+    _memoryListPath('/api/admin/memory/thoughts', limit, offset),
+  )
+}
+
+/**
+ * POST /api/admin/memory/preview-delete — peek at the cascade
+ * consequences of deleting a concept node before issuing the DELETE.
+ *
+ * Returns the dependent thought ids + descriptions; if `has_dependents`
+ * is false, the UI can skip the choice dialog and call the DELETE
+ * directly with the default ``"orphan"`` choice.
+ */
+export async function postMemoryPreviewDelete(
+  nodeId: number,
+): Promise<PreviewDeleteResponse> {
+  return fetchJson<PreviewDeleteResponse>('/api/admin/memory/preview-delete', {
+    method: 'POST',
+    body: JSON.stringify({ node_id: nodeId }),
+  })
+}
+
+/**
+ * DELETE /api/admin/memory/events/{node_id}?choice=… — soft-delete an
+ * L3 event. ``choice`` controls how dependent thoughts are handled
+ * (``orphan`` keeps them, ``cascade`` deletes them too). Default
+ * ``orphan`` matches the memory module's default.
+ */
+export async function deleteMemoryEvent(
+  nodeId: number,
+  choice: DeleteChoice = 'orphan',
+): Promise<DeleteResponse> {
+  return fetchJson<DeleteResponse>(
+    `/api/admin/memory/events/${nodeId}?choice=${choice}`,
+    { method: 'DELETE' },
+  )
+}
+
+/** DELETE /api/admin/memory/thoughts/{node_id}?choice=… — soft-delete an L4 thought. */
+export async function deleteMemoryThought(
+  nodeId: number,
+  choice: DeleteChoice = 'orphan',
+): Promise<DeleteResponse> {
+  return fetchJson<DeleteResponse>(
+    `/api/admin/memory/thoughts/${nodeId}?choice=${choice}`,
+    { method: 'DELETE' },
+  )
 }
 

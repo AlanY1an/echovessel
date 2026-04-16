@@ -16,6 +16,21 @@
 // ─── HTTP · GET /api/state ───────────────────────────────────────────────
 
 /**
+ * One row of the Admin screen's channel status strip.
+ *
+ * `enabled` means the channel is registered in the daemon (config turned
+ * it on AND init succeeded). `ready` means its transport is currently
+ * usable — for Discord, that includes the gateway handshake completing.
+ * A channel with `enabled=false` is implicitly `ready=false`.
+ */
+export interface ChannelStatus {
+  channel_id: string
+  name: string
+  enabled: boolean
+  ready: boolean
+}
+
+/**
  * Summary of daemon state used by boot-time routing (e.g. whether to show
  * onboarding). `onboarding_required` is true iff the persona has never
  * been initialised through POST /api/admin/persona/onboarding.
@@ -34,6 +49,7 @@ export interface DaemonState {
     events: number
     thoughts: number
   }
+  channels: ChannelStatus[]
 }
 
 // ─── HTTP · GET /api/admin/persona ───────────────────────────────────────
@@ -165,6 +181,37 @@ export interface ChatSettingsUpdatedData {
 }
 
 /**
+ * Emitted by `RuntimeMemoryObserver.on_session_closed` and
+ * `on_new_session_started` — one broadcast per lifecycle hook, so a
+ * closed-then-reopened session surfaces as two separate boundary
+ * events (`closed_session_id` set on the first, `new_session_id` set
+ * on the second). The Web chat timeline uses these to draw a thin
+ * session divider with a relative timestamp.
+ */
+export interface ChatSessionBoundaryData {
+  closed_session_id: string | null
+  new_session_id: string | null
+  persona_id: string
+  user_id: string
+  /** ISO-8601 UTC timestamp written by the runtime observer. */
+  at: string
+}
+
+/**
+ * Emitted by `RuntimeMemoryObserver.on_mood_updated` whenever memory's
+ * `update_mood_block` fires its lifecycle hook (e.g. after the
+ * consolidate worker reflects on a closed session). `mood_summary`
+ * carries the full new mood block text — despite the name, it is not
+ * pre-shrunk server-side today. Consumers should treat it as "current
+ * mood block text" and render / truncate as they see fit.
+ */
+export interface ChatMoodUpdateData {
+  persona_id: string
+  user_id: string
+  mood_summary: string
+}
+
+/**
  * Emitted when the voice TTS pipeline finishes generating audio for a
  * message. Not yet emitted by the backend in Stage 2 — the hook branch
  * is stubbed in for Stage 7.
@@ -200,6 +247,8 @@ export type ChatEvent =
   | { event: 'chat.message.token'; data: ChatMessageTokenData }
   | { event: 'chat.message.done'; data: ChatMessageDoneData }
   | { event: 'chat.settings.updated'; data: ChatSettingsUpdatedData }
+  | { event: 'chat.session.boundary'; data: ChatSessionBoundaryData }
+  | { event: 'chat.mood.update'; data: ChatMoodUpdateData }
   | { event: 'chat.message.voice_ready'; data: ChatMessageVoiceReadyData }
   | { event: 'chat.message.error'; data: ChatMessageErrorData }
 
@@ -215,56 +264,150 @@ export const KNOWN_CHAT_EVENT_NAMES: readonly ChatEvent['event'][] = [
   'chat.message.token',
   'chat.message.done',
   'chat.settings.updated',
+  'chat.session.boundary',
+  'chat.mood.update',
   'chat.message.voice_ready',
   'chat.message.error',
 ] as const
 
-// ─── HTTP · POST /api/admin/import/* ─────────────────────────────────────
+// ─── HTTP · GET /api/admin/memory/{events,thoughts} ─────────────────────
 
 /**
- * Client-side file/paste submission to kick off an import. `source_label`
- * is a human-readable name shown back in the UI and persisted on the
- * pipeline report (e.g. file name, or "粘贴 2026-04-16"). `content` is
- * raw UTF-8 text — MVP only handles text; audio transcription + binary
- * file parsing is deferred.
+ * Single L3 event row as returned by the admin Events tab.
+ *
+ * Field names mirror the SQLModel ConceptNode columns 1:1 — the
+ * backend's ``_serialize_concept_node`` helper in admin.py emits
+ * exactly this shape. ``node_type`` is the discriminator and is the
+ * literal string ``"event"`` for every item in this list response.
  */
-export interface ImportUploadPayload {
-  source_label: string
-  content: string
+export interface MemoryEvent {
+  id: number
+  node_type: 'event'
+  description: string
+  emotional_impact: number
+  emotion_tags: string[]
+  relational_tags: string[]
+  source_session_id: string | null
+  source_turn_id: string | null
+  imported_from: string | null
+  source_deleted: boolean
+  created_at: string | null
+  access_count: number
 }
 
 /**
- * Response from POST /api/admin/import/upload. The `upload_id` is the
- * opaque handle the frontend passes to /estimate and /start — the raw
- * bytes stay server-side. `total_chunks` is an up-front estimate based
- * on byte size; the authoritative count comes back from /estimate.
+ * Single L4 thought row as returned by the admin Thoughts tab.
+ *
+ * Same DB columns as :type:`MemoryEvent`; the only literal-type
+ * difference is the discriminator. The split into two interfaces
+ * exists so callers don't accidentally render a thought in the
+ * Events tab or vice versa.
+ */
+export interface MemoryThought {
+  id: number
+  node_type: 'thought'
+  description: string
+  emotional_impact: number
+  emotion_tags: string[]
+  relational_tags: string[]
+  source_session_id: string | null
+  source_turn_id: string | null
+  imported_from: string | null
+  source_deleted: boolean
+  created_at: string | null
+  access_count: number
+}
+
+/**
+ * Generic envelope for both list endpoints. ``T`` is one of
+ * :type:`MemoryEvent` / :type:`MemoryThought`. The backend includes
+ * the limit/offset it applied so the client can confirm the cap was
+ * honoured before computing "load more" cursors.
+ */
+export interface MemoryListResponse<T> {
+  node_type: 'event' | 'thought'
+  limit: number
+  offset: number
+  total: number
+  items: T[]
+}
+
+/**
+ * Response from POST /api/admin/memory/preview-delete. Used to
+ * decide whether to show the "keep / cascade / cancel" dialog before
+ * issuing the DELETE.
+ */
+export interface PreviewDeleteResponse {
+  target_id: number
+  dependent_thought_ids: number[]
+  dependent_thought_descriptions: string[]
+  has_dependents: boolean
+}
+
+/** Server-side soft-delete cascade choice for concept nodes. */
+export type DeleteChoice = 'orphan' | 'cascade'
+
+export interface DeleteResponse {
+  deleted: true
+  node_id: number
+  choice: DeleteChoice
+}
+
+// ─── HTTP · POST /api/admin/import/* ─────────────────────────────────────
+
+/**
+ * Payload for the JSON-paste upload path (POST /api/admin/import/upload_text).
+ * The multipart file path (POST /api/admin/import/upload) takes a
+ * `file` field and is not modelled here because the MVP frontend reads
+ * every file into a string and posts through the JSON path.
+ */
+export interface ImportUploadTextPayload {
+  text: string
+  source_label?: string
+}
+
+/**
+ * Response from POST /api/admin/import/upload_text (and /upload).
+ * `suffix` includes the leading "." or is empty; `file_hash` is a
+ * SHA-256 hex digest used later for duplicate detection.
+ *
+ * Note: there is intentionally no `total_chunks` field here — chunking
+ * runs during `pipeline.start`, not at upload time. The first
+ * `pipeline.start` SSE frame is the authoritative total.
  */
 export interface ImportUploadResponse {
   upload_id: string
+  file_hash: string
+  suffix: string
   source_label: string
   size_bytes: number
-  total_chunks: number
 }
 
 export interface ImportEstimatePayload {
   upload_id: string
+  /** MVP backend only knows "llm"; field is optional to match the default. */
+  stage?: string
 }
 
 /**
- * Response from POST /api/admin/import/estimate. Shown to the user as a
- * "这次导入会用 ≈X tokens · $Y" confirmation card before /start fires.
+ * Response from POST /api/admin/import/estimate. Field names match the
+ * backend exactly (`tokens_in` / `tokens_out_est` / `cost_usd_est`) —
+ * the earlier Worker F guess was wrong.
+ *
+ * `note` is populated on binary uploads where LLM extraction will be
+ * skipped ("upload is binary; LLM extraction skipped until the
+ * pipeline decodes it").
  */
 export interface ImportEstimateResponse {
-  upload_id: string
-  total_chunks: number
-  estimated_input_tokens: number
-  estimated_output_tokens: number
-  estimated_cost_usd: number
-  model: string
+  tokens_in: number
+  tokens_out_est: number
+  cost_usd_est: number
+  note?: string
 }
 
 export interface ImportStartPayload {
   upload_id: string
+  force_duplicate?: boolean
 }
 
 export interface ImportStartResponse {
@@ -276,95 +419,73 @@ export interface ImportCancelPayload {
 }
 
 export interface ImportCancelResponse {
-  ok: true
-  pipeline_id: string
+  status: string
 }
 
-// ─── SSE · /api/admin/import/events ──────────────────────────────────────
+// ─── SSE · GET /api/admin/import/events?pipeline_id=... ──────────────────
 
 /**
- * Lifecycle shape for every SSE frame on the import stream. A single
- * pipeline run emits:
+ * Every import SSE frame carries the event name `import.progress` and
+ * multiplexes the true kind in `data.type`. The union below lists the
+ * `type` values the current pipeline emits; unknown types are logged
+ * and dropped client-side.
  *
- *   progress × N chunks (possibly with write / dropped interleaved)
- *   → done (on success / partial_success / cancelled)
- *   OR
- *   → error (on unrecoverable failure)
+ * Payload shapes vary by type — we keep `payload` loosely typed and let
+ * the consumer pick the fields it needs. Shapes per backend
+ * (`echovessel.import_.pipeline`):
+ *
+ *   pipeline.registered  {upload_id}
+ *   pipeline.start       {total_chunks, source_label, resume_from}
+ *   pipeline.cancelled   {}
+ *   pipeline.resumed     {resume_from}
+ *   pipeline.done        {status, processed_chunks, total_chunks,
+ *                         writes_by_target, dropped_count,
+ *                         embedded_vector_count, error}
+ *   chunk.start          {chunk_index, total_chunks, chars_in_chunk}
+ *   chunk.done           {chunk_index, writes_count, dropped_in_chunk,
+ *                         summary: {content_type: count}}
+ *   chunk.error          {chunk_index?, fatal, error, stage}
  */
-export type ImportPipelineState =
-  | 'running'
-  | 'paused'
-  | 'cancelled'
-  | 'done'
-  | 'failed'
+export type ImportFrameType =
+  | 'pipeline.registered'
+  | 'pipeline.start'
+  | 'pipeline.cancelled'
+  | 'pipeline.resumed'
+  | 'pipeline.done'
+  | 'chunk.start'
+  | 'chunk.done'
+  | 'chunk.error'
 
-export interface ImportProgressData {
+export interface ImportFrame {
   pipeline_id: string
-  current_chunk: number
-  total_chunks: number
-  state: ImportPipelineState
+  type: ImportFrameType | string
+  payload: Record<string, unknown>
 }
 
-/**
- * Emitted when a single LLM-output write lands in memory. Frontend uses
- * these to accumulate a live "写入" tally per content_type without
- * waiting for the final done payload.
- */
-export interface ImportWriteData {
-  pipeline_id: string
-  chunk_index: number
-  content_type: string
-}
-
-export interface ImportDroppedData {
-  pipeline_id: string
-  chunk_index: number
-  reason: string
-  raw_target: string
-  payload_excerpt: string
-}
-
-/**
- * Final summary payload. Shape mirrors
- * `echovessel.import_.models.PipelineReport` but collapses the long
- * concept-node-id lists down to counts, which is all the UI renders.
- */
-export type ImportFinalStatus =
+export type ImportPipelineStatus =
   | 'success'
   | 'partial_success'
   | 'failed'
   | 'cancelled'
 
-export interface ImportDoneData {
-  pipeline_id: string
-  source_label: string
-  status: ImportFinalStatus
-  total_chunks: number
+/** The UI's view of a finished pipeline — extracted from the
+ *  `pipeline.done` frame payload. */
+export interface ImportDoneSummary {
+  status: ImportPipelineStatus
   processed_chunks: number
+  total_chunks: number
   writes_by_target: Record<string, number>
   dropped_count: number
-  error_message: string
-}
-
-export interface ImportErrorData {
-  pipeline_id: string
+  embedded_vector_count: number
   error: string
 }
 
-export type ImportEvent =
-  | { event: 'import.progress'; data: ImportProgressData }
-  | { event: 'import.write'; data: ImportWriteData }
-  | { event: 'import.dropped'; data: ImportDroppedData }
-  | { event: 'import.done'; data: ImportDoneData }
-  | { event: 'import.error'; data: ImportErrorData }
-
-export const KNOWN_IMPORT_EVENT_NAMES: readonly ImportEvent['event'][] = [
-  'import.progress',
-  'import.write',
-  'import.dropped',
-  'import.done',
-  'import.error',
-] as const
+/** The UI's view of the running pipeline — accumulated across
+ *  `pipeline.start` + `chunk.start` / `chunk.done`. */
+export interface ImportProgressSnapshot {
+  current_chunk: number
+  total_chunks: number
+}
 
 // ─── Error class ─────────────────────────────────────────────────────────
 

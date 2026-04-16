@@ -1,16 +1,15 @@
 /**
  * useChat — hook that wraps chat send + streaming receive.
  *
- * Stage 4 proper will call this from <Chat.tsx> to replace the
- * localStorage-backed mock. Component flow:
- *
- *   const { messages, send, error } = useChat()
- *   // render messages as a timeline
- *   // wire send() to the input box onSubmit
+ * Consumed by `<Chat.tsx>`. The hook owns the canonical timeline: a
+ * flat list of `TimelineEntry`s that includes both chat messages
+ * (user + persona) and session boundary markers. The boundary markers
+ * are driven by the SSE `chat.session.boundary` event and let the UI
+ * draw a thin divider when a session closes or a new one opens.
  *
  * Internals:
  *   - Uses `useSSE()` to receive the live stream
- *   - Tracks a flat message list (both user and persona turns)
+ *   - Tracks a flat timeline (messages + boundary markers) in one state
  *   - Streams persona replies token-by-token via `chat.message.token`
  *   - On `chat.message.done`, finalises the persona message with the
  *     authoritative content from the server (the accumulated token
@@ -19,8 +18,8 @@
  *   - On `chat.message.user_appended`, appends a user message — this
  *     keeps multiple browser tabs in sync when the user types from one
  *     of them
- *
- * This file is Stage 4-prep only — components are not yet wired.
+ *   - On `chat.session.boundary`, appends a `BoundaryEntry` so the
+ *     timeline shows a session divider without a page refresh
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -32,8 +31,8 @@ import { useSSE } from './useSSE'
 /**
  * UI-side view of a chat message. Note: distinct from the richer
  * `ChatMessage` in `src/types.ts` which carries paragraph arrays and
- * voice metadata — that type belongs to the prototype view layer. Stage
- * 4 proper will adapt between the two where needed.
+ * voice metadata — that type belongs to the prototype view layer.
+ * `Chat.tsx` adapts between the two.
  */
 export interface ChatMessage {
   /** Client-side UUID used as the React key. Stable across renders. */
@@ -60,10 +59,35 @@ export interface ChatMessage {
   voice_url?: string
 }
 
+/**
+ * Session boundary marker — rendered by `<Chat.tsx>` as a thin
+ * horizontal line with a relative timestamp. Worker γ reinstated the
+ * backend broadcast; the Web UI now actually consumes it.
+ */
+export interface BoundaryEntry {
+  id: string
+  kind: 'boundary'
+  /** ISO-8601 timestamp from the server's `at` field. */
+  timestamp: string
+  closed_session_id: string | null
+  new_session_id: string | null
+}
+
+export type TimelineEntry = ChatMessage | BoundaryEntry
+
 export interface UseChatResult {
-  messages: ChatMessage[]
+  messages: TimelineEntry[]
   send(content: string): Promise<void>
   error: string | null
+}
+
+/**
+ * Type guard — returns true if the entry is a boundary marker rather
+ * than a real chat message. Exported so `<Chat.tsx>` can switch on it
+ * at render time without importing the interfaces directly.
+ */
+export function isBoundaryEntry(entry: TimelineEntry): entry is BoundaryEntry {
+  return (entry as BoundaryEntry).kind === 'boundary'
 }
 
 function newClientId(): string {
@@ -75,7 +99,7 @@ function nowIso(): string {
 }
 
 export function useChat(): UseChatResult {
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<TimelineEntry[]>([])
   const [error, setError] = useState<string | null>(null)
 
   const { subscribe } = useSSE()
@@ -109,7 +133,10 @@ export function useChat(): UseChatResult {
             // the delta. If none exists yet (first token of the turn),
             // create one.
             const idx = prev.findIndex(
-              (m) => m.role === 'persona' && m.message_id === message_id,
+              (m) =>
+                !isBoundaryEntry(m) &&
+                m.role === 'persona' &&
+                m.message_id === message_id,
             )
             if (idx === -1) {
               return [
@@ -126,7 +153,7 @@ export function useChat(): UseChatResult {
             }
             const next = prev.slice()
             const existing = next[idx]
-            if (!existing) return prev
+            if (!existing || isBoundaryEntry(existing)) return prev
             next[idx] = { ...existing, content: existing.content + delta }
             return next
           })
@@ -137,7 +164,10 @@ export function useChat(): UseChatResult {
           const { message_id, content, delivery } = event.data
           setMessages((prev) => {
             const idx = prev.findIndex(
-              (m) => m.role === 'persona' && m.message_id === message_id,
+              (m) =>
+                !isBoundaryEntry(m) &&
+                m.role === 'persona' &&
+                m.message_id === message_id,
             )
             if (idx === -1) {
               // No streaming tokens arrived — synthesise a final message
@@ -157,7 +187,7 @@ export function useChat(): UseChatResult {
             }
             const next = prev.slice()
             const existing = next[idx]
-            if (!existing) return prev
+            if (!existing || isBoundaryEntry(existing)) return prev
             // Use the server's authoritative content on done to avoid
             // any client-side streaming drift.
             next[idx] = {
@@ -180,21 +210,44 @@ export function useChat(): UseChatResult {
           const { message_id, url } = event.data
           setMessages((prev) => {
             const idx = prev.findIndex(
-              (m) => m.role === 'persona' && m.message_id === message_id,
+              (m) =>
+                !isBoundaryEntry(m) &&
+                m.role === 'persona' &&
+                m.message_id === message_id,
             )
             if (idx === -1) return prev
             const next = prev.slice()
             const existing = next[idx]
-            if (!existing) return prev
+            if (!existing || isBoundaryEntry(existing)) return prev
             next[idx] = { ...existing, voice_url: url }
             return next
           })
           return
         }
 
+        case 'chat.session.boundary': {
+          // Append a boundary marker to the timeline. The backend fires
+          // two separate events when a session flips (one on
+          // on_session_closed, one on on_new_session_started). We append
+          // both — the rendered divider is idempotent-looking even when
+          // they land back-to-back.
+          const { closed_session_id, new_session_id, at } = event.data
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: newClientId(),
+              kind: 'boundary',
+              timestamp: at || nowIso(),
+              closed_session_id,
+              new_session_id,
+            },
+          ])
+          return
+        }
+
         default:
-          // Other known events (connection, settings) are handled by
-          // other hooks.
+          // Other known events (connection, settings, mood.update) are
+          // handled by other hooks.
           return
       }
     })

@@ -291,6 +291,18 @@ class DiscordChannel:
 
     # ---- Lifecycle -------------------------------------------------------
 
+    def is_ready(self) -> bool:
+        """Return True once the discord.py client has completed the gateway handshake.
+
+        The bot is ``_bot is not None`` from the moment :meth:`start`
+        kicks off the background task, but the gateway connection
+        takes several seconds to complete (login + identify + ready
+        event). ``discord.Client.is_ready()`` flips once the ``READY``
+        dispatch arrives, which is the signal admin UIs need to show
+        "Discord · 已连接" instead of "连接中".
+        """
+        return self._bot is not None and self._bot.is_ready()
+
     async def start(self) -> None:
         """Spin up the ``discord.py`` client on the running loop.
 

@@ -27,6 +27,7 @@ from echovessel.memory.backend import StorageBackend
 from echovessel.memory.models import (
     ConceptNode,
     ConceptNodeFilling,
+    CoreBlockAppend,
     RecallMessage,
 )
 
@@ -226,3 +227,35 @@ def delete_concept_node(
             db.add(row)
 
     db.commit()
+
+
+# ---------------------------------------------------------------------------
+# L1 · Delete a single core-block append audit row (physical delete)
+# ---------------------------------------------------------------------------
+
+
+def delete_core_block_append(
+    db: DbSession,
+    append_id: int,
+) -> bool:
+    """Physically delete a single `CoreBlockAppend` audit row.
+
+    `CoreBlockAppend` is append-only (no `deleted_at` column — see
+    `models.CoreBlockAppend` docstring), so the "forget" operation here
+    is a real `DELETE`. The row is an audit pointer; removing it does
+    NOT rewrite the live `core_blocks.content`. Reversing the append's
+    textual effect is a separate concern that the admin UI handles by
+    also rewriting the surviving audit trail into `core_blocks.content`
+    — out of scope for this helper.
+
+    Returns True when a row was found and deleted, False when the id
+    did not exist. The caller (admin route) maps False → 404.
+    """
+
+    append = db.get(CoreBlockAppend, append_id)
+    if append is None:
+        return False
+
+    db.delete(append)
+    db.commit()
+    return True

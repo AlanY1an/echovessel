@@ -432,6 +432,76 @@ def list_recall_messages(
     return list(db.exec(stmt).all())
 
 
+def list_concept_nodes(
+    db: DbSession,
+    persona_id: str,
+    user_id: str,
+    *,
+    node_type: NodeType,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[ConceptNode], int]:
+    """Pure ConceptNode timeline query for the admin Memory tabs.
+
+    Returns ``(rows, total_count)`` for ``(persona_id, user_id, node_type)``
+    ordered by ``created_at`` DESC, excluding soft-deleted rows. The
+    admin Events / Thoughts tabs use this to render a paginated list
+    with the server-side total — total is computed separately so the
+    UI can show "showing X of Y" without bringing every row over the
+    wire.
+
+    🚨 Same iron rule as :func:`list_recall_messages`: this function
+    does NOT accept a channel_id parameter. There is no transport
+    filtering at the memory layer.
+
+    Args:
+        db: SQLModel session.
+        persona_id: Whose timeline.
+        user_id: For which user (MVP: always "self").
+        node_type: ``NodeType.EVENT`` for the Events tab,
+            ``NodeType.THOUGHT`` for the Thoughts tab.
+        limit: Max rows returned, hard-capped at 100.
+        offset: Number of rows to skip from the head of the DESC order
+            (i.e. "page through older entries"). Negative values are
+            clamped to 0.
+
+    Returns:
+        ``(rows, total)`` where ``rows`` is a list of ConceptNode in
+        DESCENDING created_at order and ``total`` is the unfiltered
+        non-deleted count for the same persona/user/node_type triple.
+    """
+
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+
+    base_filters = (
+        ConceptNode.persona_id == persona_id,
+        ConceptNode.user_id == user_id,
+        ConceptNode.type == node_type,
+        ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+    )
+
+    page_stmt = (
+        select(ConceptNode)
+        .where(*base_filters)
+        .order_by(ConceptNode.created_at.desc())  # type: ignore[attr-defined]
+        .limit(limit)
+        .offset(offset)
+    )
+    rows = list(db.exec(page_stmt).all())
+
+    from sqlmodel import func as _func
+
+    total_stmt = (
+        select(_func.count())
+        .select_from(ConceptNode)
+        .where(*base_filters)
+    )
+    total = int(db.exec(total_stmt).one() or 0)
+
+    return rows, total
+
+
 def _expand_session_context(
     db: DbSession,
     memories: list[ScoredMemory],

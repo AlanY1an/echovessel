@@ -131,6 +131,86 @@ def test_get_state_fresh_install_onboarding_required() -> None:
     assert data["persona"]["has_voice_id"] is False
 
 
+def test_get_state_channels_lists_known_entries_unregistered() -> None:
+    """With nothing in the registry, every known channel is emitted as
+    enabled=False / ready=False so the admin UI can show a stable
+    "未启用" dim row per channel type."""
+    _rt, client = _build_runtime_and_app()
+    with client:
+        resp = client.get("/api/state")
+    assert resp.status_code == 200
+    channels = resp.json()["channels"]
+
+    # Stable canonical order (web/discord/imessage) — the UI strip
+    # depends on this.
+    assert [c["channel_id"] for c in channels] == ["web", "discord", "imessage"]
+    assert [c["name"] for c in channels] == ["Web", "Discord", "iMessage"]
+    for c in channels:
+        assert c["enabled"] is False
+        assert c["ready"] is False
+
+
+def test_get_state_channels_web_registered_reports_enabled_ready() -> None:
+    """When the web channel is registered in runtime's registry, its
+    entry flips to enabled=True / ready=True (Web.is_ready() is
+    always True by contract)."""
+    rt, client = _build_runtime_and_app()
+    # The TestClient builder hands us a WebChannel but does not wire it
+    # into ``rt.ctx.registry`` — register it here so /api/state sees it.
+    web_ch = WebChannel(debounce_ms=50)
+    rt.ctx.registry.register(web_ch)
+
+    with client:
+        resp = client.get("/api/state")
+    assert resp.status_code == 200
+    by_id = {c["channel_id"]: c for c in resp.json()["channels"]}
+
+    assert by_id["web"] == {
+        "channel_id": "web",
+        "name": "Web",
+        "enabled": True,
+        "ready": True,
+    }
+    # Non-registered siblings stay disabled.
+    assert by_id["discord"]["enabled"] is False
+    assert by_id["discord"]["ready"] is False
+    assert by_id["imessage"]["enabled"] is False
+
+
+def test_get_state_channels_is_ready_false_reports_not_ready() -> None:
+    """A registered channel whose is_ready() returns False (e.g. a
+    Discord bot still in the gateway handshake) surfaces as
+    enabled=True / ready=False — this is the transient "连接中" state
+    the admin UI renders as an orange dot."""
+
+    class _FakeDiscord:
+        channel_id = "discord"
+        name = "Discord"
+        in_flight_turn_id = None
+
+        def is_ready(self) -> bool:
+            return False
+
+        async def start(self) -> None: ...
+        async def stop(self) -> None: ...
+        async def incoming(self):  # pragma: no cover - not exercised
+            if False:
+                yield
+        async def send(self, msg) -> None: ...
+        async def on_turn_done(self, turn_id: str) -> None: ...
+
+    rt, client = _build_runtime_and_app()
+    rt.ctx.registry.register(_FakeDiscord())
+
+    with client:
+        resp = client.get("/api/state")
+    assert resp.status_code == 200
+    by_id = {c["channel_id"]: c for c in resp.json()["channels"]}
+
+    assert by_id["discord"]["enabled"] is True
+    assert by_id["discord"]["ready"] is False
+
+
 def test_get_state_after_onboarding_reports_not_required() -> None:
     _rt, client = _build_runtime_and_app()
     with client:

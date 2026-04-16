@@ -94,19 +94,46 @@ export function usePersona(): UsePersonaResult {
     void refresh()
   }, [refresh])
 
-  // Cross-tab sync: reflect voice toggles from other tabs.
+  // Cross-tab + runtime-driven sync. Three events funnel into persona
+  // state here:
+  //
+  //   • chat.settings.updated  — voice_enabled toggled from another tab
+  //   • chat.mood.update       — memory's update_mood_block hook fired
+  //                              (consolidate worker, explicit edit, ...)
+  //
+  // Each handler is a no-op if the persona hasn't loaded yet; the next
+  // refresh() picks up the correct value.
   useEffect(() => {
     const unsubscribe = subscribe((event: ChatEvent) => {
-      if (event.event !== 'chat.settings.updated') return
-      const next = event.data.voice_enabled
-      setPersona((prev) =>
-        prev === null ? prev : { ...prev, voice_enabled: next },
-      )
-      setDaemonState((prev) =>
-        prev === null
-          ? prev
-          : { ...prev, persona: { ...prev.persona, voice_enabled: next } },
-      )
+      if (event.event === 'chat.settings.updated') {
+        const next = event.data.voice_enabled
+        setPersona((prev) =>
+          prev === null ? prev : { ...prev, voice_enabled: next },
+        )
+        setDaemonState((prev) =>
+          prev === null
+            ? prev
+            : { ...prev, persona: { ...prev.persona, voice_enabled: next } },
+        )
+        return
+      }
+
+      if (event.event === 'chat.mood.update') {
+        // The server sends the full new mood block text as `mood_summary`.
+        // Splice it into core_blocks.mood so any consumer reading persona
+        // (Chat.tsx's top-bar moodBlock prop, Admin's mood editor) picks
+        // the new value up on the next render without a manual refresh.
+        const nextMood = event.data.mood_summary
+        setPersona((prev) =>
+          prev === null
+            ? prev
+            : {
+                ...prev,
+                core_blocks: { ...prev.core_blocks, mood: nextMood },
+              },
+        )
+        return
+      }
     })
     return unsubscribe
   }, [subscribe])

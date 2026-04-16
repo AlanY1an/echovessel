@@ -53,7 +53,7 @@ from echovessel.memory.observers import (
     register_observer,
     unregister_observer,
 )
-from echovessel.memory.retrieve import list_recall_messages
+from echovessel.memory.retrieve import list_concept_nodes, list_recall_messages
 
 __all__ = [
     # Models
@@ -88,4 +88,5 @@ __all__ = [
     "update_mood_block",
     # Queries
     "list_recall_messages",
+    "list_concept_nodes",
 ]

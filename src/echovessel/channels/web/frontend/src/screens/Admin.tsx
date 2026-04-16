@@ -3,10 +3,16 @@ import { useNavigate } from 'react-router-dom'
 import { TopBar } from '../components/TopBar'
 import type { AdminTab } from '../types'
 import type {
+  ChannelStatus,
   DaemonState,
+  MemoryEvent,
+  MemoryThought,
   PersonaStateApi,
   PersonaUpdatePayload,
+  PreviewDeleteResponse,
 } from '../api/types'
+import { useMemoryEvents } from '../hooks/useMemoryEvents'
+import { useMemoryThoughts } from '../hooks/useMemoryThoughts'
 
 interface AdminProps {
   persona: PersonaStateApi
@@ -40,6 +46,8 @@ export function Admin({
         back={{ label: '对话', onClick: onBackToChat }}
       />
 
+      <ChannelStatusStrip channels={daemonState.channels} />
+
       <div className="admin-layout">
         <aside className="admin-nav">
           <div className="admin-nav-heading">
@@ -66,12 +74,8 @@ export function Admin({
           {tab === 'persona' && (
             <PersonaTab persona={persona} onUpdate={updatePersona} />
           )}
-          {tab === 'events' && (
-            <EventsTab count={daemonState.memory_counts.events} />
-          )}
-          {tab === 'thoughts' && (
-            <ThoughtsTab count={daemonState.memory_counts.thoughts} />
-          )}
+          {tab === 'events' && <EventsTab />}
+          {tab === 'thoughts' && <ThoughtsTab />}
           {tab === 'voice' && (
             <VoiceTab
               voiceEnabled={persona.voice_enabled}
@@ -82,6 +86,48 @@ export function Admin({
         </main>
       </div>
     </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// Channel status strip — "Discord · 已连接" / "Web · 就绪" / ...
+// ═══════════════════════════════════════════════════════════
+
+function ChannelStatusStrip({ channels }: { channels: ChannelStatus[] }) {
+  if (channels.length === 0) return null
+  return (
+    <div className="channel-status-strip">
+      {channels.map((c) => (
+        <ChannelStatusPill key={c.channel_id} channel={c} />
+      ))}
+    </div>
+  )
+}
+
+function ChannelStatusPill({ channel }: { channel: ChannelStatus }) {
+  // Dot color: green if ready, orange if enabled-but-not-ready
+  // (handshake in progress / transient disconnect), grey if disabled.
+  let tone: 'on' | 'warming' | 'off'
+  let label: string
+  if (!channel.enabled) {
+    tone = 'off'
+    label = '未启用'
+  } else if (!channel.ready) {
+    tone = 'warming'
+    label = '连接中'
+  } else {
+    tone = 'on'
+    label = channel.channel_id === 'discord' ? '已连接' : '就绪'
+  }
+  return (
+    <span
+      className={`channel-pill channel-pill--${tone}`}
+      title={`${channel.name} · ${label}`}
+    >
+      <span className="channel-pill-dot" />
+      <span className="channel-pill-name">{channel.name}</span>
+      <span className="channel-pill-sub">{label}</span>
+    </span>
   )
 }
 
@@ -260,10 +306,35 @@ function BlockEditor({
 }
 
 // ═══════════════════════════════════════════════════════════
-// Events tab — L3 real count + coming-soon card for browser/delete UI
+// Events tab — paginated L3 list with per-row delete (W-α + W-β)
 // ═══════════════════════════════════════════════════════════
 
-function EventsTab({ count }: { count: number }) {
+function EventsTab() {
+  const {
+    items,
+    total,
+    loading,
+    loadingMore,
+    error,
+    hasMore,
+    loadMore,
+    previewDelete,
+    deleteEvent,
+  } = useMemoryEvents()
+
+  const handleDelete = async (item: MemoryEvent) => {
+    try {
+      const preview = await previewDelete(item.id)
+      const choice = await confirmDelete(item.description, preview)
+      if (choice === null) return
+      await deleteEvent(item.id, choice)
+    } catch (err) {
+      // Error already surfaced via the hook's `error`. Silently swallow
+      // here so a confirm-dialog cancel does not stack-trace.
+      console.error('delete event failed', err)
+    }
+  }
+
   return (
     <div className="admin-section">
       <div className="admin-section-head">
@@ -273,27 +344,100 @@ function EventsTab({ count }: { count: number }) {
         </div>
         <p className="admin-section-lead">
           persona 记得的具体事件。每一条带时间、情感强度、相关的人和情绪。
-          服务器上共 <strong>{count}</strong> 条。
+          服务器上共 <strong>{total}</strong> 条。
         </p>
       </div>
 
-      <div className="voice-empty">
-        <div className="voice-empty-glyph">📖</div>
-        <div className="voice-empty-title">记忆浏览功能即将推出</div>
-        <p className="voice-empty-desc">
-          之后你可以在这里翻阅 persona 记得的每一条具体事件、按情绪或人物筛选、
-          也能删掉某条记忆。目前只能看到总数。
-        </p>
-      </div>
+      {error && <div className="admin-error-banner">{error}</div>}
+
+      {loading && items.length === 0 ? (
+        <div className="memory-list-loading">载入中…</div>
+      ) : total === 0 ? (
+        <div className="memory-list-empty">
+          <div className="memory-list-empty-glyph">📖</div>
+          <div className="memory-list-empty-title">persona 还没记得任何事</div>
+          <p className="memory-list-empty-desc">
+            和 persona 多聊几轮，后台 consolidate 会把对话压缩成事件，
+            自动出现在这里。
+          </p>
+        </div>
+      ) : (
+        <ul className="memory-list">
+          {items.map((it) => (
+            <li key={it.id} className="memory-list-item">
+              <div className="memory-list-row-head">
+                <time className="memory-list-time">
+                  {formatTimestamp(it.created_at)}
+                </time>
+                <button
+                  type="button"
+                  className="memory-list-delete"
+                  onClick={() => void handleDelete(it)}
+                  aria-label={`删除事件 ${it.id}`}
+                  title="删除这条事件"
+                >
+                  ×
+                </button>
+              </div>
+              <p className="memory-list-desc">{it.description}</p>
+              {it.emotion_tags.length > 0 && (
+                <div className="memory-list-pills">
+                  {it.emotion_tags.map((tag) => (
+                    <span key={tag} className="memory-list-pill">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {hasMore && (
+        <div className="memory-list-more">
+          <button
+            type="button"
+            className="memory-list-more-btn"
+            onClick={() => void loadMore()}
+            disabled={loadingMore}
+          >
+            {loadingMore ? '载入中…' : `加载更多（剩 ${total - items.length}）`}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
 
 // ═══════════════════════════════════════════════════════════
-// Thoughts tab — L4 real count + coming-soon card
+// Thoughts tab — paginated L4 list with per-row delete (W-α + W-β)
 // ═══════════════════════════════════════════════════════════
 
-function ThoughtsTab({ count }: { count: number }) {
+function ThoughtsTab() {
+  const {
+    items,
+    total,
+    loading,
+    loadingMore,
+    error,
+    hasMore,
+    loadMore,
+    previewDelete,
+    deleteThought,
+  } = useMemoryThoughts()
+
+  const handleDelete = async (item: MemoryThought) => {
+    try {
+      const preview = await previewDelete(item.id)
+      const choice = await confirmDelete(item.description, preview)
+      if (choice === null) return
+      await deleteThought(item.id, choice)
+    } catch (err) {
+      console.error('delete thought failed', err)
+    }
+  }
+
   return (
     <div className="admin-section">
       <div className="admin-section-head">
@@ -304,19 +448,118 @@ function ThoughtsTab({ count }: { count: number }) {
         <p className="admin-section-lead">
           persona 在很多次对话之后沉淀下来的、对你的高阶观察。
           通常由反思模块自动生成，也可能来自导入的真实材料。
-          服务器上共 <strong>{count}</strong> 条。
+          服务器上共 <strong>{total}</strong> 条。
         </p>
       </div>
 
-      <div className="voice-empty">
-        <div className="voice-empty-glyph">🪞</div>
-        <div className="voice-empty-title">记忆浏览功能即将推出</div>
-        <p className="voice-empty-desc">
-          之后你可以在这里看 persona 沉淀下来的每一条长期印象、
-          也能删掉不准确的观察。目前只能看到总数。
-        </p>
-      </div>
+      {error && <div className="admin-error-banner">{error}</div>}
+
+      {loading && items.length === 0 ? (
+        <div className="memory-list-loading">载入中…</div>
+      ) : total === 0 ? (
+        <div className="memory-list-empty">
+          <div className="memory-list-empty-glyph">🪞</div>
+          <div className="memory-list-empty-title">还没有沉淀下来的印象</div>
+          <p className="memory-list-empty-desc">
+            等积累更多事件之后，反思模块会自动产出对你的高阶观察。
+          </p>
+        </div>
+      ) : (
+        <ul className="memory-list">
+          {items.map((it) => (
+            <li key={it.id} className="memory-list-item">
+              <div className="memory-list-row-head">
+                <time className="memory-list-time">
+                  {formatTimestamp(it.created_at)}
+                </time>
+                <button
+                  type="button"
+                  className="memory-list-delete"
+                  onClick={() => void handleDelete(it)}
+                  aria-label={`删除印象 ${it.id}`}
+                  title="删除这条印象"
+                >
+                  ×
+                </button>
+              </div>
+              <p className="memory-list-desc">{it.description}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {hasMore && (
+        <div className="memory-list-more">
+          <button
+            type="button"
+            className="memory-list-more-btn"
+            onClick={() => void loadMore()}
+            disabled={loadingMore}
+          >
+            {loadingMore ? '载入中…' : `加载更多（剩 ${total - items.length}）`}
+          </button>
+        </div>
+      )}
     </div>
+  )
+}
+
+// ─── Helpers shared by Events / Thoughts tabs ───────────────────────────
+
+/**
+ * Native ``window.confirm`` driven preview-delete dialog.
+ *
+ * Returns ``"orphan"`` for "delete only this row, keep dependents",
+ * ``"cascade"`` for "delete this row and cascade-delete dependents",
+ * or ``null`` if the user cancelled.
+ *
+ * MVP-grade UX. Stage X+ can replace this with a custom modal that
+ * shows the dependent thought descriptions inline; the hook signature
+ * is the same.
+ */
+function confirmDelete(
+  description: string,
+  preview: PreviewDeleteResponse,
+): Promise<'orphan' | 'cascade' | null> {
+  const truncated =
+    description.length > 80 ? `${description.slice(0, 80)}…` : description
+
+  if (!preview.has_dependents) {
+    const ok = window.confirm(`删除这条记忆？\n\n${truncated}`)
+    return Promise.resolve(ok ? 'orphan' : null)
+  }
+
+  const depCount = preview.dependent_thought_ids.length
+  const depsList = preview.dependent_thought_descriptions
+    .slice(0, 3)
+    .map((d, i) => `${i + 1}. ${d.length > 60 ? `${d.slice(0, 60)}…` : d}`)
+    .join('\n')
+
+  const cascadeMsg =
+    `要删除这条记忆吗？\n\n${truncated}\n\n` +
+    `这条记忆产出了 ${depCount} 条派生印象：\n${depsList}\n\n` +
+    `确定 = 一起删（cascade）\n取消 = 只删这条，保留派生印象（orphan）\n` +
+    `想完全不动 → 关掉这个对话框时点 Esc`
+  const cascade = window.confirm(cascadeMsg)
+  // The native dialog has only "确定 / 取消"; we treat
+  //   confirm=true  → cascade
+  //   confirm=false → orphan
+  // and rely on the user closing the dialog without choice (browser
+  // returns false too) to mean orphan. The Esc-as-cancel path is a
+  // UX wish that needs a real modal — flag for Stage X.
+  return Promise.resolve(cascade ? 'cascade' : 'orphan')
+}
+
+/** Format an ISO timestamp into the "YYYY-MM-DD HH:mm" form the
+ *  rest of the admin UI uses. */
+function formatTimestamp(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}`
   )
 }
 

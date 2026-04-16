@@ -20,20 +20,16 @@
  *      │  (auto)
  *      ▼
  *     running                        ← SSE open; user can cancel
- *      │  import.done  → done
- *      │  import.error → error
- *      │  cancelImport → (pipeline settles, import.done w/ status=cancelled)
+ *      │  pipeline.done → done / error
+ *      │  cancelImport  → (pipeline settles, pipeline.done w/ status=cancelled)
  *      ▼
  *     done / error
  *
- * The hook owns exactly one EventSource (opened on transition into
- * `running`, closed on `done` / `error` / unmount). Every subsequent
- * import starts from `reset()` which clears state back to `idle`.
- *
- * Contract: the backend is expected to emit `import.done` as the FINAL
- * frame on a pipeline (whether successful or cancelled); on unrecoverable
- * failure it emits `import.error` instead. The hook closes the stream on
- * either.
+ * SSE wire format: every frame arrives under the SSE event name
+ * `import.progress` with payload `{pipeline_id, type, payload}`. The
+ * true event kind lives in the inner `type` field (a multiplexed
+ * envelope — see `docs/import/01-import-spec-v0.1.md`). This hook
+ * fans out on that inner `type` internally.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -41,20 +37,17 @@ import {
   postImportCancel,
   postImportEstimate,
   postImportStart,
-  postImportUpload,
+  postImportUploadText,
 } from '../api/client'
 import { ApiError } from '../api/types'
 import type {
-  ImportDoneData,
-  ImportDroppedData,
-  ImportErrorData,
+  ImportDoneSummary,
   ImportEstimateResponse,
-  ImportEvent,
-  ImportProgressData,
+  ImportFrame,
+  ImportPipelineStatus,
+  ImportProgressSnapshot,
   ImportUploadResponse,
-  ImportWriteData,
 } from '../api/types'
-import { KNOWN_IMPORT_EVENT_NAMES } from '../api/types'
 
 export type ImportPhase =
   | 'idle'
@@ -66,14 +59,21 @@ export type ImportPhase =
   | 'done'
   | 'error'
 
+export interface ImportDroppedRecord {
+  chunk_index: number
+  reason: string
+  stage?: string
+  fatal?: boolean
+}
+
 export interface UseImportResult {
   phase: ImportPhase
   upload: ImportUploadResponse | null
   estimate: ImportEstimateResponse | null
-  progress: ImportProgressData | null
+  progress: ImportProgressSnapshot | null
   writesByTarget: Record<string, number>
-  dropped: ImportDroppedData[]
-  report: ImportDoneData | null
+  dropped: ImportDroppedRecord[]
+  report: ImportDoneSummary | null
   error: string | null
   pipelineId: string | null
   submitText(content: string, sourceLabel: string): Promise<void>
@@ -96,17 +96,53 @@ function errorMessage(err: unknown): string {
   return 'unknown error'
 }
 
+/** Type guard for the wire payload inside an `import.progress` SSE frame. */
+function isImportFrame(x: unknown): x is ImportFrame {
+  if (x === null || typeof x !== 'object') return false
+  const f = x as Record<string, unknown>
+  return (
+    typeof f.pipeline_id === 'string' &&
+    typeof f.type === 'string' &&
+    typeof f.payload === 'object' &&
+    f.payload !== null
+  )
+}
+
+/** Narrow an arbitrary payload value to string, tolerating missing keys. */
+function payloadString(p: Record<string, unknown>, key: string): string {
+  const v = p[key]
+  return typeof v === 'string' ? v : ''
+}
+
+function payloadNumber(p: Record<string, unknown>, key: string): number {
+  const v = p[key]
+  return typeof v === 'number' ? v : 0
+}
+
+function payloadWritesByTarget(
+  p: Record<string, unknown>,
+  key: string,
+): Record<string, number> {
+  const raw = p[key]
+  if (raw === null || typeof raw !== 'object') return {}
+  const out: Record<string, number> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === 'number') out[k] = v
+  }
+  return out
+}
+
 export function useImport(): UseImportResult {
   const [phase, setPhase] = useState<ImportPhase>('idle')
   const [upload, setUpload] = useState<ImportUploadResponse | null>(null)
   const [estimate, setEstimate] = useState<ImportEstimateResponse | null>(null)
   const [pipelineId, setPipelineId] = useState<string | null>(null)
-  const [progress, setProgress] = useState<ImportProgressData | null>(null)
+  const [progress, setProgress] = useState<ImportProgressSnapshot | null>(null)
   const [writesByTarget, setWritesByTarget] = useState<Record<string, number>>(
     {},
   )
-  const [dropped, setDropped] = useState<ImportDroppedData[]>([])
-  const [report, setReport] = useState<ImportDoneData | null>(null)
+  const [dropped, setDropped] = useState<ImportDroppedRecord[]>([])
+  const [report, setReport] = useState<ImportDoneSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const esRef = useRef<EventSource | null>(null)
@@ -119,37 +155,107 @@ export function useImport(): UseImportResult {
     }
   }, [])
 
-  const handleEvent = useCallback(
-    (ev: ImportEvent) => {
-      switch (ev.event) {
-        case 'import.progress':
-          setProgress(ev.data)
+  const handleFrame = useCallback(
+    (frame: ImportFrame) => {
+      const { type, payload } = frame
+      switch (type) {
+        case 'pipeline.start': {
+          // Authoritative total_chunks arrives here, not at upload time.
+          setProgress({
+            current_chunk: payloadNumber(payload, 'resume_from'),
+            total_chunks: payloadNumber(payload, 'total_chunks'),
+          })
           return
-        case 'import.write': {
-          const data = ev.data as ImportWriteData
-          setWritesByTarget((prev) => ({
-            ...prev,
-            [data.content_type]: (prev[data.content_type] ?? 0) + 1,
+        }
+        case 'chunk.start': {
+          setProgress((prev) => ({
+            current_chunk: payloadNumber(payload, 'chunk_index'),
+            total_chunks:
+              prev?.total_chunks ?? payloadNumber(payload, 'total_chunks'),
           }))
           return
         }
-        case 'import.dropped':
-          setDropped((prev) => [...prev, ev.data])
+        case 'chunk.done': {
+          // chunk_index is 0-based; "N chunks processed" is N+1 after
+          // the Nth chunk finishes.
+          const idx = payloadNumber(payload, 'chunk_index')
+          setProgress((prev) => ({
+            current_chunk: idx + 1,
+            total_chunks: prev?.total_chunks ?? 0,
+          }))
+          // The `summary` field is a {content_type: count} map that the
+          // pipeline emits for live write tallies.
+          const summary = payload.summary
+          if (summary !== null && typeof summary === 'object') {
+            setWritesByTarget((prev) => {
+              const next = { ...prev }
+              for (const [k, v] of Object.entries(summary)) {
+                if (typeof v === 'number') {
+                  next[k] = (next[k] ?? 0) + v
+                }
+              }
+              return next
+            })
+          }
           return
-        case 'import.done': {
-          const data = ev.data as ImportDoneData
-          setReport(data)
-          setPhase('done')
+        }
+        case 'chunk.error': {
+          const chunkIdx = payloadNumber(payload, 'chunk_index')
+          const fatal =
+            typeof payload.fatal === 'boolean' ? payload.fatal : false
+          const stage = payloadString(payload, 'stage')
+          const reason = payloadString(payload, 'error')
+          setDropped((prev) => [
+            ...prev,
+            {
+              chunk_index: chunkIdx,
+              reason,
+              stage: stage || undefined,
+              fatal,
+            },
+          ])
+          return
+        }
+        case 'pipeline.done': {
+          const statusRaw = payloadString(payload, 'status')
+          const status: ImportPipelineStatus =
+            statusRaw === 'success' ||
+            statusRaw === 'partial_success' ||
+            statusRaw === 'failed' ||
+            statusRaw === 'cancelled'
+              ? statusRaw
+              : 'failed'
+          const summary: ImportDoneSummary = {
+            status,
+            processed_chunks: payloadNumber(payload, 'processed_chunks'),
+            total_chunks: payloadNumber(payload, 'total_chunks'),
+            writes_by_target: payloadWritesByTarget(
+              payload,
+              'writes_by_target',
+            ),
+            dropped_count: payloadNumber(payload, 'dropped_count'),
+            embedded_vector_count: payloadNumber(
+              payload,
+              'embedded_vector_count',
+            ),
+            error: payloadString(payload, 'error'),
+          }
+          setReport(summary)
+          if (status === 'failed') {
+            setError((prev) => prev ?? summary.error ?? 'pipeline failed')
+            setPhase('error')
+          } else {
+            setPhase('done')
+          }
           closeStream()
           return
         }
-        case 'import.error': {
-          const data = ev.data as ImportErrorData
-          setError(data.error)
-          setPhase('error')
-          closeStream()
+        case 'pipeline.cancelled':
+        case 'pipeline.registered':
+        case 'pipeline.resumed':
+        default:
+          // Informational frames — no UI state to update here.
           return
-        }
       }
     },
     [closeStream],
@@ -182,15 +288,16 @@ export function useImport(): UseImportResult {
       setError(null)
       setPhase('uploading')
       try {
-        const uploadResult = await postImportUpload({
+        const uploadResult = await postImportUploadText({
+          text: content,
           source_label: sourceLabel,
-          content,
         })
         setUpload(uploadResult)
         setPhase('estimating')
 
         const estimateResult = await postImportEstimate({
           upload_id: uploadResult.upload_id,
+          stage: 'llm',
         })
         setEstimate(estimateResult)
         setPhase('estimate')
@@ -211,37 +318,37 @@ export function useImport(): UseImportResult {
     setError(null)
     setPhase('starting')
     try {
-      const startResult = await postImportStart({ upload_id: upload.upload_id })
+      const startResult = await postImportStart({
+        upload_id: upload.upload_id,
+      })
       setPipelineId(startResult.pipeline_id)
 
-      // Open the SSE stream. Each known import event name gets a named
-      // listener; unknown frames are ignored. The backend closes the
-      // stream after emitting its final `import.done` / `import.error`,
-      // but we also close locally on those events to release resources
-      // promptly.
+      // Open the SSE stream. The backend emits a single event name
+      // (`import.progress`) and multiplexes the true kind in
+      // `data.type`. Hook the named listener plus the plain `message`
+      // channel to be resilient to either wire framing.
       const url = `/api/admin/import/events?pipeline_id=${encodeURIComponent(startResult.pipeline_id)}`
       const es = new EventSource(url)
       esRef.current = es
 
-      for (const name of KNOWN_IMPORT_EVENT_NAMES) {
-        es.addEventListener(name, (raw) => {
-          const data = parseEventData((raw as MessageEvent).data)
-          if (data === null) {
-            console.warn('useImport: unparseable frame for', name)
-            return
-          }
-          handleEvent({ event: name, data } as ImportEvent)
-        })
+      const onMessage = (raw: MessageEvent) => {
+        const data = parseEventData(raw.data)
+        if (!isImportFrame(data)) {
+          console.warn('useImport: non-frame SSE payload', raw.data)
+          return
+        }
+        handleFrame(data)
       }
+
+      es.addEventListener('import.progress', onMessage as EventListener)
+      es.addEventListener('message', onMessage as EventListener)
 
       es.addEventListener('error', () => {
         // EventSource's `error` fires on both transient disconnects and
-        // remote-closed states. We only treat it as fatal if the stream
-        // is in CLOSED state (readyState 2); otherwise leave it to
-        // auto-reconnect.
+        // remote-closed states. Treat as fatal only if the stream is
+        // in CLOSED state (readyState 2); otherwise let it auto-reconnect.
         if (es.readyState === 2) {
           closeStream()
-          // If we never got a terminal frame, flag the error.
           setPhase((prev) => (prev === 'running' ? 'error' : prev))
           setError((prev) => prev ?? 'SSE stream closed unexpectedly')
         }
@@ -253,15 +360,15 @@ export function useImport(): UseImportResult {
       setPhase('error')
       closeStream()
     }
-  }, [upload, handleEvent, closeStream])
+  }, [upload, handleFrame, closeStream])
 
   const cancelImport = useCallback(async (): Promise<void> => {
     if (pipelineId === null) return
     try {
       await postImportCancel({ pipeline_id: pipelineId })
       // We deliberately keep `phase === 'running'` and wait for the
-      // server's final `import.done` with `status=cancelled` so the
-      // final-tally UI renders consistently (whether success or cancel).
+      // server's final `pipeline.done` (status=cancelled) so the
+      // final-tally UI renders consistently.
     } catch (err) {
       setError(errorMessage(err))
     }

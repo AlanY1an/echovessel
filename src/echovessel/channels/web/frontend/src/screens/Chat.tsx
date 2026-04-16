@@ -1,7 +1,11 @@
 import { useState } from 'react'
 import { TopBar } from '../components/TopBar'
-import { useChat } from '../hooks/useChat'
-import type { ChatMessage as HookMessage } from '../hooks/useChat'
+import { useChat, isBoundaryEntry } from '../hooks/useChat'
+import type {
+  BoundaryEntry,
+  ChatMessage as HookMessage,
+  TimelineEntry,
+} from '../hooks/useChat'
 import type {
   ChatMessage as PrototypeMessage,
   VoiceMeta,
@@ -31,7 +35,10 @@ export function Chat({ moodBlock, onOpenAdmin }: ChatProps) {
     }
   }
 
-  const timeline = messages.map(toPrototypeShape)
+  // Adapt each hook entry into either a prototype-shape chat message or
+  // a BoundaryEntry (passed through unchanged) so we can render both
+  // kinds from a single map below.
+  const timeline: RenderedEntry[] = messages.map(toRendered)
 
   return (
     <div className="chat-wrap">
@@ -42,14 +49,19 @@ export function Chat({ moodBlock, onOpenAdmin }: ChatProps) {
 
       <main className="chat-main">
         {timeline.length === 0 && <EmptyState />}
-        {timeline.map((message, idx) => (
-          <Exchange
-            key={message.id}
-            message={message}
-            index={idx}
-            isFirstOfTurn={isFirstOfTurn(timeline, idx)}
-          />
-        ))}
+        {timeline.map((entry, idx) => {
+          if (entry.kind === 'boundary') {
+            return <SessionBoundary key={entry.data.id} entry={entry.data} />
+          }
+          return (
+            <Exchange
+              key={entry.data.id}
+              message={entry.data}
+              index={idx}
+              isFirstOfTurn={isFirstOfTurn(timeline, idx)}
+            />
+          )
+        })}
       </main>
 
       <div className="composer">
@@ -104,7 +116,22 @@ export function Chat({ moodBlock, onOpenAdmin }: ChatProps) {
 //   strings would throw away the typography (paragraph breaks, letter
 //   layout, cursor-on-last-line streaming indicator). An adapter
 //   function is ~15 lines and keeps the whole render subtree intact.
-//   See §6 of the Stage 4-proper tracker for the tradeoff discussion.
+//
+// `RenderedEntry` is a discriminated union at the render layer only —
+// it lets the timeline.map render boundaries and messages side-by-side
+// without leaking the hook's `TimelineEntry` shape past the Chat.tsx
+// boundary.
+
+type RenderedEntry =
+  | { kind: 'message'; data: PrototypeMessage }
+  | { kind: 'boundary'; data: BoundaryEntry }
+
+function toRendered(entry: TimelineEntry): RenderedEntry {
+  if (isBoundaryEntry(entry)) {
+    return { kind: 'boundary', data: entry }
+  }
+  return { kind: 'message', data: toPrototypeShape(entry) }
+}
 
 function toPrototypeShape(m: HookMessage): PrototypeMessage {
   return {
@@ -154,14 +181,82 @@ function formatTimestamp(iso: string): string {
 }
 
 function isFirstOfTurn(
-  timeline: PrototypeMessage[],
+  timeline: RenderedEntry[],
   idx: number,
 ): boolean {
   if (idx === 0) return true
   const prev = timeline[idx - 1]
   const curr = timeline[idx]
   if (!prev || !curr) return true
-  return prev.turnId !== curr.turnId
+  // A boundary always starts a fresh visual turn on its neighbours.
+  if (prev.kind === 'boundary' || curr.kind === 'boundary') return true
+  return prev.data.turnId !== curr.data.turnId
+}
+
+// ─── Session boundary marker ────────────────────────────────────────────
+//
+// Rendered as a thin horizontal line with a relative timestamp
+// ("2 分钟前" / "1 小时前" / ...). Intentionally quiet — boundaries
+// should feel like a page break, not an event.
+
+function SessionBoundary({ entry }: { entry: BoundaryEntry }) {
+  const relative = formatRelativeTime(entry.timestamp)
+  return (
+    <div
+      className="session-boundary"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 16,
+        margin: '24px 0',
+        color: 'rgba(255, 255, 255, 0.32)',
+        fontSize: 12,
+        letterSpacing: '0.1em',
+      }}
+    >
+      <div
+        style={{
+          flex: 1,
+          height: 1,
+          background:
+            'linear-gradient(to right, transparent, rgba(255,255,255,0.12), transparent)',
+        }}
+      />
+      <span style={{ whiteSpace: 'nowrap' }}>
+        ── {relative} ──
+      </span>
+      <div
+        style={{
+          flex: 1,
+          height: 1,
+          background:
+            'linear-gradient(to right, transparent, rgba(255,255,255,0.12), transparent)',
+        }}
+      />
+    </div>
+  )
+}
+
+function formatRelativeTime(iso: string): string {
+  try {
+    const ts = new Date(iso).getTime()
+    if (Number.isNaN(ts)) return '——'
+    const diffMs = Date.now() - ts
+    if (diffMs < 60_000) return '刚刚'
+    const minutes = Math.floor(diffMs / 60_000)
+    if (minutes < 60) return `${minutes} 分钟前`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 24) return `${hours} 小时前`
+    const days = Math.floor(hours / 24)
+    if (days < 7) return `${days} 天前`
+    // Fall back to an absolute MM-DD for older boundaries.
+    const d = new Date(iso)
+    const mm = (d.getMonth() + 1).toString().padStart(2, '0')
+    const dd = d.getDate().toString().padStart(2, '0')
+    return `${mm}-${dd}`
+  } catch {
+    return '——'
+  }
 }
 
 // ─── Empty-state + render components (unchanged logic, trimmed) ─────────

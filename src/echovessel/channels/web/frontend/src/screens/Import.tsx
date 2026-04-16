@@ -23,8 +23,9 @@ import { useNavigate } from 'react-router-dom'
 import { TopBar } from '../components/TopBar'
 import { useImport } from '../hooks/useImport'
 import type {
-  ImportDoneData,
+  ImportDoneSummary,
   ImportEstimateResponse,
+  ImportProgressSnapshot,
   ImportUploadResponse,
 } from '../api/types'
 import type { ImportPhase } from '../hooks/useImport'
@@ -339,8 +340,8 @@ function EstimateStep({
                 {upload.source_label}
               </div>
               <div className="import-summary-file-meta">
-                {formatBytes(upload.size_bytes)} ·{' '}
-                {upload.total_chunks.toLocaleString()} 块
+                {formatBytes(upload.size_bytes)}
+                {upload.suffix ? ` · ${upload.suffix.replace(/^\./, '')}` : ''}
               </div>
             </div>
           </div>
@@ -354,41 +355,33 @@ function EstimateStep({
 
         {!estimating && estimate !== null && (
           <div className="import-cost-card">
-            <div className="import-cost-title">预计消耗</div>
-            <div className="import-cost-model">
-              <strong>{estimate.model}</strong>
-              <span className="import-cost-tier">LLM</span>
-            </div>
+            <div className="import-cost-title">预计消耗 · LLM 抽取阶段</div>
             <table className="import-cost-table">
               <tbody>
                 <tr>
                   <td>输入</td>
                   <td className="import-cost-amount">
-                    {estimate.estimated_input_tokens.toLocaleString()} tokens
+                    {estimate.tokens_in.toLocaleString()} tokens
                   </td>
                 </tr>
                 <tr>
-                  <td>输出</td>
+                  <td>输出 (预估)</td>
                   <td className="import-cost-amount">
-                    {estimate.estimated_output_tokens.toLocaleString()} tokens
-                  </td>
-                </tr>
-                <tr>
-                  <td>块数</td>
-                  <td className="import-cost-amount">
-                    {estimate.total_chunks.toLocaleString()}
+                    {estimate.tokens_out_est.toLocaleString()} tokens
                   </td>
                 </tr>
                 <tr className="import-cost-total">
                   <td>预计</td>
                   <td className="import-cost-amount">
-                    ${estimate.estimated_cost_usd.toFixed(4)}
+                    ${estimate.cost_usd_est.toFixed(4)}
                   </td>
                 </tr>
               </tbody>
             </table>
             <div className="import-cost-footer">
-              实际成本以 provider 账单为准
+              {estimate.note
+                ? estimate.note
+                : '实际成本以 provider 账单为准'}
             </div>
           </div>
         )}
@@ -434,10 +427,10 @@ function RunningStep({
 }: {
   phase: ImportPhase
   upload: ImportUploadResponse | null
-  progress: { current_chunk: number; total_chunks: number } | null
+  progress: ImportProgressSnapshot | null
   writesByTarget: Record<string, number>
   droppedCount: number
-  report: ImportDoneData | null
+  report: ImportDoneSummary | null
   error: string | null
   onCancel: () => void
   onDone: () => void
@@ -540,7 +533,7 @@ function RunningStep({
       <h1 className="import-step-title">导入中⋯</h1>
       <p className="import-step-lead">
         {upload !== null
-          ? `${upload.source_label} · ${upload.total_chunks} 块`
+          ? `${upload.source_label} · ${formatBytes(upload.size_bytes)}`
           : '处理中'}
       </p>
 
