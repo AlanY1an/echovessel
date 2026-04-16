@@ -54,6 +54,16 @@ uv sync --extra embeddings --extra llm --extra voice --extra discord
 
 All subsequent commands below are run inside the repo with `uv run …`.
 
+### Get the 5-minute architecture tour
+
+Before you run anything, it helps to see how the pieces fit. Three hand-written HTML visualizations live under `docs/` — open them locally in a browser.
+
+- 🗺 [**`docs/architecture.html`**](./docs/architecture.html) — one-page static anatomy. Module layers, memory L1–L4 stack, message flow, cross-channel SSE, full HTTP surface, iron rules, release timeline.
+- 🧠 [**`docs/memory/layers.html`**](./docs/memory/layers.html) — simplest possible mental model of memory. One SVG figure, four layers, how they connect, credits to Stanford's Generative Agents paper for the retrieval scoring formula.
+- 🔄 [**`docs/architecture-flow.html`**](./docs/architecture-flow.html) — runtime "nervous system" companion. Per-turn activation sequence, real story trace, L1–L4 distillation rules (quoting the actual extraction/reflection prompts), retrieval math, policy gates.
+
+If you only have 60 seconds, open the middle one.
+
 ### First Launch
 
 EchoVessel reads `~/.echovessel/config.toml` for settings and `./.env` (the current working directory at run-time) for API keys. Create both starter files in one shot:
