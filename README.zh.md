@@ -50,13 +50,13 @@ uv pip install 'echovessel[embeddings,llm,voice,discord]'
 
 ### 首次启动
 
-EchoVessel 读取 `~/.echovessel/config.toml`。一条命令同时生成 config + `.env` 模板:
+EchoVessel 从 `~/.echovessel/config.toml` 读配置 · 从**当前工作目录**的 `./.env` 读 API 密钥。一条命令同时生成这两个:
 
 ```bash
 echovessel init
 ```
 
-`init` **同时**写 `~/.echovessel/config.toml` 和一个注释全关掉的 `~/.echovessel/.env`(权限 0600)。daemon 启动时自动加载 `.env` —— 按需取消注释填值:
+`init` 把 `~/.echovessel/config.toml` 和一个注释全关掉的 `.env` 写到**当前目录**(权限 0600)。daemon 启动时自动加载 `./.env`,所以 `.env` 要留在你启动 daemon 的那个目录(通常是项目根)。按需取消注释填值:
 
 ```
 OPENAI_API_KEY=sk-...

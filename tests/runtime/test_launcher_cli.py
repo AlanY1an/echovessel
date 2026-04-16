@@ -129,50 +129,55 @@ def test_init_force_overwrites_existing(tmp_path: Path) -> None:
 
 
 def test_init_also_writes_env_template_when_missing(tmp_path: Path) -> None:
-    """init drops a commented-out ``.env`` next to the config so the
-    new-user flow does not have to guess which keys exist."""
+    """init drops a commented-out ``.env`` in the CWD so the new-user
+    flow does not have to guess which keys exist."""
     target = tmp_path / "fresh.toml"
-    env_target = target.parent / ".env"
-    result = _runner().invoke(cli, ["init", "--config-path", str(target)])
-    assert result.exit_code == 0, _stream(result)
-    assert env_target.exists()
-    body = env_target.read_text(encoding="utf-8")
-    # Key names appear but are all commented out so the daemon never
-    # accidentally loads empty strings into os.environ.
-    assert "OPENAI_API_KEY" in body
-    assert "FISH_AUDIO_KEY" in body
-    assert "ECHOVESSEL_DISCORD_TOKEN" in body
-    for line in body.splitlines():
-        stripped = line.strip()
-        if stripped.startswith(
-            ("OPENAI_API_KEY", "FISH_AUDIO_KEY", "ECHOVESSEL_DISCORD_TOKEN",
-             "ANTHROPIC_API_KEY"),
-        ):
-            raise AssertionError(
-                f"env.sample should have every key commented out; found "
-                f"active line: {line!r}"
-            )
+    runner = _runner()
+    with runner.isolated_filesystem() as cwd:
+        result = runner.invoke(cli, ["init", "--config-path", str(target)])
+        assert result.exit_code == 0, _stream(result)
+        env_target = Path(cwd) / ".env"
+        assert env_target.exists()
+        body = env_target.read_text(encoding="utf-8")
+        # Key names appear but are all commented out so the daemon never
+        # accidentally loads empty strings into os.environ.
+        assert "OPENAI_API_KEY" in body
+        assert "FISH_AUDIO_KEY" in body
+        assert "ECHOVESSEL_DISCORD_TOKEN" in body
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(
+                ("OPENAI_API_KEY", "FISH_AUDIO_KEY", "ECHOVESSEL_DISCORD_TOKEN",
+                 "ANTHROPIC_API_KEY"),
+            ):
+                raise AssertionError(
+                    f"env.sample should have every key commented out; found "
+                    f"active line: {line!r}"
+                )
 
 
 def test_init_never_clobbers_existing_env_even_with_force(tmp_path: Path) -> None:
     """--force overwrites config.toml but must NEVER overwrite .env —
     that file typically holds real API keys the user already pasted in."""
     target = tmp_path / "existing.toml"
-    env_target = target.parent / ".env"
     target.write_text("# old config\n")
-    env_target.write_text("OPENAI_API_KEY=sk-real-key-keep-me\n")
 
-    result = _runner().invoke(
-        cli, ["init", "--force", "--config-path", str(target)]
-    )
+    runner = _runner()
+    with runner.isolated_filesystem() as cwd:
+        env_target = Path(cwd) / ".env"
+        env_target.write_text("OPENAI_API_KEY=sk-real-key-keep-me\n")
 
-    assert result.exit_code == 0, _stream(result)
-    # config was rewritten…
-    assert "[llm]" in target.read_text(encoding="utf-8")
-    # …but .env was preserved byte-for-byte.
-    assert env_target.read_text(encoding="utf-8") == (
-        "OPENAI_API_KEY=sk-real-key-keep-me\n"
-    )
+        result = runner.invoke(
+            cli, ["init", "--force", "--config-path", str(target)]
+        )
+
+        assert result.exit_code == 0, _stream(result)
+        # config was rewritten…
+        assert "[llm]" in target.read_text(encoding="utf-8")
+        # …but .env was preserved byte-for-byte.
+        assert env_target.read_text(encoding="utf-8") == (
+            "OPENAI_API_KEY=sk-real-key-keep-me\n"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -41,18 +41,18 @@ log = logging.getLogger("echovessel.launcher")
 
 
 def _load_dotenv() -> None:
-    """Load ``~/.echovessel/.env`` if it exists.
+    """Load ``<cwd>/.env`` if it exists.
 
     Simple KEY=VALUE parser (no shell expansion, no interpolation). Lines
     starting with ``#`` are comments. Blank lines are ignored. Double or
     single quotes around values are stripped.
 
     This runs BEFORE config validation so ``api_key_env`` references can
-    resolve to env vars defined in the .env file. Users write their API
-    keys once in ``~/.echovessel/.env`` and never have to ``export`` them
-    in every new terminal session.
+    resolve to env vars defined in the .env file. Users put their API
+    keys in a ``.env`` file in the directory they run ``echovessel run``
+    from — typically the project root during development.
     """
-    env_path = Path("~/.echovessel/.env").expanduser()
+    env_path = Path.cwd() / ".env"
     if not env_path.is_file():
         return
 
@@ -180,10 +180,11 @@ def init(force: bool, config_path: str | None) -> None:
 
     click.echo(f"wrote config to {target}")
 
-    # Also drop a commented-out ``.env`` template next to the config so new
-    # users know where to put their API keys. We NEVER overwrite an existing
-    # ``.env`` — real keys live there and ``--force`` should not wipe them.
-    env_target = target.parent / ".env"
+    # Also drop a commented-out ``.env`` template in the current directory
+    # (where the user will run ``echovessel run``). We NEVER overwrite an
+    # existing ``.env`` — real keys live there and ``--force`` should not
+    # wipe them.
+    env_target = Path.cwd() / ".env"
     env_written = False
     if not env_target.exists():
         try:

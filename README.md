@@ -51,13 +51,13 @@ End users do **not** need Node.js — the wheel embeds the pre-built React bundl
 
 ### First Launch
 
-EchoVessel reads `~/.echovessel/config.toml`. Create a starter config + an `.env` template in one shot:
+EchoVessel reads `~/.echovessel/config.toml` for settings and `./.env` (the current working directory at run-time) for API keys. Create both starter files in one shot:
 
 ```bash
 echovessel init
 ```
 
-`init` writes **both** `~/.echovessel/config.toml` and a commented-out `~/.echovessel/.env` (0600 perms). The daemon auto-loads `.env` on startup — uncomment the keys you need:
+`init` writes `~/.echovessel/config.toml` **and** a commented-out `.env` template in the current directory (0600 perms). The daemon auto-loads `./.env` on `echovessel run`, so keep `.env` in the directory you launch from — typically the project root. Uncomment the keys you need:
 
 ```
 OPENAI_API_KEY=sk-...
