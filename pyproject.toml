@@ -126,6 +126,9 @@ artifacts = [
     # but non-``.py`` files still need an explicit include rule to land
     # in the wheel.
     "src/echovessel/resources/config.toml.sample",
+    # Commented-out .env template dropped by `echovessel init` so new users
+    # know which keys to set (OPENAI_API_KEY / FISH_AUDIO_KEY / …).
+    "src/echovessel/resources/env.sample",
 ]
 
 [tool.hatch.build.targets.wheel]

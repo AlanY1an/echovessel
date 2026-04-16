@@ -18,6 +18,7 @@ reports whether a daemon is live.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import signal
@@ -178,12 +179,44 @@ def init(force: bool, config_path: str | None) -> None:
         sys.exit(1)
 
     click.echo(f"wrote config to {target}")
+
+    # Also drop a commented-out ``.env`` template next to the config so new
+    # users know where to put their API keys. We NEVER overwrite an existing
+    # ``.env`` — real keys live there and ``--force`` should not wipe them.
+    env_target = target.parent / ".env"
+    env_written = False
+    if not env_target.exists():
+        try:
+            env_sample_text = (
+                resources.files("echovessel.resources")
+                .joinpath("env.sample")
+                .read_text(encoding="utf-8")
+            )
+            env_target.write_text(env_sample_text, encoding="utf-8")
+            # 0600 — this file holds secrets once the user fills it in.
+            with contextlib.suppress(OSError):
+                env_target.chmod(0o600)
+            env_written = True
+            click.echo(f"wrote env template to {env_target}")
+        except (FileNotFoundError, ModuleNotFoundError, OSError) as e:
+            click.echo(
+                f"warning: could not write env template: {e}",
+                err=True,
+            )
+
     click.echo("")
     click.echo("Next steps:")
     click.echo(f"  1. Edit {target} to pick an LLM provider")
-    click.echo(
-        "  2. Set any required env vars (e.g. OPENAI_API_KEY, ANTHROPIC_API_KEY)"
-    )
+    if env_written:
+        click.echo(
+            f"  2. Uncomment and fill keys in {env_target} "
+            "(OPENAI_API_KEY / FISH_AUDIO_KEY / ECHOVESSEL_DISCORD_TOKEN)"
+        )
+    else:
+        click.echo(
+            f"  2. Put your API keys in {env_target} "
+            "(it already exists — daemon will auto-load it)"
+        )
     click.echo("  3. Run `echovessel run` to start the daemon")
     click.echo("")
     click.echo(
