@@ -98,6 +98,7 @@ def build_web_app(
             channel=channel,
             broadcaster=broadcaster,
             voice_service=voice_service,
+            runtime=runtime,
         )
     )
     # Stage 3 · admin routes are mounted only when the caller passes a

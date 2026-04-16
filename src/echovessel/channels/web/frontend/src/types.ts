@@ -14,6 +14,10 @@ export interface ChatMessage {
   content: string[] // paragraphs / burst lines
   streaming?: boolean // if true, render a blinking cursor after the last paragraph
   voice?: VoiceMeta
+  /** Worker X · originating channel for this message. "web" (or
+   *  undefined) = default, no pill rendered. "discord" / "imessage" /
+   *  etc. render a small pill so the user sees cross-channel turns. */
+  sourceChannelId?: 'web' | 'discord' | 'imessage' | string
 }
 
 export type AdminTab =

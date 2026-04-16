@@ -22,10 +22,14 @@
  *     timeline shows a session divider without a page refresh
  */
 
-import { useCallback, useEffect, useState } from 'react'
-import { postChatSend } from '../api/client'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { getChatHistory, postChatSend } from '../api/client'
 import { ApiError } from '../api/types'
-import type { ChatEvent, MessageDelivery } from '../api/types'
+import type {
+  ChatEvent,
+  ChatHistoryMessage,
+  MessageDelivery,
+} from '../api/types'
 import { useSSE } from './useSSE'
 
 /**
@@ -57,6 +61,15 @@ export interface ChatMessage {
   delivery?: MessageDelivery
   /** Set when `chat.message.voice_ready` arrives for this message. */
   voice_url?: string
+  /**
+   * Originating channel for this message. Populated from the history
+   * backfill (Worker Y) so the UI can render a "📱 Discord" /
+   * "🌐 Web" badge on messages that weren't typed from this tab.
+   * Undefined for live messages that arrived via SSE — those are
+   * implicitly on the Web channel (the tab you're watching), so
+   * treat `undefined` as "web" at render time.
+   */
+  source_channel_id?: string
 }
 
 /**
@@ -79,6 +92,13 @@ export interface UseChatResult {
   messages: TimelineEntry[]
   send(content: string): Promise<void>
   error: string | null
+  /** True when the most recent history fetch was truncated and the
+   *  next "↑ 加载更早的消息" click can fetch an older page. */
+  hasMoreHistory: boolean
+  /** True while the initial bootstrap or a subsequent loadMore is
+   *  in flight. UI renders a spinner + disables the button. */
+  historyLoading: boolean
+  loadMoreHistory(): Promise<void>
 }
 
 /**
@@ -98,11 +118,90 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
+/** Convert a server-side recall-message row into the UI's hook shape.
+ *  History rows are always finalized (no streaming, no voice url at
+ *  first paint — voice_ready SSE can later flip voice_url if the file
+ *  is still cached). `source_channel_id` flows through so the UI can
+ *  badge cross-channel messages. */
+function historyToChatMessage(h: ChatHistoryMessage): ChatMessage {
+  return {
+    id: `hist-${h.id}`,
+    role: h.role,
+    content: h.content,
+    streaming: false,
+    message_id: h.id,
+    timestamp: h.created_at ?? new Date().toISOString(),
+    source_channel_id: h.source_channel_id,
+  }
+}
+
+const HISTORY_PAGE_SIZE = 50
+
 export function useChat(): UseChatResult {
   const [messages, setMessages] = useState<TimelineEntry[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [hasMoreHistory, setHasMoreHistory] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  // The `oldest_turn_id` of the OLDEST page we've fetched so far. Used
+  // as the `before=` cursor on the next loadMoreHistory() call. Kept
+  // in a ref (not state) so the callback doesn't need to re-create on
+  // every fetch.
+  const oldestCursor = useRef<string | null>(null)
+  // One-shot guard for the mount-time bootstrap: StrictMode double-
+  // invokes effects in dev, and we don't want to append the history
+  // twice. The ref flips on first run.
+  const bootstrapped = useRef(false)
 
   const { subscribe } = useSSE()
+
+  // Bootstrap: on mount, fetch the newest page of L2 history and
+  // prepend it to the timeline BEFORE the SSE subscription has a
+  // chance to append live events. The returned list is DESC
+  // (newest-first); we reverse so chronological order (oldest → newest
+  // top-to-bottom) matches how the rest of the timeline renders.
+  useEffect(() => {
+    if (bootstrapped.current) return
+    bootstrapped.current = true
+    setHistoryLoading(true)
+    void getChatHistory(HISTORY_PAGE_SIZE)
+      .then((resp) => {
+        const ascending = [...resp.messages].reverse()
+        const entries: TimelineEntry[] = ascending.map(historyToChatMessage)
+        setMessages((prev) => [...entries, ...prev])
+        setHasMoreHistory(resp.has_more)
+        oldestCursor.current = resp.oldest_turn_id
+      })
+      .catch((err) => {
+        // Don't fail hard — the rest of the screen still works even if
+        // the backfill times out. Surface through the existing `error`
+        // channel so the composer banner shows a hint.
+        if (err instanceof ApiError) setError(err.detail)
+        else if (err instanceof Error) setError(err.message)
+      })
+      .finally(() => {
+        setHistoryLoading(false)
+      })
+  }, [])
+
+  const loadMoreHistory = useCallback(async (): Promise<void> => {
+    if (historyLoading || !hasMoreHistory) return
+    const cursor = oldestCursor.current
+    if (!cursor) return
+    setHistoryLoading(true)
+    try {
+      const resp = await getChatHistory(HISTORY_PAGE_SIZE, cursor)
+      const ascending = [...resp.messages].reverse()
+      const entries: TimelineEntry[] = ascending.map(historyToChatMessage)
+      setMessages((prev) => [...entries, ...prev])
+      setHasMoreHistory(resp.has_more)
+      oldestCursor.current = resp.oldest_turn_id
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.detail)
+      else if (err instanceof Error) setError(err.message)
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [historyLoading, hasMoreHistory])
 
   useEffect(() => {
     const unsubscribe = subscribe((event: ChatEvent) => {
@@ -113,6 +212,9 @@ export function useChat(): UseChatResult {
           // optimistic append because the backend does not echo our
           // external_ref back in any field the client can use to match;
           // Stage 4 proper may add a dedupe pass.
+          //
+          // Worker X · capture ``source_channel_id`` so Chat.tsx can
+          // render a pill for cross-channel turns (Discord, …).
           setMessages((prev) => [
             ...prev,
             {
@@ -121,13 +223,14 @@ export function useChat(): UseChatResult {
               content: event.data.content,
               streaming: false,
               timestamp: event.data.received_at,
+              source_channel_id: event.data.source_channel_id,
             },
           ])
           return
         }
 
         case 'chat.message.token': {
-          const { message_id, delta } = event.data
+          const { message_id, delta, source_channel_id } = event.data
           setMessages((prev) => {
             // Find an existing persona message with this id and append
             // the delta. If none exists yet (first token of the turn),
@@ -148,6 +251,7 @@ export function useChat(): UseChatResult {
                   streaming: true,
                   message_id,
                   timestamp: nowIso(),
+                  source_channel_id,
                 },
               ]
             }
@@ -161,7 +265,12 @@ export function useChat(): UseChatResult {
         }
 
         case 'chat.message.done': {
-          const { message_id, content, delivery } = event.data
+          const {
+            message_id,
+            content,
+            delivery,
+            source_channel_id,
+          } = event.data
           setMessages((prev) => {
             const idx = prev.findIndex(
               (m) =>
@@ -182,6 +291,7 @@ export function useChat(): UseChatResult {
                   message_id,
                   timestamp: nowIso(),
                   delivery,
+                  source_channel_id,
                 },
               ]
             }
@@ -195,6 +305,8 @@ export function useChat(): UseChatResult {
               content,
               streaming: false,
               delivery,
+              source_channel_id:
+                source_channel_id ?? existing.source_channel_id,
             }
             return next
           })
@@ -275,5 +387,12 @@ export function useChat(): UseChatResult {
     }
   }, [])
 
-  return { messages, send, error }
+  return {
+    messages,
+    send,
+    error,
+    hasMoreHistory,
+    historyLoading,
+    loadMoreHistory,
+  }
 }

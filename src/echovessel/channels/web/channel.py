@@ -179,6 +179,11 @@ class WebChannel:
         # Stage 2 · echo the user message to every connected browser tab
         # so multi-tab UIs stay in sync. This fires BEFORE the LLM runs
         # so the UI can render the user bubble immediately.
+        #
+        # Worker X · ``source_channel_id`` is pinned to "web" so the
+        # frontend doesn't need to branch on a null vs string contract.
+        # Runtime publishes the same event with the originating channel
+        # for non-Web turns (see Runtime._publish_cross_channel_event).
         await self.push_sse(
             "chat.message.user_appended",
             {
@@ -186,6 +191,7 @@ class WebChannel:
                 "content": msg.content,
                 "received_at": msg.received_at.isoformat(),
                 "external_ref": msg.external_ref,
+                "source_channel_id": self.channel_id,
             },
         )
 
@@ -274,6 +280,13 @@ class WebChannel:
         else:
             msg_id = id(msg)
 
+        # Worker X · ``source_channel_id`` mirrors the outgoing envelope's
+        # ``source_channel_id`` (which runtime populates from
+        # ``turn.channel_id``). For Web-sourced turns that value is
+        # "web"; for cross-channel runtime-mirrored turns the runtime
+        # helper publishes the same event shape directly on the
+        # broadcaster instead of going through this path.
+        source_channel_id = msg.source_channel_id or self.channel_id
         await self.push_sse(
             "chat.message.done",
             {
@@ -282,6 +295,7 @@ class WebChannel:
                 "in_reply_to": msg.in_reply_to,
                 "in_reply_to_turn_id": msg.in_reply_to_turn_id,
                 "delivery": msg.delivery,
+                "source_channel_id": source_channel_id,
             },
         )
 
@@ -294,6 +308,7 @@ class WebChannel:
                     "url": msg.voice_result.url,
                     "duration_seconds": msg.voice_result.duration_seconds,
                     "cached": msg.voice_result.cached,
+                    "source_channel_id": source_channel_id,
                 },
             )
 
@@ -345,7 +360,11 @@ class WebChannel:
         async def _push(message_id: int, delta: str) -> None:
             await self.push_sse(
                 "chat.message.token",
-                {"message_id": message_id, "delta": delta},
+                {
+                    "message_id": message_id,
+                    "delta": delta,
+                    "source_channel_id": self.channel_id,
+                },
             )
 
         return _push

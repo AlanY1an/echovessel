@@ -17,7 +17,14 @@ interface ChatProps {
 }
 
 export function Chat({ moodBlock, onOpenAdmin }: ChatProps) {
-  const { messages, send, error } = useChat()
+  const {
+    messages,
+    send,
+    error,
+    hasMoreHistory,
+    historyLoading,
+    loadMoreHistory,
+  } = useChat()
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
 
@@ -40,6 +47,13 @@ export function Chat({ moodBlock, onOpenAdmin }: ChatProps) {
   // kinds from a single map below.
   const timeline: RenderedEntry[] = messages.map(toRendered)
 
+  // "↑ 加载更早" button at top of timeline. Shown when the history
+  // endpoint reported more older pages are available; also shown as a
+  // lock-state during the very first bootstrap so there's feedback
+  // about why the timeline is empty.
+  const showLoadMore = hasMoreHistory || historyLoading
+  const timelineIsEmpty = !historyLoading && timeline.length === 0
+
   return (
     <div className="chat-wrap">
       <TopBar
@@ -48,7 +62,41 @@ export function Chat({ moodBlock, onOpenAdmin }: ChatProps) {
       />
 
       <main className="chat-main">
-        {timeline.length === 0 && <EmptyState />}
+        {showLoadMore && (
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'center',
+              padding: '16px 0 8px',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => void loadMoreHistory()}
+              disabled={historyLoading || !hasMoreHistory}
+              style={{
+                background: 'transparent',
+                border: '1px solid rgba(255,255,255,0.12)',
+                borderRadius: 18,
+                padding: '6px 16px',
+                color: 'rgba(255,255,255,0.72)',
+                fontSize: 12,
+                letterSpacing: '0.08em',
+                cursor:
+                  historyLoading || !hasMoreHistory
+                    ? 'default'
+                    : 'pointer',
+              }}
+            >
+              {historyLoading
+                ? '加载中⋯'
+                : hasMoreHistory
+                  ? '↑ 加载更早的消息'
+                  : '已经是最早的消息'}
+            </button>
+          </div>
+        )}
+        {timelineIsEmpty && <EmptyState />}
         {timeline.map((entry, idx) => {
           if (entry.kind === 'boundary') {
             return <SessionBoundary key={entry.data.id} entry={entry.data} />
@@ -134,6 +182,14 @@ function toRendered(entry: TimelineEntry): RenderedEntry {
 }
 
 function toPrototypeShape(m: HookMessage): PrototypeMessage {
+  // Worker Y · cross-channel badge. History backfill carries a
+  // `source_channel_id`; live SSE messages typed from this tab don't,
+  // and we treat `undefined` as the current (Web) channel — no badge
+  // for those so the timeline stays quiet for the common case.
+  const baseLabel = formatTimestamp(m.timestamp)
+  const badge = channelBadge(m.source_channel_id)
+  const timestampLabel = badge ? `${baseLabel} · ${badge}` : baseLabel
+
   return {
     id: m.id,
     // Prototype roles are 'you' (user) / 'them' (persona). Hook roles
@@ -143,7 +199,7 @@ function toPrototypeShape(m: HookMessage): PrototypeMessage {
     // fall back to the client uuid. No true turn-grouping exists in
     // v1 — every hook message is its own turn for display purposes.
     turnId: m.message_id !== undefined ? `srv-${m.message_id}` : m.id,
-    timestampLabel: formatTimestamp(m.timestamp),
+    timestampLabel,
     // Split on blank-line paragraph breaks to keep the letter-style
     // rendering. Fallback to a single paragraph for short replies.
     content: splitParagraphs(m.content),
@@ -178,6 +234,18 @@ function formatTimestamp(iso: string): string {
   } catch {
     return ''
   }
+}
+
+/** Decorate a message with a short channel badge when it did not come
+ *  from this tab. Undefined + "web" → no badge (the tab is Web; self-
+ *  label would be noise). Returns "" for the empty case so the caller
+ *  can conditionally join against the timestamp. */
+function channelBadge(sourceChannelId: string | undefined): string {
+  if (!sourceChannelId || sourceChannelId === 'web') return ''
+  if (sourceChannelId.startsWith('discord')) return '📱 Discord'
+  if (sourceChannelId.startsWith('imessage')) return '💬 iMessage'
+  if (sourceChannelId.startsWith('wechat')) return '💭 WeChat'
+  return `· ${sourceChannelId}`
 }
 
 function isFirstOfTurn(

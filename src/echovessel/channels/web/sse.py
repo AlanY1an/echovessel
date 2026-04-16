@@ -99,6 +99,19 @@ class SSEBroadcaster:
         blocks the rest of the broadcast.
         """
 
+        self.publish_nowait(event, payload)
+
+    def publish_nowait(self, event: str, payload: dict) -> None:
+        """Synchronous variant of :meth:`broadcast`.
+
+        Worker X introduced this so runtime callers on the turn hot
+        path don't need to schedule an async task just to push one
+        frame. Behaviour is identical to ``broadcast`` — queue puts
+        are already non-blocking, per-queue errors isolated — but
+        calling sites that are themselves sync (post-send hooks,
+        cross-channel mirroring) stay simpler.
+        """
+
         frame: SSEFrame = {"event": event, "data": payload}
         dead: list[asyncio.Queue[SSEFrame]] = []
         # Snapshot the set — dropping from the live set while iterating

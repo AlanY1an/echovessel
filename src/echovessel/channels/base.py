@@ -186,6 +186,12 @@ class OutgoingMessage:
     kind: OutgoingKind = "reply"
     delivery: DeliveryKind = "text"
     voice_result: VoiceResult | None = None
+    # Worker X · originating ``channel_id`` of the user turn that
+    # produced this reply. Populated by runtime's ``_handle_turn``
+    # from ``turn.channel_id``. The SSE fan-out path carries it so a
+    # Web browser subscribed to the runtime broadcaster knows which
+    # transport the original message came from.
+    source_channel_id: str | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@
  */
 
 import type {
+  ChatHistoryResponse,
   ChatSendPayload,
   ConfigGetResponse,
   ConfigPatchPayload,
@@ -202,6 +203,23 @@ export async function postChatSend(
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+/**
+ * GET /api/chat/history — cross-channel backfill of L2 recall messages.
+ * Called on mount by `useChat` so the browser timeline is pre-populated
+ * with recent conversation (including messages sent from other
+ * channels like Discord). `before` is the `oldest_turn_id` from a
+ * previous response to paginate to older pages.
+ */
+export async function getChatHistory(
+  limit = 50,
+  before?: string,
+): Promise<ChatHistoryResponse> {
+  const params = new URLSearchParams()
+  params.set('limit', String(limit))
+  if (before) params.set('before', before)
+  return fetchJson<ChatHistoryResponse>(`/api/chat/history?${params}`)
 }
 
 // ─── Import endpoints ──────────────────────────────────────────────────

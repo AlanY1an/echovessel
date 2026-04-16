@@ -170,6 +170,47 @@ export interface ChatSendPayload {
   external_ref?: string
 }
 
+// ─── HTTP · GET /api/chat/history ────────────────────────────────────────
+
+/**
+ * One L2 recall-message row surfaced by the history endpoint.
+ *
+ * The backend joins every channel into this single list (iron rule
+ * D4 — persona has ONE shared timeline). `source_channel_id` is the
+ * originating channel so the UI can render a decorative badge
+ * (e.g. "📱 Discord") without the server having to partition rows.
+ *
+ * `turn_id` is nullable because pre-v0.3 rows predate the debounce
+ * turn tagging; the frontend should tolerate null by grouping each
+ * message as its own turn.
+ */
+export interface ChatHistoryMessage {
+  id: number
+  turn_id: string | null
+  session_id: string
+  source_channel_id: string
+  role: 'user' | 'persona'
+  content: string
+  created_at: string | null
+}
+
+/**
+ * Response from `GET /api/chat/history`.
+ *
+ * `oldest_turn_id` is the `turn_id` of the OLDEST message in the
+ * returned window (= the last element, since the list is DESC by
+ * `created_at`). Pass it back as `?before=<oldest_turn_id>` to fetch
+ * the next-older page. Null when the window is empty.
+ *
+ * `has_more` is true when the server truncated to `limit` — the
+ * frontend uses it to show the "↑ 加载更早的消息" button.
+ */
+export interface ChatHistoryResponse {
+  messages: ChatHistoryMessage[]
+  has_more: boolean
+  oldest_turn_id: string | null
+}
+
 // ─── SSE · payload shapes ────────────────────────────────────────────────
 
 export interface ChatConnectionReadyData {
@@ -190,11 +231,20 @@ export interface ChatMessageUserAppendedData {
   content: string
   received_at: string
   external_ref: string | null
+  /** Worker X · channel_id where this user message originated. Web
+   *  (default) events carry "web"; Discord DMs carry "discord", etc.
+   *  The frontend uses this to render a channel pill so the user can
+   *  see at a glance which transport the message came in through. */
+  source_channel_id?: string
 }
 
 export interface ChatMessageTokenData {
   message_id: number
   delta: string
+  /** Worker X · mirrors ``source_channel_id`` on the ``user_appended``
+   *  event so the streaming tokens attach to the right pill-tagged
+   *  bubble in multi-channel views. */
+  source_channel_id?: string
 }
 
 /**
@@ -210,6 +260,10 @@ export interface ChatMessageDoneData {
   content: string
   in_reply_to_turn_id: string | null
   delivery: MessageDelivery
+  /** Worker X · same ``source_channel_id`` that tagged
+   *  ``user_appended`` / ``token`` for this turn. Frontend reuses it
+   *  to key the pill on the persona-reply bubble. */
+  source_channel_id?: string
 }
 
 export interface ChatSettingsUpdatedData {
@@ -257,6 +311,8 @@ export interface ChatMessageVoiceReadyData {
   url: string
   duration_seconds: number
   cached: boolean
+  /** Worker X · source channel for the voice_ready event. */
+  source_channel_id?: string
 }
 
 export interface ChatMessageErrorData {

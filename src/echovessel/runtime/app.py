@@ -264,6 +264,13 @@ class Runtime:
         self._web_channel: Any = None
         self._web_uvicorn_server: Any = None
         self._web_uvicorn_task: asyncio.Task | None = None
+        # Worker X · Cross-channel SSE. The single SSEBroadcaster instance
+        # the Web SSE route subscribes to. Shared with WebChannel so
+        # Web-sourced events (user_appended / token / done) still fan
+        # out via the channel's own publish path; runtime publishes the
+        # SAME instance for non-Web turns (Discord / future iMessage) so
+        # the Web browser sees every channel's activity live.
+        self._broadcaster: Any = None
         self._discord_channel: Any = None
         # Worker η · boot timestamp for the admin `/api/admin/config`
         # System-info card (uptime_seconds). Set by `start()`.
@@ -280,6 +287,19 @@ class Runtime:
         presence / absence based on the config they passed in.
         """
         return self.ctx.voice_service
+
+    @property
+    def broadcaster(self) -> Any:
+        """The runtime-owned :class:`SSEBroadcaster` instance (or None
+        when ``[channels.web].enabled=false``).
+
+        Worker X · introduced so Web clients connected via the SSE
+        route see ALL channels' turns live, not just Web-sourced ones.
+        The WebChannel attaches the same broadcaster so Web-sourced
+        events continue to fan out through the channel's own publish
+        path — runtime only adds publishes for non-Web turns.
+        """
+        return self._broadcaster
 
     @property
     def proactive_scheduler(self) -> ProactiveSchedulerProtocol | None:
@@ -585,6 +605,7 @@ class Runtime:
                 self._web_channel = None
                 self._web_uvicorn_server = None
                 self._web_uvicorn_task = None
+                self._broadcaster = None
 
             # --- Stage 3 · First-launch detection + browser auto-open --
             #
@@ -834,6 +855,11 @@ class Runtime:
 
         self.ctx.registry.register(channel)
         self._web_channel = channel
+        # Worker X · Pin the broadcaster so Runtime._handle_turn_body
+        # can publish cross-channel events directly. Same instance the
+        # WebChannel broadcasts through, so Web-sourced events still
+        # flow via the channel's own publish path.
+        self._broadcaster = broadcaster
 
         app = build_web_app(
             channel=channel,
@@ -956,6 +982,7 @@ class Runtime:
         self._web_channel = None
         self._web_uvicorn_server = None
         self._web_uvicorn_task = None
+        self._broadcaster = None
 
     # ---- Stage 3 · First-launch detection + browser auto-open --------------
 
@@ -1049,6 +1076,108 @@ class Runtime:
         with feature_context("chat", turn_id=turn.turn_id):
             await self._handle_turn_body(turn)
 
+    # ---- Worker X · cross-channel SSE helpers ------------------------------
+
+    def _publish_cross_channel_event(
+        self, event: str, payload: dict
+    ) -> None:
+        """Publish one event through the runtime broadcaster.
+
+        Failures are swallowed — cross-channel mirroring is best-effort
+        visibility. A broken SSE pipe must never break the turn loop.
+        """
+
+        broadcaster = self._broadcaster
+        if broadcaster is None:
+            return
+        try:
+            publish = getattr(broadcaster, "publish_nowait", None)
+            if publish is None:
+                # Fallback for older broadcaster instances without the
+                # sync helper — schedule the async broadcast as a task.
+                asyncio.create_task(
+                    broadcaster.broadcast(event, payload),
+                    name="cross_channel_broadcast",
+                )
+                return
+            publish(event, payload)
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "cross-channel broadcast failed (event=%s): %s", event, e
+            )
+
+    def _wrap_on_token_for_cross_channel_mirror(
+        self,
+        *,
+        original: Callable | None,
+        source_channel_id: str,
+    ) -> Callable:
+        """Wrap an ``on_token`` callback so the runtime broadcaster sees
+        every streaming token with ``source_channel_id`` attached.
+
+        The original callback (if any) is still called first so
+        channel-native on_token pipelines (e.g. Web's own broadcast for
+        Web-sourced turns — irrelevant here because we only wrap for
+        non-Web turns) continue to work.
+        """
+
+        async def _mirrored(message_id: int, delta: str) -> None:
+            if original is not None:
+                try:
+                    await original(message_id, delta)
+                except Exception as e:  # noqa: BLE001
+                    log.warning(
+                        "original on_token raised: %s", e
+                    )
+            self._publish_cross_channel_event(
+                "chat.message.token",
+                {
+                    "message_id": message_id,
+                    "delta": delta,
+                    "source_channel_id": source_channel_id,
+                },
+            )
+
+        return _mirrored
+
+    def _publish_cross_channel_done(
+        self, outgoing: OutgoingMessage, turn: IncomingTurn
+    ) -> None:
+        """Mirror the ``chat.message.done`` (and ``voice_ready`` if
+        present) events for a non-Web turn into the runtime broadcaster.
+        """
+
+        # Keep the id derivation identical to WebChannel.send / the
+        # token path so client-side listeners join them by message_id.
+        if outgoing.in_reply_to_turn_id is not None:
+            msg_id = abs(hash(outgoing.in_reply_to_turn_id)) & 0x7FFFFFFF
+        else:
+            msg_id = id(outgoing)
+
+        self._publish_cross_channel_event(
+            "chat.message.done",
+            {
+                "message_id": msg_id,
+                "content": outgoing.content,
+                "in_reply_to": outgoing.in_reply_to,
+                "in_reply_to_turn_id": outgoing.in_reply_to_turn_id,
+                "delivery": outgoing.delivery,
+                "source_channel_id": turn.channel_id,
+            },
+        )
+
+        if outgoing.voice_result is not None:
+            self._publish_cross_channel_event(
+                "chat.message.voice_ready",
+                {
+                    "message_id": msg_id,
+                    "url": outgoing.voice_result.url,
+                    "duration_seconds": outgoing.voice_result.duration_seconds,
+                    "cached": outgoing.voice_result.cached,
+                    "source_channel_id": turn.channel_id,
+                },
+            )
+
     async def _handle_turn_body(self, turn: IncomingTurn) -> None:
         """Body of :meth:`_handle_turn` that runs inside the cost
         feature_context. Split out so the wrapper stays small and the
@@ -1083,6 +1212,46 @@ class Runtime:
             # Channels that don't expose this attribute are no-ops.
             with contextlib.suppress(Exception):
                 channel.in_flight_turn_id = turn.turn_id  # type: ignore[attr-defined]
+
+        # Worker X · Cross-channel live SSE. When the turn arrives from
+        # anything other than the Web channel (Discord, future iMessage),
+        # mirror every event to the runtime-level broadcaster so Web
+        # browsers subscribed to ``/api/chat/events`` see the activity
+        # live. For Web-sourced turns, WebChannel.push_user_message /
+        # send already publish through the SAME broadcaster, so we skip
+        # the runtime mirror to avoid duplicates.
+        mirror_to_web = (
+            self._broadcaster is not None
+            and turn.channel_id != "web"
+        )
+        if mirror_to_web:
+            # Publish chat.message.user_appended for every user message
+            # in the turn BEFORE assemble_turn runs — same order Web
+            # observes for its own turns.
+            for msg in turn.messages:
+                self._publish_cross_channel_event(
+                    "chat.message.user_appended",
+                    {
+                        "user_id": msg.user_id,
+                        "content": msg.content,
+                        "received_at": (
+                            msg.received_at.isoformat()
+                            if msg.received_at
+                            else None
+                        ),
+                        "external_ref": msg.external_ref,
+                        "source_channel_id": turn.channel_id,
+                    },
+                )
+
+            # Wrap the existing on_token (if any) so cross-channel
+            # browsers also see streaming tokens. The original channel
+            # callback still runs (Discord currently has none; this is
+            # future-proofing).
+            on_token = self._wrap_on_token_for_cross_channel_mirror(
+                original=on_token,
+                source_channel_id=turn.channel_id,
+            )
 
         with DbSession(self.ctx.engine) as db:
             turn_ctx = TurnContext(
@@ -1155,11 +1324,19 @@ class Runtime:
             kind="reply",
             delivery="voice_neutral" if voice_result is not None else "text",
             voice_result=voice_result,
+            source_channel_id=turn.channel_id,
         )
         try:
             await channel.send(outgoing)
         except Exception as e:  # noqa: BLE001
             log.error("channel.send failed for %s: %s", turn.channel_id, e)
+        else:
+            # Worker X · Mirror the done (and optional voice_ready)
+            # to the runtime broadcaster so Web SSE subscribers see
+            # cross-channel turns live. Skipped for Web-sourced turns
+            # because WebChannel.send already did the broadcast.
+            if mirror_to_web:
+                self._publish_cross_channel_done(outgoing, turn)
         finally:
             # on_turn_done MUST fire after channel.send so the channel's
             # _current_user_id (Discord) or in_flight_turn_id state is still

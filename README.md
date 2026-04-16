@@ -122,6 +122,7 @@ EchoVessel can talk to you over Discord DMs — text replies plus native OGG Opu
    ```
 4. Invite the bot to your account (OAuth2 URL generator → `bot` scope + DM permissions), then DM it. Incoming messages are debounced (2s default) and dispatched as a single turn.
 5. Voice messages send as native Discord voice bubbles when `[persona].voice_enabled = true` **and** `ffmpeg` is on PATH — the channel converts FishAudio's MP3 output to OGG Opus on the fly. Install with `brew install ffmpeg` (macOS) or `apt install ffmpeg` (Debian/Ubuntu). Without ffmpeg the Discord channel falls back to text.
+6. Everything you DM through Discord also shows up live in the Web chat page at `http://127.0.0.1:7777/`, tagged with a `📱 Discord` pill. Historical Discord messages are pulled in on Web mount via `/api/chat/history`. The same persona memory backs both channels (iron rule D4).
 
 ### Voice
 
@@ -130,7 +131,7 @@ EchoVessel uses [FishAudio](https://fish.audio) for TTS. Put `FISH_AUDIO_KEY` in
 ### Running Tests
 
 ```bash
-uv run pytest tests/ -q                # 902 tests across memory / runtime / voice / proactive / channels / import / integration
+uv run pytest tests/ -q                # 916 tests across memory / runtime / voice / proactive / channels / import / integration
 uv run ruff check src/ tests/          # lint
 uv run lint-imports                    # layered architecture contracts
 ```
@@ -156,7 +157,8 @@ src/echovessel/
 
 ### Current Status (v0.0.1)
 
-- ✅ **Daemon**: boots end-to-end, all startup wiring verified in log, 902 tests passing (10 skipped)
+- ✅ **Daemon**: boots end-to-end, all startup wiring verified in log, 916 tests passing (3 skipped)
+- ✅ **Cross-channel unified timeline**: Web chat page streams live turn events from every channel (Web + Discord today, iMessage-ready) with a `📱 Discord` / `💬 iMessage` source pill. A new `/api/chat/history` endpoint backfills the last 50 messages across channels on mount.
 - ✅ **Memory**: L1–L4 hierarchy, idempotent schema migration, observer hooks, 4/4 MVP eval metrics passing (Over-recall FP Rate 0.08 ≤ 0.15 target)
 - ✅ **Voice**: FishAudio TTS + stub TTS provider · `VoiceService.generate_voice()` facade · per-persona `voice_id` · on-disk MP3 cache
 - ✅ **Proactive**: policy engine · four gates including `no_in_flight_turn` · delivery inherits `persona.voice_enabled`
@@ -310,7 +312,7 @@ EchoVessel **v0.0.1** is an early-alpha tagged release — the core 5-module sta
 
 - ✅ 5-module architecture (memory / voice / channels / proactive / runtime) implemented and tested
 - ✅ CLI daemon boots and runs end-to-end
-- ✅ 902 tests passing (10 skipped) · layered import contracts enforced · 4/4 MVP eval metrics passing
+- ✅ 916 tests passing (3 skipped) · layered import contracts enforced · 4/4 MVP eval metrics passing
 - ✅ Web channel: daemon serves the embedded React bundle on port 7777 (chat + onboarding + persona-block admin + voice toggle)
 - ✅ Discord DM channel: text + native OGG Opus voice messages (requires ffmpeg)
 - 🚧 Import flow not yet wired into the daemon · admin Events / Thoughts / Voice cloning / Config tabs are placeholders · targeted for v0.0.2

@@ -65,7 +65,12 @@ to a backend (see **Known Limitations**).
 
 #### Tests
 
-- 902 tests pass (10 skipped), covering memory, runtime, voice, channels, proactive policy, and import pipeline modules. Coverage is unit-level and module-integration-level; see **Known Limitations** for what is and isn't tested.
+- 916 tests pass (3 skipped), covering memory, runtime, voice, channels, proactive policy, and import pipeline modules. Coverage is unit-level and module-integration-level; see **Known Limitations** for what is and isn't tested.
+
+### Changed
+
+- **Cross-channel live sync.** `SSEBroadcaster` is now owned by the runtime and mirrors every channel's turn events (user message, streaming tokens, completion, voice-ready) to all Web SSE subscribers. Each event carries a `source_channel_id`; the Web chat timeline tags non-Web messages with a 📱 Discord / 💬 iMessage pill.
+- **Chat history backfill.** New `GET /api/chat/history?limit=50&before=<turn_id>` returns the most-recent `recall_messages` across every channel (per iron rule D4) with `has_more` + `oldest_turn_id` for cursor pagination. The Web chat hook fetches this on mount and prepends it to the timeline, turning the Web frontend into a true "god-view" observer of every past turn regardless of origin.
 - GitHub Actions CI enforces `ruff check`, `lint-imports`, and `pytest` on every PR and push to `main`, across ubuntu-latest + macos-latest × Python 3.11.
 
 ### Known Limitations

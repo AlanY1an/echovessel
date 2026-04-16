@@ -28,13 +28,16 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlmodel import Session as DbSession
+from sqlmodel import select
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 from echovessel.channels.base import IncomingMessage
 from echovessel.channels.web.channel import WebChannel
 from echovessel.channels.web.sse import SSEBroadcaster
+from echovessel.memory.models import RecallMessage
 
 log = logging.getLogger(__name__)
 
@@ -52,18 +55,24 @@ def build_chat_router(
     channel: WebChannel,
     broadcaster: SSEBroadcaster,
     voice_service: Any | None = None,
+    runtime: Any | None = None,
 ) -> APIRouter:
     """Wire chat endpoints onto a new :class:`APIRouter`.
 
     Everything is bound through closures over ``channel``,
-    ``broadcaster``, and (optionally) ``voice_service``. Tests can call
-    this directly with a fresh WebChannel instance and mount the router
-    on a fresh FastAPI app without any global state.
+    ``broadcaster``, and (optionally) ``voice_service`` / ``runtime``.
+    Tests can call this directly with a fresh WebChannel instance and
+    mount the router on a fresh FastAPI app without any global state.
 
     Stage 7 added ``voice_service`` so the
     ``GET /api/chat/voice/{message_id}.mp3`` endpoint can locate the
     voice cache directory. When ``voice_service is None`` (voice
     disabled in config), the endpoint returns 404.
+
+    Worker Y added ``runtime`` so the ``GET /api/chat/history`` route
+    can open a DbSession on ``runtime.ctx.engine`` to serve the L2
+    recall-message backfill. When ``runtime is None`` (chat-only
+    isolation tests), the history route is silently omitted.
     """
 
     router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -178,7 +187,138 @@ def build_chat_router(
             },
         )
 
+    # ---- GET /api/chat/history (Worker Y) --------------------------------
+    #
+    # Cross-channel L2 backfill. A browser that reconnects after a daemon
+    # restart (or that was never open while the user was chatting from
+    # Discord) needs to see the recent conversation to make sense of the
+    # live SSE stream. We read from `recall_messages` directly rather
+    # than through a memory facade because this is a transport-level
+    # concern — L2 is the ground truth for "what messages existed" and
+    # we deliberately do NOT apply any retrieval ranking.
+    #
+    # Iron rule D4: do NOT filter by channel_id. The persona has ONE
+    # shared timeline; users see every channel's messages mixed here.
+    # The `source_channel_id` field in the response is there so the UI
+    # can decorate messages (e.g. "📱 Discord" badge), not so the
+    # server can partition them.
+    #
+    # Pagination uses a `before=<turn_id>` cursor rather than raw offset
+    # so interleaved new messages during a scroll-up don't cause
+    # duplicate rows. The cursor semantics are "return messages whose
+    # created_at is strictly less than the earliest created_at among
+    # messages belonging to the referenced turn."
+
+    if runtime is not None:
+
+        @router.get("/history")
+        async def get_history(
+            limit: int = Query(
+                default=50,
+                ge=1,
+                le=200,
+                description=(
+                    "Number of messages to return. Defaults to 50. "
+                    "Values above 200 are rejected as 422."
+                ),
+            ),
+            before: str | None = Query(
+                default=None,
+                max_length=64,
+                description=(
+                    "Paginate: return messages older than the first "
+                    "message of this turn_id. Omit for the newest page."
+                ),
+            ),
+        ) -> dict[str, Any]:
+            with DbSession(runtime.ctx.engine) as db:
+                # Resolve the `before` cursor to a timestamp. We use the
+                # MIN(created_at) of any message carrying that turn_id
+                # so a burst-turn paginates cleanly at the turn
+                # boundary rather than splitting mid-burst.
+                cursor_at: datetime | None = None
+                if before is not None:
+                    cursor_stmt = (
+                        select(RecallMessage)
+                        .where(
+                            RecallMessage.turn_id == before,
+                            RecallMessage.deleted_at.is_(None),  # type: ignore[union-attr]
+                        )
+                        .order_by(RecallMessage.created_at.asc())
+                        .limit(1)
+                    )
+                    cursor_row = db.exec(cursor_stmt).first()
+                    if cursor_row is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"before turn_id not found: {before}",
+                        )
+                    cursor_at = cursor_row.created_at
+
+                # Core query: newest-first, deleted rows excluded.
+                # Fetch limit+1 so we can compute `has_more` without a
+                # second round-trip.
+                stmt = select(RecallMessage).where(
+                    RecallMessage.deleted_at.is_(None),  # type: ignore[union-attr]
+                )
+                if cursor_at is not None:
+                    stmt = stmt.where(RecallMessage.created_at < cursor_at)
+                # Break created_at ties on the primary key so the order
+                # is deterministic even if SQLite timestamps land at the
+                # same microsecond (happens in tests seeding in a loop).
+                stmt = (
+                    stmt.order_by(
+                        RecallMessage.created_at.desc(),
+                        RecallMessage.id.desc(),
+                    )
+                    .limit(limit + 1)
+                )
+                rows = list(db.exec(stmt))
+
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+
+            messages = [_serialize_recall_message(r) for r in rows]
+            oldest_turn_id: str | None = (
+                rows[-1].turn_id if rows else None
+            )
+
+            return {
+                "messages": messages,
+                "has_more": has_more,
+                "oldest_turn_id": oldest_turn_id,
+            }
+
     return router
+
+
+def _serialize_recall_message(row: RecallMessage) -> dict[str, Any]:
+    """Shape a ``RecallMessage`` row for the /api/chat/history response.
+
+    Keys match the spec in worker Y's tracker:
+
+        id                — integer PK of the recall_messages row
+        turn_id           — nullable; legacy rows pre-v0.3 carry NULL
+        session_id        — session this message belonged to
+        source_channel_id — which channel the message came in on
+        role              — "user" | "persona"
+        content           — verbatim message body
+        created_at        — ISO-8601 timestamp
+
+    ``role`` is coerced through ``.value`` because SQLModel's StrEnum
+    fields sometimes return the enum member and sometimes the underlying
+    string depending on the write path; ``.value`` normalises both.
+    """
+    role_value = getattr(row.role, "value", row.role)
+    return {
+        "id": row.id,
+        "turn_id": row.turn_id,
+        "session_id": row.session_id,
+        "source_channel_id": row.channel_id,
+        "role": role_value,
+        "content": row.content,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
 
 
 def _json_dump(data: dict) -> str:
