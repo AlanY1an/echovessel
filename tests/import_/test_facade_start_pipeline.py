@@ -85,7 +85,10 @@ async def test_facade_start_pipeline_runs_real_pipeline(
             if ev.type == "pipeline.done":
                 break
 
-    await asyncio.wait_for(consume(), timeout=5.0)
+    # 30s not 5s — GitHub Actions runners can be meaningfully slower than
+    # local dev machines, and the real import pipeline spawns a chunker +
+    # LLM stub + embed pass before pipeline.done fires.
+    await asyncio.wait_for(consume(), timeout=30.0)
 
     # Note: `pipeline.registered` is emitted synchronously inside
     # start_pipeline() before the subscriber attaches, so it doesn't
