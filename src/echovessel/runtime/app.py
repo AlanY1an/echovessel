@@ -1525,6 +1525,30 @@ class Runtime:
             )
             reloaded.append("llm")
 
+        # Propagate consolidate.* tunables to the live worker. The
+        # worker was constructed once in Runtime.start() with these
+        # values copied into instance attributes, so mutating
+        # ``ctx.config.consolidate`` alone does NOT take effect
+        # without this mirror. See 2026-04-daemon-control stage 4
+        # (reload matrix audit).
+        if (
+            self._worker is not None
+            and new_config.consolidate != self.ctx.config.consolidate
+        ):
+            old = self.ctx.config.consolidate
+            new = new_config.consolidate
+            if old.trivial_message_count != new.trivial_message_count:
+                self._worker.trivial_message_count = new.trivial_message_count
+                reloaded.append("consolidate.trivial_message_count")
+            if old.trivial_token_count != new.trivial_token_count:
+                self._worker.trivial_token_count = new.trivial_token_count
+                reloaded.append("consolidate.trivial_token_count")
+            if old.reflection_hard_gate_24h != new.reflection_hard_gate_24h:
+                self._worker.reflection_hard_limit_24h = (
+                    new.reflection_hard_gate_24h
+                )
+                reloaded.append("consolidate.reflection_hard_gate_24h")
+
         self.ctx.config = new_config
         log.info("config reloaded from %s", self.ctx.config_path)
         return reloaded

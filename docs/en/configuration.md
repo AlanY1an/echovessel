@@ -192,15 +192,38 @@ Enable the channel, put the bot token in `./.env`, and restart the daemon. Messa
 
 These sections exist in the template as placeholders. They currently only read `enabled` and `channel_id`; setting `enabled = true` on them will not start a real channel yet. Actual adapters land in later releases.
 
-## What `SIGHUP` reloads vs. what requires a restart
+## What reloads live vs. what requires a restart
 
-Sending `SIGHUP` to the running daemon rebuilds a specific subset of the runtime state from disk. Everything else requires a full restart.
+Two paths propagate config changes without restarting the daemon:
 
-| Section | Reloaded on SIGHUP? |
+- **`echovessel reload`** — re-reads `config.toml` from disk, validates it, and applies changes to the matching runtime attributes. Equivalent to sending `SIGHUP` for scripts that still want to use signals.
+- **`PATCH /api/admin/config`** — the Web admin panel writes to `config.toml` atomically and then triggers the same reload internally. This path is the one the persona toggle / LLM tuning knobs in the UI go through.
+
+Both paths consult the same allowlist in `src/echovessel/core/config_paths.py`. Below is the field-by-field truth as of this commit; see `tests/runtime/test_reload_matrix.py` for the authoritative per-field assertions.
+
+### Hot-reloadable fields
+
+| Field | What happens on reload |
 | --- | --- |
-| `[llm]` | **Yes.** The new provider is built and swapped into `ctx.llm`. In-flight turns keep using the old provider until they finish. |
-| `[persona].voice_enabled` | **No** — managed through its dedicated admin API, not the TOML reload path. Editing the file and sending `SIGHUP` does not pick up a change here. |
-| `[voice]`, `[proactive]`, `[consolidate]`, `[idle_scanner]` | **No.** These sections are consumed once at `Runtime.build()` and drive constructors that are not rebuilt mid-process. Change them and restart. |
-| `[channels.*]` | **No.** Registering and starting channels happens once at boot. |
+| `[llm].provider` · `.model` · `.api_key_env` · `.timeout_seconds` · `.temperature` · `.max_tokens` | New provider is built and swapped into `ctx.llm`. In-flight turns keep using the old provider until they finish (reference snapshot). |
+| `[memory].retrieve_k` · `.recent_window_size` · `.relational_bonus_weight` | `ctx.config.memory.*` updated. The turn handler reads these per-turn, so the next turn sees the new value. |
+| `[consolidate].trivial_message_count` · `.trivial_token_count` · `.reflection_hard_gate_24h` | `ctx.config.consolidate.*` updated **and** mirrored onto the live `ConsolidateWorker` instance. The worker was constructed with the old values at boot; the reload path mutates its instance attributes directly so subsequent sessions use the new thresholds without a restart. |
+| `[persona].display_name` | `ctx.config.persona.display_name` updated on any reload. `ctx.persona.display_name` (the object the turn handler reads) is mirrored **only** when the change comes in via `PATCH /api/admin/config` (which has a side-path after reload). Changing the name via `echovessel reload` alone leaves `ctx.persona` stale — use the admin API. |
 
-When in doubt, restart. SIGHUP is a convenience for the one field that changes often enough to care — the LLM provider — not a general reconfiguration channel.
+### Runtime-only (not read from `config.toml` at all)
+
+- `persona.voice_enabled` — managed through the admin API (`POST /api/admin/persona/voice-toggle`). Editing the file + reloading does not pick up a change.
+- `persona.voice_id` — same: goes through `POST /api/admin/voice/activate`.
+
+### Restart-required
+
+Every other field. The daemon loads them once into constructors that are not rebuilt mid-process. Common examples:
+
+| Section | Why restart |
+| --- | --- |
+| `[runtime].data_dir` · `[memory].db_path` | Changing these mid-flight would mean reopening the database, re-running migrations, and abandoning the in-memory embedder cache. Explicitly rejected by the admin API with a 400. |
+| `[memory].embedder` | Swapping the embedder mid-process would invalidate every existing vector (different model = different embedding space). |
+| `[voice]` · `[proactive]` · `[idle_scanner]` | These drive background workers / scheduler objects that are constructed once in `Runtime.start()` and not rebuilt. |
+| `[channels.*]` | Registering and starting a new channel happens once at boot. Enabling a disabled channel requires a restart. |
+
+When in doubt, restart. Reload is a convenience for the handful of tunables that change often enough to care about — LLM settings, retrieval knobs, and consolidation thresholds.
