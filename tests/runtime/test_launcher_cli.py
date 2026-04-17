@@ -232,7 +232,11 @@ def test_status_no_pidfile_reports_stopped(tmp_path: Path) -> None:
 
 
 def test_status_live_pidfile_reports_running(tmp_path: Path) -> None:
-    """Our own PID is guaranteed alive for the duration of this test."""
+    """Our own PID is guaranteed alive for the duration of this test.
+
+    v1 pidfile (integer-only) still works — status reports "control=n/a
+    (v1 pidfile)" to signal the daemon is running but pre-upgrade.
+    """
     cfg = _write_config(tmp_path)
     pidfile = tmp_path / "data" / "runtime.pid"
     pidfile.write_text(str(os.getpid()))
@@ -240,7 +244,29 @@ def test_status_live_pidfile_reports_running(tmp_path: Path) -> None:
     result = _runner().invoke(cli, ["status", "--config", str(cfg)])
 
     assert result.exit_code == 0
-    assert f"running pid={os.getpid()}" in result.output
+    assert f"pid={os.getpid()}" in result.output
+    assert "running" in result.output
+
+
+def test_status_v2_pidfile_reports_control_port(tmp_path: Path) -> None:
+    """v2 pidfile (JSON with control_port) — status attempts to reach the
+    port and reports 'ok' or 'unreachable'. No actual daemon is running
+    here so the port is closed → 'unreachable'."""
+    import json
+
+    cfg = _write_config(tmp_path)
+    pidfile = tmp_path / "data" / "runtime.pid"
+    pidfile.write_text(
+        json.dumps({"pid": os.getpid(), "control_port": 1, "version": 1})
+    )
+
+    result = _runner().invoke(cli, ["status", "--config", str(cfg)])
+
+    assert result.exit_code == 0
+    # Port 1 is reserved / refused. The control-plane probe times out or
+    # refuses, so status prints "unreachable".
+    assert "unreachable" in result.output
+    assert f"pid={os.getpid()}" in result.output
 
 
 def test_status_stale_pidfile_reports_stale(tmp_path: Path) -> None:
@@ -322,7 +348,138 @@ def test_stop_invalid_pidfile_content_errors(tmp_path: Path) -> None:
     result = _runner().invoke(cli, ["stop", "--config", str(cfg)])
 
     assert result.exit_code == 1
-    assert "valid integer" in _stream(result)
+    # New error message: "pidfile {path} is neither integer nor valid JSON"
+    err = _stream(result).lower()
+    assert "neither integer nor valid json" in err or "invalid" in err
+
+
+def test_stop_prefers_control_plane_when_v2_pidfile(tmp_path: Path) -> None:
+    """v2 pidfile with a reachable control plane: stop() POSTs to
+    /shutdown instead of sending SIGTERM. We stand up a minimal HTTP
+    server on a random loopback port that accepts POST /shutdown."""
+    import json
+    import socket
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    # Pick a free port and run a tiny shutdown-accepting server.
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    shutdown_posts: list[str] = []
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            shutdown_posts.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok": true}')
+
+        def log_message(self, *a, **kw):  # quiet
+            pass
+
+    server = HTTPServer(("127.0.0.1", port), _Handler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        cfg = _write_config(tmp_path)
+        pidfile = tmp_path / "data" / "runtime.pid"
+        pidfile.write_text(
+            json.dumps({"pid": 99999, "control_port": port, "version": 1})
+        )
+
+        captured: list[tuple[int, int]] = []
+
+        def fake_kill(pid: int, sig: int) -> None:
+            captured.append((pid, sig))
+
+        with patch("echovessel.runtime.launcher.os.kill", fake_kill):
+            result = _runner().invoke(cli, ["stop", "--config", str(cfg)])
+
+        assert result.exit_code == 0, _stream(result)
+        assert "control plane" in result.output
+        # os.kill must NOT have been called when HTTP path succeeded.
+        assert captured == []
+        # The mock server got exactly one /shutdown POST.
+        assert shutdown_posts == ["/shutdown"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        t.join(timeout=2.0)
+
+
+def test_stop_falls_back_to_signal_when_control_unreachable(tmp_path: Path) -> None:
+    """v2 pidfile with an UN-reachable control port (nothing listening):
+    stop() falls through to SIGTERM and notes 'control plane unreachable'
+    in the output."""
+    import json
+
+    cfg = _write_config(tmp_path)
+    pidfile = tmp_path / "data" / "runtime.pid"
+    # Port 1 is reserved and refuses connections immediately.
+    pidfile.write_text(
+        json.dumps({"pid": 12345, "control_port": 1, "version": 1})
+    )
+
+    captured: list[tuple[int, int]] = []
+
+    def fake_kill(pid: int, sig: int) -> None:
+        captured.append((pid, sig))
+
+    with patch("echovessel.runtime.launcher.os.kill", fake_kill):
+        result = _runner().invoke(cli, ["stop", "--config", str(cfg)])
+
+    assert result.exit_code == 0, _stream(result)
+    assert captured == [(12345, signal.SIGTERM)]
+    assert "unreachable" in result.output
+
+
+def test_reload_prefers_control_plane_when_v2_pidfile(tmp_path: Path) -> None:
+    """Same pattern as test_stop_prefers_control_plane_when_v2_pidfile
+    but for reload. /reload returns a `reloaded` list so the CLI renders
+    that into a human-readable line."""
+    import json
+    import socket
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok": true, "reloaded": ["llm"]}')
+
+        def log_message(self, *a, **kw):
+            pass
+
+    server = HTTPServer(("127.0.0.1", port), _Handler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        cfg = _write_config(tmp_path)
+        pidfile = tmp_path / "data" / "runtime.pid"
+        pidfile.write_text(
+            json.dumps({"pid": 99999, "control_port": port, "version": 1})
+        )
+
+        result = _runner().invoke(cli, ["reload", "--config", str(cfg)])
+
+        assert result.exit_code == 0, _stream(result)
+        assert "reloaded" in result.output
+        assert "llm" in result.output
+    finally:
+        server.shutdown()
+        server.server_close()
+        t.join(timeout=2.0)
 
 
 def test_stop_stale_pid_removes_pidfile(tmp_path: Path) -> None:
@@ -383,7 +540,19 @@ def test_run_sigterm_exits_cleanly_and_removes_pidfile(tmp_path: Path) -> None:
             f"stderr tail: {(proc.stderr.read() if proc.stderr else b'').decode(errors='replace')[-500:]}"
         )
 
-        assert pidfile.read_text(encoding="utf-8").strip() == str(proc.pid)
+        # Pidfile is JSON v2; parse and compare the pid field.
+        import json
+
+        body = pidfile.read_text(encoding="utf-8").strip()
+        payload = json.loads(body)
+        assert payload["pid"] == proc.pid
+        assert payload["version"] == 1
+        # control_port is set by the runtime once the control plane binds.
+        # When --no-embedder is used the plane comes up quickly, so the
+        # port should be a positive integer by the time the pidfile is
+        # written.
+        assert isinstance(payload["control_port"], int)
+        assert payload["control_port"] > 0
 
         proc.send_signal(signal.SIGTERM)
         try:

@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import signal
 import sys
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
@@ -291,15 +293,20 @@ async def _async_run(config_path: Path, pidfile: Path, *, no_embedder: bool) -> 
             sys.exit(4)
 
     rt = Runtime.build(config_path, embed_fn=embed_fn)
-    # Write pidfile just before blocking.
-    try:
-        pidfile.parent.mkdir(parents=True, exist_ok=True)
-        pidfile.write_text(str(os.getpid()))
-    except Exception as e:  # noqa: BLE001
-        log.warning("could not write pidfile %s: %s", pidfile, e)
 
     try:
         await rt.start()
+        # 2026-04-daemon-control · Pidfile is written AFTER start so
+        # the control-plane port is known. Format is JSON v2; see
+        # :func:`_write_pidfile`. Old readers (integer-only) will fail
+        # fast with a clear error, which is fine because stop/reload
+        # CLIs have been upgraded in lockstep.
+        try:
+            pidfile.parent.mkdir(parents=True, exist_ok=True)
+            _write_pidfile(pidfile, os.getpid(), rt.ctx.control_port)
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not write pidfile %s: %s", pidfile, e)
+
         await rt.wait_until_shutdown()
     finally:
         await rt.stop()
@@ -312,60 +319,242 @@ async def _async_run(config_path: Path, pidfile: Path, *, no_embedder: bool) -> 
 
 
 # ---------------------------------------------------------------------------
+# Pidfile · v2 format (JSON)
+# ---------------------------------------------------------------------------
+#
+# Pidfile shape:
+#
+#     {"pid": 12345, "control_port": 54321, "version": 1}
+#
+# v1 was just the PID as plain integer text. `_read_pidfile` still
+# accepts v1 by falling back — it returns `control_port=None` so stop /
+# reload fall through to the signal-based path.
+
+
+_PIDFILE_VERSION = 1
+
+
+@dataclass
+class PidfileInfo:
+    pid: int
+    control_port: int | None
+    version: int
+
+
+def _write_pidfile(path: Path, pid: int, control_port: int | None) -> None:
+    payload = {
+        "pid": pid,
+        "control_port": control_port,
+        "version": _PIDFILE_VERSION,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _read_pidfile(path: Path) -> PidfileInfo:
+    """Read a v1 or v2 pidfile. Raises ValueError on malformed content."""
+    raw = path.read_text(encoding="utf-8").strip()
+    if not raw:
+        raise ValueError(f"pidfile {path} is empty")
+    # v1 fallback: integer-only.
+    if raw.isdigit():
+        return PidfileInfo(pid=int(raw), control_port=None, version=0)
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"pidfile {path} is neither integer nor valid JSON: {e}"
+        ) from e
+    if not isinstance(payload, dict) or "pid" not in payload:
+        raise ValueError(f"pidfile {path} missing 'pid' field")
+    try:
+        pid = int(payload["pid"])
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"pidfile {path} has non-integer 'pid'") from e
+    port = payload.get("control_port")
+    if port is not None:
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            port = None
+    version = int(payload.get("version", 0) or 0)
+    return PidfileInfo(pid=pid, control_port=port, version=version)
+
+
+# ---------------------------------------------------------------------------
 # stop / reload / status
 # ---------------------------------------------------------------------------
+
+
+def _control_url(port: int, path: str) -> str:
+    return f"http://127.0.0.1:{port}{path}"
+
+
+def _try_control_post(port: int, path: str, *, timeout: float = 5.0) -> dict | None:
+    """POST to the control plane and return the JSON body on 2xx.
+
+    Returns None on any connection error / non-2xx — the caller then
+    falls back to the signal-based path. We deliberately catch broadly
+    so weird httpx edge cases (SSL, proxy, etc.) don't explode the
+    CLI; the signal fallback is the safety net.
+    """
+    try:
+        import httpx
+
+        with httpx.Client(timeout=timeout) as c:
+            r = c.post(_control_url(port, path))
+        if 200 <= r.status_code < 300:
+            try:
+                return r.json()
+            except Exception:  # noqa: BLE001
+                return {"ok": True}
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _try_control_get(port: int, path: str, *, timeout: float = 2.0) -> dict | None:
+    try:
+        import httpx
+
+        with httpx.Client(timeout=timeout) as c:
+            r = c.get(_control_url(port, path))
+        if 200 <= r.status_code < 300:
+            try:
+                return r.json()
+            except Exception:  # noqa: BLE001
+                return None
+        return None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 @cli.command()
 @click.option("--config", "config_path", type=str, default=None)
 def stop(config_path: str | None) -> None:
-    """Stop a running daemon by sending SIGTERM to the pidfile."""
-    _send_signal(config_path, signal.SIGTERM, "stop")
+    """Stop a running daemon.
 
-
-@cli.command()
-@click.option("--config", "config_path", type=str, default=None)
-def reload(config_path: str | None) -> None:
-    """Reload LLM provider config without restarting the daemon."""
-    _send_signal(config_path, signal.SIGHUP, "reload")
-
-
-def _send_signal(config_path: str | None, sig: signal.Signals, verb: str) -> None:
+    Prefers the control-plane HTTP endpoint (POST /shutdown) because
+    it's testable, works across process supervisors, and returns a
+    success acknowledgement. Falls back to SIGTERM when the pidfile is
+    v1 (no control_port) or the control plane is unreachable.
+    """
     pid_path = _pidfile_for(_resolve_config_path(config_path))
     if not pid_path.exists():
         click.echo(f"no pidfile at {pid_path}; is the daemon running?", err=True)
         sys.exit(1)
     try:
-        pid = int(pid_path.read_text().strip())
-    except ValueError:
-        click.echo(f"pidfile {pid_path} is not a valid integer", err=True)
+        info = _read_pidfile(pid_path)
+    except ValueError as e:
+        click.echo(str(e), err=True)
         sys.exit(1)
+
+    if info.control_port is not None:
+        resp = _try_control_post(info.control_port, "/shutdown")
+        if resp is not None:
+            click.echo(f"stopped (via control plane, pid={info.pid})")
+            return
+
+    # Fallback: signal-based.
     try:
-        os.kill(pid, sig)
-        click.echo(f"sent {sig.name} to pid {pid}")
+        os.kill(info.pid, signal.SIGTERM)
+        click.echo(f"sent SIGTERM to pid {info.pid} (control plane unreachable)")
     except ProcessLookupError:
-        click.echo(f"pid {pid} not running; removing stale pidfile", err=True)
+        click.echo(f"pid {info.pid} not running; removing stale pidfile", err=True)
         pid_path.unlink(missing_ok=True)
         sys.exit(1)
     except PermissionError as e:
-        click.echo(f"permission denied sending {sig.name} to {pid}: {e}", err=True)
+        click.echo(f"permission denied sending SIGTERM to {info.pid}: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option("--config", "config_path", type=str, default=None)
+def reload(config_path: str | None) -> None:
+    """Reload daemon config without restarting.
+
+    Prefers the control-plane HTTP endpoint (POST /reload) because it
+    returns the list of components that were actually reloaded. Falls
+    back to SIGHUP when the pidfile is v1 or the control plane is
+    unreachable.
+    """
+    pid_path = _pidfile_for(_resolve_config_path(config_path))
+    if not pid_path.exists():
+        click.echo(f"no pidfile at {pid_path}; is the daemon running?", err=True)
+        sys.exit(1)
+    try:
+        info = _read_pidfile(pid_path)
+    except ValueError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+
+    if info.control_port is not None:
+        resp = _try_control_post(info.control_port, "/reload")
+        if resp is not None:
+            reloaded = resp.get("reloaded", []) if isinstance(resp, dict) else []
+            if reloaded:
+                click.echo(
+                    "reloaded (via control plane): " + ", ".join(reloaded)
+                )
+            else:
+                click.echo(
+                    "reloaded (via control plane): no changes detected"
+                )
+            return
+
+    # Fallback: signal-based.
+    try:
+        os.kill(info.pid, signal.SIGHUP)
+        click.echo(f"sent SIGHUP to pid {info.pid} (control plane unreachable)")
+    except ProcessLookupError:
+        click.echo(f"pid {info.pid} not running; removing stale pidfile", err=True)
+        pid_path.unlink(missing_ok=True)
+        sys.exit(1)
+    except PermissionError as e:
+        click.echo(f"permission denied sending SIGHUP to {info.pid}: {e}", err=True)
         sys.exit(1)
 
 
 @cli.command()
 @click.option("--config", "config_path", type=str, default=None)
 def status(config_path: str | None) -> None:
-    """Report whether the daemon is running."""
+    """Report whether the daemon is running.
+
+    Reports PID + control-plane reachability. A live PID with an
+    unreachable control plane indicates a degraded daemon (main loop
+    still running but its HTTP admin surface has died) — worth
+    flagging so the operator knows to investigate.
+    """
     pid_path = _pidfile_for(_resolve_config_path(config_path))
     if not pid_path.exists():
         click.echo("stopped")
         return
     try:
-        pid = int(pid_path.read_text().strip())
-        os.kill(pid, 0)
-        click.echo(f"running pid={pid}")
-    except (ValueError, ProcessLookupError, PermissionError):
+        info = _read_pidfile(pid_path)
+    except ValueError as e:
+        click.echo(f"stale pidfile ({e}); daemon not running")
+        return
+
+    try:
+        os.kill(info.pid, 0)
+    except (ProcessLookupError, PermissionError):
         click.echo("stale pidfile; daemon not running")
+        return
+
+    if info.control_port is None:
+        click.echo(f"running · pid={info.pid} · control=n/a (v1 pidfile)")
+        return
+
+    health = _try_control_get(info.control_port, "/health")
+    if health is not None:
+        click.echo(
+            f"running · pid={info.pid} · "
+            f"control=http://127.0.0.1:{info.control_port} ok"
+        )
+    else:
+        click.echo(
+            f"running · pid={info.pid} · "
+            f"control=http://127.0.0.1:{info.control_port} unreachable"
+        )
 
 
 def main() -> None:
