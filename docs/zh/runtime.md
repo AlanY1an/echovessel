@@ -10,7 +10,7 @@ Runtime 是 EchoVessel 里**唯一**能同时 import 其他所有模块的那一
 
 ## Overview
 
-`echovessel run` 会启动一个长期运行的 asyncio 进程并阻塞你的 shell。这个进程就是整个守护进程——没有 worker 进程、没有 fork、没有配套的辅助服务。进程内部只有一个 event loop;loop 上住着一个 `Runtime` 实例,它持有 memory engine、LLM provider、channel registry、voice service、proactive scheduler 和几个后台任务的引用。Ctrl+C(或 `echovessel stop`)翻转 shutdown event,loop 依次收尾。
+`echovessel run` 会启动一个长期运行的 asyncio 进程并阻塞你的 shell。这个进程就是整个守护进程——没有 worker 进程、没有 fork、没有配套的辅助服务。进程内部只有一个 event loop;loop 上住着一个 `Runtime` 实例,它持有 memory engine、LLM provider、channel registry、voice service、proactive scheduler 和几个后台任务的引用。Ctrl+C(或 `echovessel stop`)翻转 shutdown event,loop 依次收尾。`stop` / `reload` 优先走 daemon 的本地控制面(见下面 **控制面** 一节)· 仅在 plane 不通或 pidfile 是老格式时退化到信号(`SIGTERM` / `SIGHUP`)。
 
 Launcher 暴露四条子命令:`echovessel run` 在前台启动守护进程,`echovessel stop` 向 pidfile 发 `SIGTERM` 让守护进程优雅停机,`echovessel reload` 发 `SIGHUP` 来在不中断 in-flight turn 的情况下热替换 LLM provider,`echovessel status` 读 pidfile 并告诉你守护进程是否还活着。四条命令读同一份配置文件(默认 `~/.echovessel/config.toml`);pidfile 住在配置里的 `data_dir` 下,所以用不同配置跑的多个守护进程不会互相抢同一个 pidfile。
 
@@ -149,11 +149,27 @@ Runtime 里每个调用点声明自己想要的 tier,provider 在调用时把 ti
 
 `runtime/llm/` 里的三个具体 provider 加起来覆盖 15+ 个真实端点。`AnthropicProvider` 用原生 `anthropic` SDK,对着 Claude。`OpenAICompatibleProvider` 用原生 `openai` SDK,`base_url` 可配,这意味着它覆盖 OpenAI 官方、OpenRouter、Ollama、LM Studio、llama.cpp server、vLLM、DeepSeek、Together、Groq、xAI,以及任何实现了 OpenAI 兼容 REST 的 provider。`StubProvider` 返回预置文本,用于测试和 dry run。
 
-### SIGHUP reload
+### 控制面(control plane)
 
-Runtime 把 `SIGHUP` 注册为 `asyncio.create_task(self.reload())`。Reload 方法从磁盘重读配置,如果 `[llm]` 节变了就构建新的 provider 并原子替换 `ctx.llm`。In-flight turn 不受影响,因为它们的本地 `llm` 变量已经指向老 provider;老 provider 一直活到最后一个 in-flight turn 完成,然后 Python 把它 GC 掉。没有锁、没有协调、没有 epoch 计数器。
+Runtime 跑一个**独立的 HTTP 控制面**,用来承载 operator 级别的 daemon 生命周期操作——`/health` · `/shutdown` · `/reload`。这个 plane 住在 `runtime/control.py` 里,绑 `127.0.0.1:0`(kernel 分配一个随机空闲端口),用独立的 uvicorn 实例,和 Web channel 完全正交。信任模型三根支柱:绑定 host 是模块级常量(**永不**暴露成配置项)· Host header middleware 拒绝任何不是 `localhost` / `127.0.0.1` 的请求(返回 403 · 防御 DNS-rebinding 攻击把浏览器骗去 POST 这个端口)· 不输出任何 CORS header 所以浏览器的 same-origin policy 兜底。分配到的端口会写进 pidfile 的 JSON:`{"pid": 12345, "control_port": 54321, "version": 1}`。
 
-SIGHUP 只影响 interaction 路径的 LLM provider。Consolidate worker 的闭包(`extract_fn`、`reflect_fn`)在 `Runtime.start()` 时捕获 LLM 引用,**不会**被 reload 替换——想换 extraction 模型仍然需要完整重启。Voice 和 proactive 的构造也在启动时捕获依赖,也不会被替换。`[persona].voice_enabled` 有它自己专用的 API(`update_persona_voice_enabled`),不被 SIGHUP 碰。这样 reload 的作用面窄而可预测:替换 interaction LLM,别的什么都不动。
+CLI 直接消费这个 plane。`echovessel stop` 读 pidfile · POST `/shutdown` · 打印 `stopped (via control plane, pid=…)`;`echovessel reload` POST `/reload` · 打印 `reloaded (via control plane): llm` 或 `no changes detected`;`echovessel status` 探 `/health` 同时报 plane 可达性和 PID。每个 CLI 都会在 pidfile 是 v1(老装机的纯整数格式)或 plane 不通时退化到 Unix 信号——这种情况 stop 照样发 `SIGTERM` · reload 照样发 `SIGHUP` · 输出带上 `(control plane unreachable)` 的尾巴让 operator 知道走的是慢路径。
+
+控制面跟 Web channel 的可用性**无关**。即使 `[channels.web].enabled = false` · plane 也在 · operator 仍能干净关机。反过来说 · Web channel 灾难性崩溃也不拉 plane 一起下水——这是这套架构真正买到的分离特性。
+
+### Reload
+
+`Runtime.reload()` 从磁盘重读 `config.toml` · 校验 · 把改动传播到跑着的组件。三条入口:HTTP `POST /reload`(现代路径)· `SIGHUP`(legacy 兼容)· admin `PATCH /api/admin/config` 在写完合并 TOML 后也会调 `reload()`。三条路径共享同一把 `asyncio.Lock`,所以两个同时 in-flight 的 reload 请求不会在 `ctx.config` 换手中间打架。
+
+真正热生效的东西:
+
+- **`[llm].*`** —— `build_llm_provider` 造新 provider · 原子换进 `ctx.llm`。in-flight turn 不受影响 · 因为它们的本地 `llm` 变量在 turn 开始时捕获了快照;老 provider 一直活到最后一个 in-flight turn 结束 · 然后 Python GC 掉。
+- **`[memory].retrieve_k` / `.recent_window_size` / `.relational_bonus_weight`** —— turn handler 每个 turn 都现读 `ctx.config.memory.*` · 下一个 turn 就用新值 · worker 完全不用重启。
+- **`[consolidate].trivial_message_count` / `.trivial_token_count` / `.reflection_hard_gate_24h`** —— 镜像到活着的 `ConsolidateWorker` 实例上(worker 在启动时用旧值构造 · 单改 `ctx.config` 不会生效 · reload 路径直接改它的实例属性)。
+
+`HOT_RELOADABLE_CONFIG_PATHS` 白名单里其他字段都遵循同一条规则:`ctx.config` 整个换掉 · 消费者现读。结构性 section ——`[runtime].data_dir` · `[memory].db_path` · `[memory].embedder` · `[voice]` · `[proactive]` · `[channels.*]` —— 要完整重启;完整的字段矩阵见 `configuration.md`。`[persona].voice_enabled` 有自己专用 API(`update_persona_voice_enabled`),reload 不碰。`[persona].display_name` 在纯 reload 上只更新 `ctx.config` · **不**更新 `ctx.persona`;admin PATCH 路径有一个额外的 side-step 把改动镜像进 `ctx.persona` 让可见层生效。
+
+Reload 返回实际改变的组件名列表(比如 `["llm", "consolidate.trivial_message_count"]`),CLI 渲染出来 · admin API 把它暴露给 UI。空 list 意味着"白名单里没有一条跟当前活值不同"。
 
 ### 为什么 LLM prompt 里从不出现传输层标识
 

@@ -5,6 +5,21 @@ All notable changes to EchoVessel are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Daemon control plane**: a dedicated HTTP listener on an independent loopback TCP port for operator-level lifecycle operations (`GET /health`, `POST /shutdown`, `POST /reload`). Orthogonal to the Web channel — separate uvicorn instance, separate FastAPI app, hardcoded `127.0.0.1` bind host, Host-header middleware that rejects off-host requests with 403. `echovessel stop` / `reload` / `status` now speak HTTP first and fall back to `SIGTERM` / `SIGHUP` only when the plane is unreachable. Pidfile upgraded to JSON v2 with `control_port` so the CLI knows where to POST; v1 integer pidfiles still read correctly and cause the signal fallback to trigger transparently. See `docs/en/runtime.md` (Control plane) and `develop-docs/initiatives/_active/2026-04-daemon-control/` for the full initiative.
+
+### Fixed
+
+- `consolidate.{trivial_message_count, trivial_token_count, reflection_hard_gate_24h}` were listed in `HOT_RELOADABLE_CONFIG_PATHS` — the admin `PATCH /api/admin/config` accepted them — but `Runtime.reload()` only updated `ctx.config`, not the live `ConsolidateWorker` (which was constructed once at boot with the old values). Tuning these thresholds through the admin UI now takes effect without a restart.
+
+### Changed
+
+- `Runtime.reload()` returns a `list[str]` of reloaded component names instead of `None`. HTTP `/reload` renders this list in its JSON response so the CLI can print `reloaded (via control plane): llm, consolidate.trivial_message_count`. Reload is now serialized via an `asyncio.Lock` so HTTP + `SIGHUP` invocations cannot race on `ctx.config` mid-swap.
+- `docs/{en,zh}/configuration.md`'s reload matrix is now field-by-field (13 hot-reloadable fields tabulated) instead of section-level. Matches `HOT_RELOADABLE_CONFIG_PATHS` literal-for-literal; backed by `tests/runtime/test_reload_matrix.py` so drift flips CI red.
+
 ## [0.0.1] - 2026-04-15
 
 First tagged release of EchoVessel — an early-alpha local-first AI persona daemon
