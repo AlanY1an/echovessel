@@ -201,7 +201,7 @@ Web channel 已完整端到端接通。`src/echovessel/channels/web/` 下的 Fas
 EchoVessel 的架构承诺是"一个 persona 跨所有 channel"。Memory 层一直在存储层保证这一点(iron rule D4:retrieval 永不按 `channel_id` 过滤)。从 2026-04-16 起 **live view** 也统一了:
 
 - `SSEBroadcaster` 由 runtime 持有,不属于任何单个 channel。
-- 每个 channel 的 turn 事件(`chat.message.user_appended` / `chat.message.typing_started` / `chat.message.done` / `chat.message.voice_ready`)都经 broadcaster mirror · 带 `source_channel_id` 字段标记 turn 来源。`chat.message.typing_started` 在每次 turn LLM stream 开始前推一次——浏览器在收到 `chat.message.done` 前渲染一个"正在输入..."气泡。原来的 per-token 流(`chat.message.token`)已移除,简化为 typing indicator UX。
+- 每个 channel 的 turn 事件(`chat.message.user_appended` / `chat.message.typing_started` / `chat.message.done` / `chat.message.voice_ready`)都经 broadcaster mirror · 带 `source_channel_id` 字段标记 turn 来源。`chat.message.typing_started` 在每次 turn LLM stream 开始前推一次——浏览器在收到 `chat.message.done` 前渲染一个"正在输入..."气泡。
 - Web chat timeline 订阅统一 SSE 流 · Discord DM 实时出现在 Web 页面 · 时间戳旁带 `📱 Discord` 角标。iMessage 和未来 channel 继承这套行为 —— **无需前端修改**,只要 channel 实现 Channel Protocol 且 turn 走 `runtime.assemble_turn()`。
 - 配对的 `GET /api/chat/history?limit=50&before=<turn_id>` 端点返回跨 channel 历史(仍然 D4-不过滤)· 新浏览器 session 会把过去 Discord 对话和 Web 对话一起回填。
 - Turn 串行化仍然成立:`TurnDispatcher` 在整个进程里一次只处理一个 turn · "一个 persona 一个脑子" 不变。并发 Web + Discord 请求只是排队。
