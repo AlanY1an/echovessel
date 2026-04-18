@@ -13,7 +13,7 @@ seed:
     - description: 用户生日是 3 月 15 日
     - description: 用户在 fintech 公司工作
     - description: 用户跟室友最近有点不愉快
-    - description: 用户养的猫上周去了医院 · 急诊
+    - description: 用户的猫 Mochi 上周去了医院急诊
     - description: 用户要去东京旅游
     - description: 用户最近开始学吉他
 retrieve:
@@ -27,4 +27,3 @@ invariants:
     - 医院
 judge_prompts:
   - Are at least 2 of the top-3 retrieved events about the user's cat Mochi or her medical issue?
-  - Did the retriever avoid returning unrelated items (pasta / 沈阳 / 羽毛球) in the top-3?

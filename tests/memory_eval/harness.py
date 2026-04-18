@@ -186,9 +186,49 @@ def build_live_llm() -> LLMProvider:
     return build_llm_provider(cfg.llm)
 
 
+def build_eval_embedder():
+    """Pick the best embedder available for this eval run.
+
+    Preference order:
+      1. ``sentence-transformers`` (real semantic embeddings). First
+         call downloads the ~90 MB ``all-MiniLM-L6-v2`` model into
+         ``~/.echovessel/embedder.cache/``; subsequent runs are
+         instantaneous. This is the same embedder the daemon uses in
+         production, so retrieve-relevance invariants are meaningful.
+      2. Keyword-axis fallback. Cheap + deterministic, but groups
+         tokens by hand-curated axis so synonyms that were not
+         enumerated miss each other. Triggered automatically when
+         ``sentence-transformers`` is not installed.
+
+    Honours ``ECHOVESSEL_EVAL_EMBEDDER=keyword`` as an override so a
+    debugging run can skip the heavy load explicitly.
+    """
+
+    if os.environ.get("ECHOVESSEL_EVAL_EMBEDDER") == "keyword":
+        return keyword_embedder()[0]
+
+    try:
+        from echovessel.runtime import build_sentence_transformers_embedder
+    except ImportError:
+        return keyword_embedder()[0]
+
+    cache_dir = Path.home() / ".echovessel" / "embedder.cache"
+    try:
+        return build_sentence_transformers_embedder(
+            model_name="all-MiniLM-L6-v2", cache_dir=cache_dir
+        )
+    except ImportError:
+        # ``sentence-transformers`` extra not installed on this host.
+        return keyword_embedder()[0]
+
+
 def keyword_embedder() -> tuple[callable, dict[str, int]]:
     """Return ``(embed_fn, axes)`` — a deterministic keyword-axis
-    embedder plus the axis map it uses. Cheap + sufficient for eval.
+    embedder plus the axis map it uses.
+
+    Used as the fallback when ``sentence-transformers`` is not
+    available. Keeps eval runnable on a bare-bones clone without the
+    90 MB model download.
 
     Each keyword gets its own axis; texts that mention multiple
     keywords land in the mean-vector. Unknown texts hash into a
@@ -264,7 +304,7 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
     persona_id = "p_eval"
     user_id = "u_eval"
 
-    embed_fn, _axes = keyword_embedder()
+    embed_fn = build_eval_embedder()
     extract_fn = make_extract_fn(llm)
     reflect_fn = make_reflect_fn(llm)
 
