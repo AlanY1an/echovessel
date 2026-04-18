@@ -35,7 +35,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -52,7 +52,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session as DbSession
 from sqlmodel import func, select
 
@@ -88,11 +88,20 @@ from echovessel.memory.models import (
 )
 from echovessel.memory.models import Session as RecallSession
 from echovessel.prompts import (
+    ENUM_EDUCATION_LEVEL,
+    ENUM_GENDER,
+    ENUM_HEALTH_STATUS,
+    ENUM_LIFE_STAGE,
+    ENUM_RELATIONSHIP_STATUS,
     PERSONA_BOOTSTRAP_SYSTEM_PROMPT,
+    PERSONA_FACTS_SYSTEM_PROMPT,
     BootstrappedBlocks,
     PersonaBootstrapParseError,
+    PersonaFactsParseError,
     format_persona_bootstrap_user_prompt,
+    format_persona_facts_user_prompt,
     parse_persona_bootstrap_response,
+    parse_persona_facts_response,
 )
 from echovessel.voice.errors import VoicePermanentError
 
@@ -111,11 +120,119 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+class PersonaFactsPayload(BaseModel):
+    """JSON shape for the 15 biographic facts carried on the persona row.
+
+    Every field is optional — the onboarding flow lets the user leave
+    as many blank as they want, and the Web admin PATCH handler accepts
+    any subset. Enum-valued fields are validated against the same
+    vocabularies :mod:`echovessel.prompts.persona_facts` uses, so the
+    wire format matches what the LLM emits and what the DB stores.
+    """
+
+    full_name: str | None = Field(default=None, max_length=256)
+    gender: str | None = Field(default=None)
+    birth_date: str | None = Field(default=None, max_length=32)
+    ethnicity: str | None = Field(default=None, max_length=128)
+    nationality: str | None = Field(default=None, max_length=8)
+    native_language: str | None = Field(default=None, max_length=32)
+    locale_region: str | None = Field(default=None, max_length=128)
+    education_level: str | None = Field(default=None)
+    occupation: str | None = Field(default=None, max_length=128)
+    occupation_field: str | None = Field(default=None, max_length=128)
+    location: str | None = Field(default=None, max_length=128)
+    timezone: str | None = Field(default=None, max_length=64)
+    relationship_status: str | None = Field(default=None)
+    life_stage: str | None = Field(default=None)
+    health_status: str | None = Field(default=None)
+
+    @field_validator(
+        "full_name",
+        "ethnicity",
+        "nationality",
+        "native_language",
+        "locale_region",
+        "occupation",
+        "occupation_field",
+        "location",
+        "timezone",
+    )
+    @classmethod
+    def _strip_empty_free_text(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        stripped = v.strip()
+        return stripped or None
+
+    @field_validator("gender")
+    @classmethod
+    def _validate_gender(cls, v: str | None) -> str | None:
+        return _enum_or_none(v, ENUM_GENDER)
+
+    @field_validator("education_level")
+    @classmethod
+    def _validate_education_level(cls, v: str | None) -> str | None:
+        return _enum_or_none(v, ENUM_EDUCATION_LEVEL)
+
+    @field_validator("relationship_status")
+    @classmethod
+    def _validate_relationship_status(cls, v: str | None) -> str | None:
+        return _enum_or_none(v, ENUM_RELATIONSHIP_STATUS)
+
+    @field_validator("life_stage")
+    @classmethod
+    def _validate_life_stage(cls, v: str | None) -> str | None:
+        return _enum_or_none(v, ENUM_LIFE_STAGE)
+
+    @field_validator("health_status")
+    @classmethod
+    def _validate_health_status(cls, v: str | None) -> str | None:
+        return _enum_or_none(v, ENUM_HEALTH_STATUS)
+
+    @field_validator("birth_date")
+    @classmethod
+    def _validate_birth_date(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        stripped = v.strip()
+        if not stripped:
+            return None
+        try:
+            date.fromisoformat(stripped)
+        except ValueError as e:
+            raise ValueError(
+                "birth_date must be ISO YYYY-MM-DD (use YYYY-01-01 for year-only)"
+            ) from e
+        return stripped
+
+
+def _enum_or_none(value: str | None, allowed: tuple[str, ...]) -> str | None:
+    """Coerce to lower-case and drop values outside the enum vocabulary.
+
+    Mirrors the soft-normalisation in
+    :func:`echovessel.prompts.persona_facts._coerce_fact` — anything
+    outside the enum becomes ``None`` instead of raising, so the user
+    can re-onboard with their mistake corrected on the review page
+    rather than hitting a 422.
+    """
+
+    if value is None:
+        return None
+    stripped = value.strip().lower()
+    if not stripped:
+        return None
+    if stripped in allowed:
+        return stripped
+    return None
+
+
 class OnboardingRequest(BaseModel):
     """Body for ``POST /api/admin/persona/onboarding``.
 
-    All fields are required (the frontend sends them even when empty),
-    but empty strings are accepted and silently skipped at write time.
+    All five block fields are required (the frontend sends them even
+    when empty), but empty strings are accepted and silently skipped
+    at write time. ``facts`` is optional — the user may skip every
+    biographic field and finish onboarding with just the blocks.
     """
 
     display_name: str = Field(..., min_length=1, max_length=256)
@@ -123,6 +240,45 @@ class OnboardingRequest(BaseModel):
     self_block: str = Field(...)
     user_block: str = Field(...)
     mood_block: str = Field(...)
+    facts: PersonaFactsPayload | None = None
+
+
+class PersonaFactsUpdateRequest(BaseModel):
+    """Body for ``PATCH /api/admin/persona/facts``.
+
+    Every field is optional; the handler applies only the keys that
+    are present in the request body, leaving the rest untouched. Use
+    an explicit ``null`` to clear a previously-set field.
+    """
+
+    facts: PersonaFactsPayload
+
+
+class PersonaExtractRequest(BaseModel):
+    """Body for ``POST /api/admin/persona/extract-from-input``.
+
+    Dispatches on ``input_type``:
+
+    - ``blank_write`` — the user has been typing blocks directly. We
+      stitch them into the LLM context and extract facts. ``upload_id``
+      / ``pipeline_id`` are ignored in this mode.
+    - ``import_upload`` — the caller has either just finished an
+      import (``pipeline_id`` set) or is about to start one
+      (``upload_id`` set). We wait for the pipeline, concatenate its
+      events + thoughts as the LLM context, and extract both blocks
+      and facts in one call.
+
+    ``existing_blocks`` and ``locale`` are hints; omit or send null to
+    let the LLM infer from the input alone.
+    """
+
+    input_type: str = Field(..., pattern="^(blank_write|import_upload)$")
+    user_input: str | None = Field(default=None, max_length=100_000)
+    existing_blocks: dict[str, str] | None = Field(default=None)
+    locale: str | None = Field(default=None, max_length=16)
+    persona_display_name: str | None = Field(default=None, max_length=256)
+    upload_id: str | None = Field(default=None, min_length=1, max_length=64)
+    pipeline_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class PersonaUpdateRequest(BaseModel):
@@ -300,6 +456,97 @@ def _serialize_concept_node(node: ConceptNode) -> dict[str, Any]:
     }
 
 
+# The 15 biographic fact columns on Persona. Kept as a tuple so the
+# apply-facts helper and the serializer stay in lockstep — if a field is
+# added to the model, add it here too.
+_PERSONA_FACT_FIELDS: tuple[str, ...] = (
+    "full_name",
+    "gender",
+    "birth_date",
+    "ethnicity",
+    "nationality",
+    "native_language",
+    "locale_region",
+    "education_level",
+    "occupation",
+    "occupation_field",
+    "location",
+    "timezone",
+    "relationship_status",
+    "life_stage",
+    "health_status",
+)
+
+
+def _apply_facts_to_persona_row(
+    persona_row: Persona,
+    payload: PersonaFactsPayload,
+    *,
+    fields_touched: set[str] | None = None,
+) -> None:
+    """Copy the supplied facts onto the ORM row in place.
+
+    ``fields_touched`` — when provided, only those field names are
+    applied. Unset fields are left untouched. When ``None`` (the
+    onboarding case), every field on the payload is written: a
+    ``None`` in the payload means "clear it".
+
+    ``birth_date`` is parsed from the ISO string the payload carries
+    onto a :class:`datetime.date` before it hits the model.
+    """
+
+    data = payload.model_dump()
+    for field_name in _PERSONA_FACT_FIELDS:
+        if fields_touched is not None and field_name not in fields_touched:
+            continue
+        value: Any = data.get(field_name)
+        if field_name == "birth_date" and value is not None:
+            value = date.fromisoformat(value)
+        setattr(persona_row, field_name, value)
+
+
+def _serialize_persona_facts(persona_row: Persona) -> dict[str, Any]:
+    """Render the 15 facts as a plain-JSON dict (ISO date, None preserved)."""
+
+    out: dict[str, Any] = {}
+    for field_name in _PERSONA_FACT_FIELDS:
+        value = getattr(persona_row, field_name, None)
+        if field_name == "birth_date" and value is not None:
+            out[field_name] = value.isoformat()
+        else:
+            out[field_name] = value
+    return out
+
+
+def _format_events_thoughts_for_prompt(
+    *,
+    events: list[tuple[str, int, list[str]]],
+    thoughts: list[str],
+) -> str:
+    """Render imported events + thoughts as the LLM's context material.
+
+    Used by the persona-facts extraction route to feed the structured
+    import output back to the LLM as free-form text; the prompt does
+    not care about the wire format — just that both sides read the
+    same thing.
+    """
+
+    lines: list[str] = []
+    lines.append(f"EVENTS ({len(events)} total):")
+    if not events:
+        lines.append("  (none — the import produced no events)")
+    for i, (desc, impact, rel_tags) in enumerate(events, start=1):
+        tag_str = f" [{','.join(rel_tags)}]" if rel_tags else ""
+        lines.append(f"  {i}. impact={impact:+d}{tag_str} · {desc}")
+    lines.append("")
+    lines.append(f"THOUGHTS ({len(thoughts)} total):")
+    if not thoughts:
+        lines.append("  (none — the import produced no long-term thoughts)")
+    for i, t in enumerate(thoughts, start=1):
+        lines.append(f"  {i}. {t}")
+    return "\n".join(lines)
+
+
 def _count_core_blocks_for_persona(db: DbSession, persona_id: str) -> int:
     stmt = (
         select(func.count())
@@ -431,12 +678,19 @@ def build_admin_router(
             blocks = _load_core_blocks_dict(
                 db, persona_id=persona_id, user_id=user_id
             )
+            persona_row = db.get(Persona, persona_id)
+            facts = (
+                _serialize_persona_facts(persona_row)
+                if persona_row is not None
+                else dict.fromkeys(_PERSONA_FACT_FIELDS)
+            )
         return {
             "id": persona_id,
             "display_name": runtime.ctx.persona.display_name,
             "voice_enabled": bool(runtime.ctx.persona.voice_enabled),
             "voice_id": runtime.ctx.persona.voice_id,
             "core_blocks": blocks,
+            "facts": facts,
         }
 
     # ---- POST /api/admin/persona/onboarding ----------------------------
@@ -468,11 +722,15 @@ def build_admin_router(
                 source="admin_onboarding",
             )
 
-            # Update Persona row's display_name so downstream DB readers
-            # match the new name, then commit inside the same session.
+            # Update Persona row's display_name + biographic facts so
+            # downstream DB readers match, then commit in the same
+            # session. ``facts`` is optional — when None we leave the
+            # fifteen fact columns at their defaults (NULL).
             persona_row = db.get(Persona, persona_id)
             if persona_row is not None:
                 persona_row.display_name = req.display_name
+                if req.facts is not None:
+                    _apply_facts_to_persona_row(persona_row, req.facts)
                 db.add(persona_row)
                 db.commit()
 
@@ -540,6 +798,310 @@ def build_admin_router(
             "ok": True,
             "voice_enabled": bool(runtime.ctx.persona.voice_enabled),
         }
+
+    # ---- PATCH /api/admin/persona/facts --------------------------------
+    #
+    # Partial update of the fifteen biographic fact columns on the
+    # persona row. Only the keys that are present in the request body
+    # are touched; missing keys leave the existing DB values alone.
+    # Sending explicit ``null`` on a key clears it.
+
+    @router.patch("/api/admin/persona/facts")
+    async def patch_persona_facts(
+        request: Request,
+    ) -> dict[str, Any]:
+        raw = await request.json()
+        if not isinstance(raw, dict) or "facts" not in raw:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="body must be {facts: {...}}",
+            )
+        raw_facts = raw["facts"]
+        if not isinstance(raw_facts, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="'facts' must be an object",
+            )
+
+        # Pydantic normalises enum + date values; keys the caller did
+        # not send become None after validation, but we remember which
+        # keys they actually supplied so the handler only writes those.
+        fields_touched = {
+            k for k in raw_facts if k in _PERSONA_FACT_FIELDS
+        }
+        try:
+            payload = PersonaFactsPayload.model_validate(raw_facts)
+        except Exception as e:  # noqa: BLE001 — pydantic raises ValidationError
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(e),
+            ) from e
+
+        persona_id = _persona_id()
+        with _open_db() as db:
+            persona_row = db.get(Persona, persona_id)
+            if persona_row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"persona {persona_id!r} not found",
+                )
+            _apply_facts_to_persona_row(
+                persona_row, payload, fields_touched=fields_touched
+            )
+            db.add(persona_row)
+            db.commit()
+            db.refresh(persona_row)
+            facts_after = _serialize_persona_facts(persona_row)
+
+        return {"ok": True, "facts": facts_after}
+
+    # ---- POST /api/admin/persona/extract-from-input --------------------
+    #
+    # Unified extraction endpoint used by both onboarding paths:
+    #
+    # * ``blank_write`` — user typed prose into the five block editors.
+    #   We feed those (plus any ``user_input`` free text) back to the
+    #   LLM to extract structured biographic facts alongside tidied
+    #   blocks, then show the user a review page.
+    # * ``import_upload`` — caller supplies ``upload_id`` (start a new
+    #   pipeline inline) or ``pipeline_id`` (wait on an already-started
+    #   pipeline). Once the pipeline lands events + thoughts, we run
+    #   the same facts-aware LLM prompt over them.
+    #
+    # Response is always a ``{core_blocks, facts, facts_confidence,
+    # events, thoughts, pipeline_status}`` object. ``events`` and
+    # ``thoughts`` are empty in the blank-write path.
+
+    EXTRACT_PIPELINE_WAIT_SECONDS: float = 600.0  # noqa: N806
+
+    @router.post("/api/admin/persona/extract-from-input")
+    async def post_extract_from_input(
+        req: PersonaExtractRequest,
+    ) -> dict[str, Any]:
+        persona_id = _persona_id()
+
+        # Guard against re-onboarding — this endpoint is scoped to
+        # first-run, matching the existing bootstrap-from-material
+        # guard.
+        with _open_db() as db:
+            existing_count = _count_core_blocks_for_persona(db, persona_id)
+            if existing_count > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "onboarding already completed; use POST "
+                        "/api/admin/persona to update individual blocks "
+                        "or PATCH /api/admin/persona/facts to edit facts"
+                    ),
+                )
+
+        # Path A · blank-write
+        if req.input_type == "blank_write":
+            context_text = (req.user_input or "").strip()
+            existing_blocks = req.existing_blocks or None
+            if not context_text and not existing_blocks:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "blank_write requires either user_input or "
+                        "existing_blocks to have content"
+                    ),
+                )
+            parsed = await _run_persona_facts_extraction(
+                context_text=context_text,
+                existing_blocks=existing_blocks,
+                locale=req.locale,
+                persona_display_name=req.persona_display_name,
+            )
+            return {
+                "input_type": "blank_write",
+                "core_blocks": parsed.core_blocks_as_dict(),
+                "facts": parsed.facts.as_dict(),
+                "facts_confidence": parsed.facts_confidence,
+                "events": [],
+                "thoughts": [],
+                "pipeline_status": None,
+            }
+
+        # Path B · import-upload
+        if importer_facade is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "import pipeline is not available in this daemon; "
+                    "import_upload requires the import stack"
+                ),
+            )
+        if req.upload_id is None and req.pipeline_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "import_upload requires either upload_id or pipeline_id"
+                ),
+            )
+
+        pipeline_id: str
+        if req.pipeline_id is not None:
+            pipeline_id = req.pipeline_id
+        else:
+            upload_id = req.upload_id
+            assert upload_id is not None
+            try:
+                pipeline_id = await importer_facade.start_pipeline(
+                    upload_id,
+                    persona_id=persona_id,
+                    user_id=user_id,
+                )
+            except Exception as e:  # noqa: BLE001
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"failed to start import pipeline: {e}",
+                ) from e
+
+        try:
+            iterator = importer_facade.subscribe_events(pipeline_id)
+        except KeyError as e:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"unknown pipeline_id: {pipeline_id}",
+            ) from e
+
+        async def _wait_done() -> dict[str, Any] | None:
+            async for ev in iterator:
+                if getattr(ev, "type", None) == "pipeline.done":
+                    return dict(getattr(ev, "payload", {}) or {})
+            return None
+
+        try:
+            done_payload = await asyncio.wait_for(
+                _wait_done(), timeout=EXTRACT_PIPELINE_WAIT_SECONDS
+            )
+        except TimeoutError as e:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail=(
+                    f"import pipeline did not finish within "
+                    f"{EXTRACT_PIPELINE_WAIT_SECONDS:.0f}s"
+                ),
+            ) from e
+        if done_payload is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "did not observe pipeline.done event; the pipeline "
+                    "may have finished before this request subscribed"
+                ),
+            )
+        pipe_status = done_payload.get("status", "")
+        if pipe_status not in ("success", "partial_success"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"import pipeline ended with status {pipe_status!r}; "
+                    f"cannot extract from a failed/cancelled import"
+                ),
+            )
+
+        with _open_db() as db:
+            events_rows = list(
+                db.exec(
+                    select(ConceptNode)
+                    .where(
+                        ConceptNode.persona_id == persona_id,
+                        ConceptNode.type == NodeType.EVENT,
+                        ConceptNode.imported_from.is_not(None),  # type: ignore[union-attr]
+                    )
+                    .order_by(ConceptNode.created_at.desc())
+                    .limit(100)
+                )
+            )
+            thoughts_rows = list(
+                db.exec(
+                    select(ConceptNode)
+                    .where(
+                        ConceptNode.persona_id == persona_id,
+                        ConceptNode.type == NodeType.THOUGHT,
+                        ConceptNode.imported_from.is_not(None),  # type: ignore[union-attr]
+                    )
+                    .order_by(ConceptNode.created_at.desc())
+                    .limit(30)
+                )
+            )
+
+        events_input = [
+            (
+                row.description or "",
+                int(row.emotional_impact or 0),
+                list(row.relational_tags or []),
+            )
+            for row in events_rows
+        ]
+        thoughts_input = [row.description or "" for row in thoughts_rows]
+
+        context_text = _format_events_thoughts_for_prompt(
+            events=events_input, thoughts=thoughts_input
+        )
+        parsed = await _run_persona_facts_extraction(
+            context_text=context_text,
+            existing_blocks=None,
+            locale=req.locale,
+            persona_display_name=req.persona_display_name,
+        )
+
+        return {
+            "input_type": "import_upload",
+            "core_blocks": parsed.core_blocks_as_dict(),
+            "facts": parsed.facts.as_dict(),
+            "facts_confidence": parsed.facts_confidence,
+            "events": [
+                {
+                    "description": d,
+                    "emotional_impact": i,
+                    "relational_tags": t,
+                }
+                for (d, i, t) in events_input
+            ],
+            "thoughts": list(thoughts_input),
+            "pipeline_status": pipe_status,
+        }
+
+    async def _run_persona_facts_extraction(
+        *,
+        context_text: str,
+        existing_blocks: dict[str, str] | None,
+        locale: str | None,
+        persona_display_name: str | None,
+    ) -> Any:
+        system = PERSONA_FACTS_SYSTEM_PROMPT
+        user = format_persona_facts_user_prompt(
+            context_text=context_text,
+            existing_blocks=existing_blocks,
+            locale=locale,
+            persona_display_name=persona_display_name,
+        )
+        try:
+            response_text = await runtime.ctx.llm.complete(
+                system,
+                user,
+                max_tokens=4096,
+                temperature=0.5,
+            )
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"LLM call failed during extraction: {e}",
+            ) from e
+        try:
+            return parse_persona_facts_response(response_text)
+        except PersonaFactsParseError as e:
+            log.warning("extract-from-input: malformed LLM JSON: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    "LLM returned a malformed extraction response; please "
+                    f"retry. ({e})"
+                ),
+            ) from e
 
     # ---- POST /api/admin/persona/bootstrap-from-material ---------------
     #

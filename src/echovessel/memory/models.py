@@ -57,7 +57,15 @@ def _str_enum_column() -> Column:
 
 
 class Persona(SQLModel, table=True):
-    """A digital character. The top-level identity that everything else hangs off."""
+    """A digital character. The top-level identity that everything else hangs off.
+
+    Biographic facts (full_name / gender / birth_date / ...) are structured
+    companions to the prose core_blocks: they answer "what is her timezone"
+    or "when was she born" without re-reading the persona block. All are
+    nullable — LLM extraction fills what it can, the user reviews / edits
+    in the onboarding flow or the admin page. See `docs/en/configuration.md`
+    for the per-field contract.
+    """
 
     __tablename__ = "personas"
 
@@ -66,6 +74,31 @@ class Persona(SQLModel, table=True):
     description: str | None = None
     avatar_path: str | None = None
     voice_config: str | None = Field(default=None)  # JSON string, v1.x
+
+    # --- Biographic facts ---------------------------------------------------
+    # Identity
+    full_name: str | None = None
+    gender: str | None = None  # 'female' | 'male' | 'non_binary'
+    birth_date: date | None = None
+    ethnicity: str | None = None
+
+    # Culture & language
+    nationality: str | None = None  # ISO 3166-1 alpha-2, e.g. 'CN'
+    native_language: str | None = None  # BCP 47, e.g. 'zh-CN'
+    locale_region: str | None = None  # free-form, e.g. 'northeast_china'
+
+    # Education & occupation
+    education_level: str | None = None  # high_school | bachelor | master | phd
+    occupation: str | None = None
+    occupation_field: str | None = None
+
+    # Life
+    location: str | None = None
+    timezone: str | None = None  # IANA tz, e.g. 'Asia/Shanghai'
+    relationship_status: str | None = None  # single | married | widowed | divorced
+    life_stage: str | None = None  # student | working | retired | new_parent | between_jobs
+    health_status: str | None = None  # healthy | chronic_illness | recovering | serious
+
     created_at: datetime = Field(
         sa_column=Column(DateTime, nullable=False, server_default=func.now())
     )

@@ -86,6 +86,28 @@ _V0_3_COLUMNS: tuple[_ColumnSpec, ...] = (
 )
 
 
+# Persona biographic facts (2026-04 · `2026-04-persona-facts` initiative).
+# 15 additive columns on personas. All nullable — LLM extraction fills what
+# it can during onboarding; the user reviews/edits from the Web admin page.
+_PERSONA_FACTS_COLUMNS: tuple[_ColumnSpec, ...] = (
+    _ColumnSpec(table="personas", column="full_name", sql_type="TEXT"),
+    _ColumnSpec(table="personas", column="gender", sql_type="TEXT"),
+    _ColumnSpec(table="personas", column="birth_date", sql_type="DATE"),
+    _ColumnSpec(table="personas", column="ethnicity", sql_type="TEXT"),
+    _ColumnSpec(table="personas", column="nationality", sql_type="TEXT"),
+    _ColumnSpec(table="personas", column="native_language", sql_type="TEXT"),
+    _ColumnSpec(table="personas", column="locale_region", sql_type="TEXT"),
+    _ColumnSpec(table="personas", column="education_level", sql_type="TEXT"),
+    _ColumnSpec(table="personas", column="occupation", sql_type="TEXT"),
+    _ColumnSpec(table="personas", column="occupation_field", sql_type="TEXT"),
+    _ColumnSpec(table="personas", column="location", sql_type="TEXT"),
+    _ColumnSpec(table="personas", column="timezone", sql_type="TEXT"),
+    _ColumnSpec(table="personas", column="relationship_status", sql_type="TEXT"),
+    _ColumnSpec(table="personas", column="life_stage", sql_type="TEXT"),
+    _ColumnSpec(table="personas", column="health_status", sql_type="TEXT"),
+)
+
+
 # ---------------------------------------------------------------------------
 # New tables (v0.3)
 # ---------------------------------------------------------------------------
@@ -138,7 +160,7 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
                 conn.execute(text(ddl))
                 log.info("schema migration: created table %s", table_name)
 
-        for spec in _V0_3_COLUMNS:
+        for spec in (*_V0_3_COLUMNS, *_PERSONA_FACTS_COLUMNS):
             if not _table_exists(conn, spec.table):
                 # Legacy DB that predates the parent table entirely.
                 # Skip; create_all_tables will build it later with the

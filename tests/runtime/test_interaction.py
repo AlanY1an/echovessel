@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlmodel import Session as DbSession
 from sqlmodel import select
@@ -19,6 +19,7 @@ from echovessel.memory import (
 from echovessel.memory.backends.sqlite import SQLiteBackend
 from echovessel.runtime.interaction import (
     IncomingMessage,
+    PersonaFactsView,
     TurnContext,
     assemble_turn,
     build_system_prompt,
@@ -170,6 +171,85 @@ def test_build_system_prompt_has_style_block():
     out = build_system_prompt(persona_display_name="Test", core_blocks=[])
     assert "NOT the medium" in out
     assert "Test" in out
+
+
+def test_build_system_prompt_omits_who_you_are_when_no_facts():
+    out = build_system_prompt(persona_display_name="Test", core_blocks=[])
+    assert "# Who you are" not in out
+
+
+def test_build_system_prompt_renders_who_you_are_with_five_facts():
+    facts = PersonaFactsView(
+        full_name="张丽华",
+        gender="female",
+        birth_date=date(1962, 3, 15),
+        occupation="retired_teacher",
+        native_language="zh-CN",
+    )
+    out = build_system_prompt(
+        persona_display_name="妈",
+        core_blocks=[],
+        persona_facts=facts,
+    )
+    assert "# Who you are" in out
+    assert "- Name: 张丽华" in out
+    assert "- Gender: female" in out
+    # Only the year is rendered, not the full ISO date.
+    assert "- Born: 1962" in out
+    assert "1962-03-15" not in out
+    assert "- Occupation: retired_teacher" in out
+    assert "- Native language: zh-CN" in out
+
+
+def test_build_system_prompt_skips_null_facts_individually():
+    facts = PersonaFactsView(full_name="Ann", occupation="engineer")
+    out = build_system_prompt(
+        persona_display_name="Ann",
+        core_blocks=[],
+        persona_facts=facts,
+    )
+    assert "- Name: Ann" in out
+    assert "- Occupation: engineer" in out
+    # Unset fields do not emit empty bullets.
+    assert "- Gender:" not in out
+    assert "- Born:" not in out
+    assert "- Native language:" not in out
+
+
+def test_build_system_prompt_empty_view_is_equivalent_to_no_view():
+    baseline = build_system_prompt(persona_display_name="X", core_blocks=[])
+    with_empty = build_system_prompt(
+        persona_display_name="X",
+        core_blocks=[],
+        persona_facts=PersonaFactsView.empty(),
+    )
+    assert baseline == with_empty
+
+
+def test_persona_facts_view_from_persona_row_copies_five_columns():
+    row = Persona(
+        id="p",
+        display_name="Sage",
+        full_name="Full Name",
+        gender="female",
+        birth_date=date(2001, 5, 4),
+        occupation="software_engineer",
+        native_language="en-US",
+        # Columns NOT in the view should be ignored.
+        timezone="America/Los_Angeles",
+        marital_status="single",
+    )
+    view = PersonaFactsView.from_persona_row(row)
+    assert view.full_name == "Full Name"
+    assert view.gender == "female"
+    assert view.birth_date == date(2001, 5, 4)
+    assert view.occupation == "software_engineer"
+    assert view.native_language == "en-US"
+
+
+def test_persona_facts_view_from_none_row_is_empty():
+    view = PersonaFactsView.from_persona_row(None)
+    assert view == PersonaFactsView.empty()
 
 
 def test_build_user_prompt_just_user_message_when_empty():

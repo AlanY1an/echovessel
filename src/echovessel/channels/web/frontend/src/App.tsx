@@ -14,6 +14,7 @@ import { VoiceClone } from './screens/VoiceClone'
 import { usePersona } from './hooks/usePersona'
 import type {
   DaemonState,
+  PersonaFacts,
   PersonaStateApi,
   PersonaUpdatePayload,
 } from './api/types'
@@ -36,6 +37,7 @@ function AppShell() {
     loading,
     error,
     updatePersona,
+    updateFacts,
     toggleVoice,
     completeOnboarding,
   } = usePersona()
@@ -92,6 +94,7 @@ function AppShell() {
               persona={persona}
               daemonState={daemonState}
               updatePersona={updatePersona}
+              updateFacts={updateFacts}
               toggleVoice={toggleVoice}
             />
           ) : (
@@ -121,11 +124,13 @@ function AdminRoute({
   persona,
   daemonState,
   updatePersona,
+  updateFacts,
   toggleVoice,
 }: {
   persona: PersonaStateApi
   daemonState: DaemonState
   updatePersona: (payload: PersonaUpdatePayload) => Promise<void>
+  updateFacts: (facts: Partial<PersonaFacts>) => Promise<void>
   toggleVoice: (enabled: boolean) => Promise<void>
 }) {
   const navigate = useNavigate()
@@ -141,6 +146,7 @@ function AdminRoute({
             persona={persona}
             daemonState={daemonState}
             updatePersona={updatePersona}
+            updateFacts={updateFacts}
             toggleVoice={toggleVoice}
             onBackToChat={() => navigate('/chat')}
           />

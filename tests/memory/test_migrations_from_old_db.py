@@ -123,6 +123,9 @@ def test_legacy_db_gets_new_columns_and_table():
                 "INSERT INTO personas (id, display_name) VALUES ('p1', 'Ann')"
             )
         )
+
+        # Legacy persona rows should keep their data and get NULL for the
+        # new biographic fact columns after migration.
         conn.execute(
             text("INSERT INTO users (id, display_name) VALUES ('self', 'Alan')")
         )
@@ -154,6 +157,8 @@ def test_legacy_db_gets_new_columns_and_table():
     assert "source_turn_id" not in _cols(engine, "concept_nodes")
     assert "imported_from" not in _cols(engine, "concept_nodes")
     assert not _table_exists(engine, "core_block_appends")
+    assert "full_name" not in _cols(engine, "personas")
+    assert "timezone" not in _cols(engine, "personas")
 
     # Run the idempotent migration
     ensure_schema_up_to_date(engine)
@@ -164,6 +169,26 @@ def test_legacy_db_gets_new_columns_and_table():
     assert "imported_from" in _cols(engine, "concept_nodes")
     # New table is present
     assert _table_exists(engine, "core_block_appends")
+    # Persona biographic facts (2026-04 · persona-facts initiative)
+    personas_cols_after = _cols(engine, "personas")
+    for expected in (
+        "full_name",
+        "gender",
+        "birth_date",
+        "ethnicity",
+        "nationality",
+        "native_language",
+        "locale_region",
+        "education_level",
+        "occupation",
+        "occupation_field",
+        "location",
+        "timezone",
+        "relationship_status",
+        "life_stage",
+        "health_status",
+    ):
+        assert expected in personas_cols_after, f"missing personas.{expected}"
 
     # Existing legacy data still intact; new columns default to NULL
     with engine.connect() as conn:
@@ -184,6 +209,18 @@ def test_legacy_db_gets_new_columns_and_table():
         assert row[2] is None
         assert row[3] is None
 
+        # Legacy persona row is preserved; facts columns default to NULL.
+        row = conn.execute(
+            text(
+                "SELECT display_name, full_name, timezone FROM personas "
+                "WHERE id='p1'"
+            )
+        ).one()
+        assert row[0] == "Ann"
+        assert row[1] is None
+        assert row[2] is None
+
     # And running it again on the upgraded DB is still a no-op
     ensure_schema_up_to_date(engine)
     assert "turn_id" in _cols(engine, "recall_messages")
+    assert "full_name" in _cols(engine, "personas")

@@ -13,11 +13,13 @@ import type {
   DaemonState,
   MemoryEvent,
   MemoryThought,
+  PersonaFacts,
   PersonaStateApi,
   PersonaUpdatePayload,
   PreviewDeleteResponse,
   TraceNode,
 } from '../api/types'
+import { PersonaFactsEditor } from '../components/PersonaFactsEditor'
 import { ApiError } from '../api/types'
 import { getCostRecent, getCostSummary } from '../api/client'
 import { useConfig } from '../hooks/useConfig'
@@ -30,6 +32,7 @@ interface AdminProps {
   persona: PersonaStateApi
   daemonState: DaemonState
   updatePersona: (payload: PersonaUpdatePayload) => Promise<void>
+  updateFacts: (facts: Partial<PersonaFacts>) => Promise<void>
   toggleVoice: (enabled: boolean) => Promise<void>
   onBackToChat: () => void
 }
@@ -57,6 +60,7 @@ export function Admin({
   persona,
   daemonState,
   updatePersona,
+  updateFacts,
   toggleVoice,
   onBackToChat,
 }: AdminProps) {
@@ -109,7 +113,11 @@ export function Admin({
 
         <main className="admin-main">
           {tab === 'persona' && (
-            <PersonaTab persona={persona} onUpdate={updatePersona} />
+            <PersonaTab
+              persona={persona}
+              onUpdate={updatePersona}
+              onUpdateFacts={updateFacts}
+            />
           )}
           {tab === 'events' && (
             <EventsTab
@@ -239,12 +247,41 @@ const BLOCK_META: BlockMeta[] = [
   },
 ]
 
+/** Compare two facts objects field-by-field. Used to decide whether
+ *  the save button should enable — a plain reference compare is not
+ *  enough because ``setFactsDraft`` always clones on edit. */
+function factsEqual(a: PersonaFacts, b: PersonaFacts): boolean {
+  const keys: (keyof PersonaFacts)[] = [
+    'full_name',
+    'gender',
+    'birth_date',
+    'ethnicity',
+    'nationality',
+    'native_language',
+    'locale_region',
+    'education_level',
+    'occupation',
+    'occupation_field',
+    'location',
+    'timezone',
+    'relationship_status',
+    'life_stage',
+    'health_status',
+  ]
+  for (const k of keys) {
+    if ((a[k] ?? null) !== (b[k] ?? null)) return false
+  }
+  return true
+}
+
 function PersonaTab({
   persona,
   onUpdate,
+  onUpdateFacts,
 }: {
   persona: PersonaStateApi
   onUpdate: (payload: PersonaUpdatePayload) => Promise<void>
+  onUpdateFacts: (facts: Partial<PersonaFacts>) => Promise<void>
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -263,6 +300,30 @@ function PersonaTab({
       window.setTimeout(() => setNameSavedAt(null), 2000)
     } finally {
       setNameSaving(false)
+    }
+  }
+
+  const [factsDraft, setFactsDraft] = useState<PersonaFacts>(persona.facts)
+  const [factsExpanded, setFactsExpanded] = useState(false)
+  const [factsSaving, setFactsSaving] = useState(false)
+  const [factsSavedAt, setFactsSavedAt] = useState<number | null>(null)
+  // Re-sync the draft when the upstream persona refreshes (e.g. after
+  // a successful save elsewhere). Cheap — fires only when the identity
+  // of ``persona.facts`` changes.
+  useEffect(() => {
+    setFactsDraft(persona.facts)
+  }, [persona.facts])
+  const factsDirty = !factsEqual(factsDraft, persona.facts)
+
+  const handleSaveFacts = async () => {
+    if (!factsDirty || factsSaving) return
+    setFactsSaving(true)
+    try {
+      await onUpdateFacts(factsDraft)
+      setFactsSavedAt(Date.now())
+      window.setTimeout(() => setFactsSavedAt(null), 2000)
+    } finally {
+      setFactsSaving(false)
     }
   }
 
@@ -307,6 +368,75 @@ function PersonaTab({
           </button>
         </div>
       </div>
+
+      <section className="facts-section">
+        <header
+          className="facts-section-header"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            cursor: 'pointer',
+            userSelect: 'none',
+          }}
+          onClick={() => setFactsExpanded((x) => !x)}
+        >
+          <span>
+            {t('facts.section_title')}
+            <span
+              style={{
+                fontSize: 11,
+                marginLeft: 8,
+                color: 'rgba(255, 255, 255, 0.38)',
+                textTransform: 'none',
+                letterSpacing: 0,
+              }}
+            >
+              {t('facts.section_hint')}
+            </span>
+          </span>
+          <span
+            style={{
+              fontSize: 12,
+              color: 'rgba(255, 255, 255, 0.55)',
+            }}
+          >
+            {factsExpanded ? '▾' : '▸'}
+          </span>
+        </header>
+
+        {factsExpanded && (
+          <>
+            <PersonaFactsEditor
+              value={factsDraft}
+              onChange={setFactsDraft}
+              disabled={factsSaving}
+            />
+            <div className="block-editor-actions">
+              <div className="block-editor-status">
+                {factsSavedAt && (
+                  <span className="block-editor-saved">
+                    {t('admin.common.saved')}
+                  </span>
+                )}
+                {!factsSavedAt && factsDirty && (
+                  <span className="block-editor-dirty">
+                    {t('admin.common.unsaved_warning')}
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                className="block-editor-save"
+                disabled={!factsDirty || factsSaving}
+                onClick={() => void handleSaveFacts()}
+              >
+                {factsSaving ? '⋯' : t('admin.common.save')}
+              </button>
+            </div>
+          </>
+        )}
+      </section>
 
       <div className="admin-hint-card">
         <div className="admin-hint-glyph">📥</div>

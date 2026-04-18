@@ -45,6 +45,10 @@ import type {
   OnboardingResponse,
   PersonaBootstrapRequest,
   PersonaBootstrapResponse,
+  PersonaExtractRequest,
+  PersonaExtractResponse,
+  PersonaFactsUpdatePayload,
+  PersonaFactsUpdateResponse,
   PersonaStateApi,
   PersonaUpdatePayload,
   PreviewDeleteResponse,
@@ -173,6 +177,43 @@ export async function postPersonaUpdate(
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+/**
+ * POST /api/admin/persona/extract-from-input — unified extraction
+ * endpoint used by both onboarding paths. Dispatch on
+ * ``input_type``; the response always carries both blocks and facts
+ * plus a confidence self-assessment. For path B (``import_upload``)
+ * the response also includes the pipeline's extracted events +
+ * thoughts so the review page can render them.
+ */
+export async function postPersonaExtract(
+  payload: PersonaExtractRequest,
+): Promise<PersonaExtractResponse> {
+  return fetchJson<PersonaExtractResponse>(
+    '/api/admin/persona/extract-from-input',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+/**
+ * PATCH /api/admin/persona/facts — partial update of the fifteen
+ * biographic fact columns. Only keys present in ``payload.facts`` are
+ * written; explicit null clears a previously-set field.
+ */
+export async function patchPersonaFacts(
+  payload: PersonaFactsUpdatePayload,
+): Promise<PersonaFactsUpdateResponse> {
+  return fetchJson<PersonaFactsUpdateResponse>(
+    '/api/admin/persona/facts',
+    {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    },
+  )
 }
 
 /**

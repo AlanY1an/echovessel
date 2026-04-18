@@ -1,40 +1,37 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TopBar } from '../components/TopBar'
+import { PersonaFactsEditor } from '../components/PersonaFactsEditor'
 import {
   postImportUploadText,
-  postPersonaBootstrapFromMaterial,
+  postPersonaExtract,
   postPersonaUpdate,
 } from '../api/client'
-import { ApiError } from '../api/types'
+import { ApiError, EMPTY_PERSONA_FACTS } from '../api/types'
 import type {
+  ExtractedEvent,
   OnboardingPayload,
-  PersonaBootstrapResponse,
+  PersonaExtractResponse,
+  PersonaFacts,
 } from '../api/types'
 
 type Step =
   | 'welcome'
   | 'blank-write'
+  | 'blank-analysing'
   | 'import-upload'
   | 'import-waiting'
-  | 'import-review'
+  | 'review'
 
 interface OnboardingProps {
   completeOnboarding: (payload: OnboardingPayload) => Promise<void>
   error: string | null
 }
 
-/**
- * Default display_name used when the user does not explicitly name the
- * persona. The actual value depends on the current i18n locale — see
- * the `onboarding.default_display_name` key. The user can always rename
- * the persona later from Admin → Persona → display_name.
- */
-
 const MIN_MATERIAL_CHARS = 80
 
 export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [step, setStep] = useState<Step>('welcome')
 
   // Blank-write state.
@@ -45,34 +42,62 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
   // Import-upload state.
   const [material, setMaterial] = useState('')
   const [importError, setImportError] = useState<string | null>(null)
-  const [bootstrap, setBootstrap] =
-    useState<PersonaBootstrapResponse | null>(null)
+  const [extract, setExtract] =
+    useState<PersonaExtractResponse | null>(null)
+  const [extractSource, setExtractSource] =
+    useState<'blank_write' | 'import_upload'>('blank_write')
 
-  // Import-review edit state. Five blocks, individually editable
-  // before we POST them to /api/admin/persona/onboarding.
+  // Review state — the 5 blocks + 15 facts the user edits before
+  // POSTing /onboarding. Populated from the extract response.
   const [draftPersona, setDraftPersona] = useState('')
   const [draftSelf, setDraftSelf] = useState('')
   const [draftUser, setDraftUser] = useState('')
   const [draftMood, setDraftMood] = useState('')
   const [draftRelationship, setDraftRelationship] = useState('')
+  const [draftFacts, setDraftFacts] = useState<PersonaFacts>(
+    EMPTY_PERSONA_FACTS,
+  )
+  const [draftEvents, setDraftEvents] = useState<ExtractedEvent[]>([])
 
   const charCount = text.trim().length
   const canSubmit = charCount >= 10 && !submitting
 
-  const handleSubmit = async () => {
-    if (!canSubmit) return
+  /** Seed the review state from a successful extraction response. */
+  const primeReviewFromExtract = (
+    res: PersonaExtractResponse,
+    source: 'blank_write' | 'import_upload',
+  ) => {
+    setExtract(res)
+    setExtractSource(source)
+    setDraftPersona(res.core_blocks.persona_block)
+    setDraftSelf(res.core_blocks.self_block)
+    setDraftUser(res.core_blocks.user_block)
+    setDraftMood(res.core_blocks.mood_block)
+    setDraftRelationship(res.core_blocks.relationship_block)
+    setDraftFacts(res.facts)
+    setDraftEvents(res.events)
+  }
 
+  const handleBlankAnalyse = async () => {
+    if (!canSubmit) return
     setSubmitting(true)
+    setStep('blank-analysing')
     try {
-      await completeOnboarding({
-        display_name: name.trim() || t('onboarding.default_display_name'),
-        persona_block: text.trim(),
-        self_block: '',
-        user_block: '',
-        mood_block: '',
+      const res = await postPersonaExtract({
+        input_type: 'blank_write',
+        user_input: text.trim(),
+        persona_display_name:
+          name.trim() || t('onboarding.default_display_name'),
+        locale: i18n.language,
       })
-    } catch {
-      // Error is surfaced via the `error` prop from usePersona().
+      primeReviewFromExtract(res, 'blank_write')
+      setStep('review')
+    } catch (err) {
+      let msg = t('onboarding.import_failed')
+      if (err instanceof ApiError) msg = err.detail
+      else if (err instanceof Error) msg = err.message
+      setImportError(msg)
+      setStep('blank-write')
     } finally {
       setSubmitting(false)
     }
@@ -88,35 +113,22 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
     setStep('import-waiting')
 
     try {
-      // Stage 1: persist the text upload. Reuses the generic import
-      // upload endpoint — no onboarding-specific staging needed.
       const upload = await postImportUploadText({
         text: material.trim(),
         source_label: 'onboarding_material',
       })
-
-      // Stage 2: server-side blocking call. Starts the pipeline, waits
-      // for pipeline.done, drives the bootstrap LLM, returns five
-      // suggested blocks.
-      const result = await postPersonaBootstrapFromMaterial({
+      const res = await postPersonaExtract({
+        input_type: 'import_upload',
         upload_id: upload.upload_id,
         persona_display_name: t('onboarding.default_display_name'),
+        locale: i18n.language,
       })
-
-      setBootstrap(result)
-      setDraftPersona(result.suggested_blocks.persona_block)
-      setDraftSelf(result.suggested_blocks.self_block)
-      setDraftUser(result.suggested_blocks.user_block)
-      setDraftMood(result.suggested_blocks.mood_block)
-      setDraftRelationship(result.suggested_blocks.relationship_block)
-      setStep('import-review')
+      primeReviewFromExtract(res, 'import_upload')
+      setStep('review')
     } catch (err) {
       let msg = t('onboarding.import_failed')
-      if (err instanceof ApiError) {
-        msg = err.detail
-      } else if (err instanceof Error) {
-        msg = err.message
-      }
+      if (err instanceof ApiError) msg = err.detail
+      else if (err instanceof Error) msg = err.message
       setImportError(msg)
       setStep('import-upload')
     } finally {
@@ -128,25 +140,28 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
     if (submitting) return
     setSubmitting(true)
     try {
-      // Send only the four blocks the /onboarding endpoint accepts.
+      const displayName =
+        extractSource === 'blank_write' && name.trim()
+          ? name.trim()
+          : t('onboarding.default_display_name')
       await completeOnboarding({
-        display_name: t('onboarding.default_display_name'),
+        display_name: displayName,
         persona_block: draftPersona.trim(),
         self_block: draftSelf.trim(),
         user_block: draftUser.trim(),
         mood_block: draftMood.trim(),
+        facts: draftFacts,
       })
-      // relationship_block is written via a follow-up PATCH below —
-      // the onboarding contract intentionally does not include it, so
-      // we use the partial-update endpoint once the persona exists.
+      // relationship_block is written via a follow-up PATCH — the
+      // onboarding contract intentionally omits it. Same behaviour as
+      // before the facts initiative landed.
       const rel = draftRelationship.trim()
       if (rel.length > 0) {
         try {
           await postPersonaUpdate({ relationship_block: rel })
         } catch {
-          // Relationship write is best-effort — if it fails, the
-          // persona is still fully onboarded with the other four
-          // blocks. User can retry from Admin.
+          // best-effort — persona is still usable with the four
+          // primary blocks. User can retry from Admin later.
         }
       }
     } catch {
@@ -176,7 +191,10 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
             <button
               type="button"
               className="path-card"
-              onClick={() => setStep('blank-write')}
+              onClick={() => {
+                setImportError(null)
+                setStep('blank-write')
+              }}
             >
               <div className="path-card-index">01</div>
               <div className="path-card-body">
@@ -266,7 +284,7 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
             disabled={submitting}
           />
 
-          {error !== null && (
+          {(importError ?? error) !== null && (
             <div
               className="onboarding-hint"
               style={{
@@ -274,7 +292,7 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
                 marginTop: 12,
               }}
             >
-              ⚠ {error}
+              ⚠ {importError ?? error}
             </div>
           )}
 
@@ -294,10 +312,32 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
               type="button"
               className="onboarding-submit"
               disabled={!canSubmit}
-              onClick={() => void handleSubmit()}
+              onClick={() => void handleBlankAnalyse()}
             >
               {submitting ? '⋯' : t('onboarding.start_chat_cta')}
             </button>
+          </div>
+        </main>
+      )}
+
+      {step === 'blank-analysing' && (
+        <main className="onboarding">
+          <h1 className="onboarding-title">
+            {t('onboarding.waiting_title')}
+          </h1>
+          <p className="onboarding-lead">
+            {t('onboarding.blank_analysing')}
+          </p>
+          <div
+            className="onboarding-hint"
+            style={{
+              marginTop: 48,
+              textAlign: 'center',
+              fontSize: 14,
+              color: 'rgba(255, 255, 255, 0.45)',
+            }}
+          >
+            ⋯
           </div>
         </main>
       )}
@@ -391,7 +431,7 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
         </main>
       )}
 
-      {step === 'import-review' && bootstrap !== null && (
+      {step === 'review' && extract !== null && (
         <main className="onboarding">
           <h1 className="onboarding-title">
             {t('onboarding.review_title')}
@@ -400,56 +440,97 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
             </span>
           </h1>
           <p className="onboarding-lead">
-            {t('onboarding.review_lead', {
-              events: bootstrap.source_event_count,
-              thoughts: bootstrap.source_thought_count,
-            })}
+            {extractSource === 'import_upload'
+              ? t('onboarding.review_lead', {
+                  events: extract.events.length,
+                  thoughts: extract.thoughts.length,
+                })
+              : t('onboarding.review_lead_blank')}
           </p>
 
-          <div className="onboarding-blocks">
-            <BlockField
-              label={t('onboarding.review_block_persona')}
-              engName="persona_block"
-              value={draftPersona}
-              onChange={setDraftPersona}
-              rows={6}
+          <section className="facts-section">
+            <header className="facts-section-header">
+              {t('onboarding.review_section_facts')}
+            </header>
+            <PersonaFactsEditor
+              value={draftFacts}
+              onChange={setDraftFacts}
               disabled={submitting}
             />
-            <BlockField
-              label={t('onboarding.review_block_self')}
-              engName="self_block"
-              hint={t('onboarding.review_block_self_hint')}
-              value={draftSelf}
-              onChange={setDraftSelf}
-              rows={3}
-              disabled={submitting}
-            />
-            <BlockField
-              label={t('onboarding.review_block_user')}
-              engName="user_block"
-              value={draftUser}
-              onChange={setDraftUser}
-              rows={6}
-              disabled={submitting}
-            />
-            <BlockField
-              label={t('onboarding.review_block_relationship')}
-              engName="relationship_block"
-              value={draftRelationship}
-              onChange={setDraftRelationship}
-              rows={5}
-              disabled={submitting}
-            />
-            <BlockField
-              label={t('onboarding.review_block_mood')}
-              engName="mood_block"
-              hint={t('onboarding.review_block_mood_hint')}
-              value={draftMood}
-              onChange={setDraftMood}
-              rows={2}
-              disabled={submitting}
-            />
-          </div>
+          </section>
+
+          <section className="facts-section">
+            <header className="facts-section-header">
+              {t('onboarding.review_section_blocks')}
+            </header>
+            <div className="onboarding-blocks">
+              <BlockField
+                label={t('onboarding.review_block_persona')}
+                engName="persona_block"
+                value={draftPersona}
+                onChange={setDraftPersona}
+                rows={6}
+                disabled={submitting}
+              />
+              <BlockField
+                label={t('onboarding.review_block_self')}
+                engName="self_block"
+                hint={t('onboarding.review_block_self_hint')}
+                value={draftSelf}
+                onChange={setDraftSelf}
+                rows={3}
+                disabled={submitting}
+              />
+              <BlockField
+                label={t('onboarding.review_block_user')}
+                engName="user_block"
+                value={draftUser}
+                onChange={setDraftUser}
+                rows={6}
+                disabled={submitting}
+              />
+              <BlockField
+                label={t('onboarding.review_block_relationship')}
+                engName="relationship_block"
+                value={draftRelationship}
+                onChange={setDraftRelationship}
+                rows={5}
+                disabled={submitting}
+              />
+              <BlockField
+                label={t('onboarding.review_block_mood')}
+                engName="mood_block"
+                hint={t('onboarding.review_block_mood_hint')}
+                value={draftMood}
+                onChange={setDraftMood}
+                rows={2}
+                disabled={submitting}
+              />
+            </div>
+          </section>
+
+          {extractSource === 'import_upload' && draftEvents.length > 0 && (
+            <section className="facts-section">
+              <header className="facts-section-header">
+                {t('onboarding.review_section_events')}
+              </header>
+              <ul
+                style={{
+                  fontSize: 13,
+                  color: 'rgba(255, 255, 255, 0.64)',
+                  paddingLeft: 18,
+                  margin: 0,
+                }}
+              >
+                {draftEvents.map((ev, i) => (
+                  <li key={i} style={{ marginBottom: 6 }}>
+                    impact {ev.emotional_impact >= 0 ? '+' : ''}
+                    {ev.emotional_impact} · {ev.description}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           {error !== null && (
             <div

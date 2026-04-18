@@ -45,6 +45,20 @@ from echovessel.prompts.persona_bootstrap import (
     format_persona_bootstrap_user_prompt,
     parse_persona_bootstrap_response,
 )
+from echovessel.prompts.persona_facts import (
+    ENUM_EDUCATION_LEVEL,
+    ENUM_GENDER,
+    ENUM_HEALTH_STATUS,
+    ENUM_LIFE_STAGE,
+    ENUM_RELATIONSHIP_STATUS,
+    FACT_FIELDS,
+    PERSONA_FACTS_SYSTEM_PROMPT,
+    ExtractedFacts,
+    ExtractedPersona,
+    PersonaFactsParseError,
+    format_persona_facts_user_prompt,
+    parse_persona_facts_response,
+)
 from echovessel.prompts.reflection import (
     MAX_THOUGHTS,
     RECOMMENDED_IMPACT_BOUND,
@@ -96,4 +110,17 @@ __all__ = [
     "PersonaBootstrapParseError",
     "format_persona_bootstrap_user_prompt",
     "parse_persona_bootstrap_response",
+    # persona facts
+    "PERSONA_FACTS_SYSTEM_PROMPT",
+    "FACT_FIELDS",
+    "ENUM_GENDER",
+    "ENUM_EDUCATION_LEVEL",
+    "ENUM_RELATIONSHIP_STATUS",
+    "ENUM_LIFE_STAGE",
+    "ENUM_HEALTH_STATUS",
+    "ExtractedFacts",
+    "ExtractedPersona",
+    "PersonaFactsParseError",
+    "format_persona_facts_user_prompt",
+    "parse_persona_facts_response",
 ]

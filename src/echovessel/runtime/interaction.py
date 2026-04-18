@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 from sqlmodel import Session as DbSession
@@ -32,7 +32,7 @@ from sqlmodel import Session as DbSession
 from echovessel.channels.base import IncomingMessage, IncomingTurn
 from echovessel.core.types import BlockLabel, MessageRole
 from echovessel.memory.ingest import ingest_message
-from echovessel.memory.models import CoreBlock, RecallMessage
+from echovessel.memory.models import CoreBlock, Persona, RecallMessage
 from echovessel.memory.retrieve import (
     list_recall_messages,
     load_core_blocks,
@@ -91,8 +91,47 @@ __all__ = [
     "IncomingMessage",
     "IncomingTurn",
     "AssembledTurn",
+    "PersonaFactsView",
     "assemble_turn",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class PersonaFactsView:
+    """Read-only snapshot of the five biographic facts the system prompt
+    renders in its "# Who you are" section (C option from the
+    ``2026-04-persona-facts`` initiative plan).
+
+    The persona row carries fifteen biographic columns, but only these
+    five influence the LLM's sense of "who am I playing" enough to be
+    worth the prompt budget — timezone, relationship_status, etc are used
+    by system code (birthday reminders, locale detection) and stay out
+    of the prompt. Unset fields are ``None`` and are skipped by the
+    renderer; an all-``None`` view is equivalent to today's pre-facts
+    behaviour.
+    """
+
+    full_name: str | None = None
+    gender: str | None = None
+    birth_date: date | None = None
+    occupation: str | None = None
+    native_language: str | None = None
+
+    @classmethod
+    def empty(cls) -> PersonaFactsView:
+        return cls()
+
+    @classmethod
+    def from_persona_row(cls, row: Persona | None) -> PersonaFactsView:
+        if row is None:
+            return cls.empty()
+        return cls(
+            full_name=row.full_name,
+            gender=row.gender,
+            birth_date=row.birth_date,
+            occupation=row.occupation,
+            native_language=row.native_language,
+        )
 
 
 @dataclass(slots=True)
@@ -256,6 +295,20 @@ async def assemble_turn(
             log.warning("load_core_blocks failed; continuing with empty: %s", e)
             core_blocks = []
 
+        # ---- Step 2b: persona biographic facts (C-option renderer) ----
+        # Five columns on the persona row (name / gender / birth_date /
+        # occupation / native_language) get injected into the system
+        # prompt's "# Who you are" section. A missing Persona row or
+        # all-null columns is equivalent to pre-facts behaviour.
+        persona_facts = PersonaFactsView.empty()
+        try:
+            persona_row = ctx.db.get(Persona, ctx.persona_id)
+            persona_facts = PersonaFactsView.from_persona_row(persona_row)
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "load persona facts failed; continuing with empty view: %s", e
+            )
+
         # ---- Step 3: L3/L4 retrieval (query = last user message) ---
         top_memories: list = []
         try:
@@ -294,6 +347,7 @@ async def assemble_turn(
         system_prompt = build_system_prompt(
             persona_display_name=ctx.persona_display_name,
             core_blocks=core_blocks,
+            persona_facts=persona_facts,
         )
         user_prompt = build_turn_user_prompt(
             top_memories=top_memories,
@@ -434,18 +488,44 @@ def build_system_prompt(
     *,
     persona_display_name: str,
     core_blocks: list[CoreBlock],
+    persona_facts: PersonaFactsView | None = None,
 ) -> str:
     """Assemble the system prompt for one turn.
 
-    Structure follows spec §7.2. Core blocks are rendered in a fixed order;
-    missing blocks are silently skipped. The STYLE_INSTRUCTIONS block is
-    ALWAYS appended last.
+    Structure follows spec §7.2 plus the ``2026-04-persona-facts``
+    C-option addition: five structured facts (name / gender / birth
+    year / occupation / native language) render as a ``# Who you are``
+    section between the greeting and the existing core blocks. Any of
+    those facts being ``None`` skips that bullet; an all-``None`` view
+    (or ``persona_facts=None``) produces the same prompt as before the
+    initiative landed.
+
+    Core blocks are rendered in a fixed order; missing blocks are
+    silently skipped. The STYLE_INSTRUCTIONS block is ALWAYS appended
+    last.
     """
     lines: list[str] = [
         f"You are {persona_display_name}, a long-term companion who talks",
         "with this user as a real friend, not an assistant.",
         "",
     ]
+
+    facts = persona_facts or PersonaFactsView.empty()
+    fact_lines: list[str] = []
+    if facts.full_name:
+        fact_lines.append(f"- Name: {facts.full_name}")
+    if facts.gender:
+        fact_lines.append(f"- Gender: {facts.gender}")
+    if facts.birth_date:
+        fact_lines.append(f"- Born: {facts.birth_date.year}")
+    if facts.occupation:
+        fact_lines.append(f"- Occupation: {facts.occupation}")
+    if facts.native_language:
+        fact_lines.append(f"- Native language: {facts.native_language}")
+    if fact_lines:
+        lines.append("# Who you are")
+        lines.extend(fact_lines)
+        lines.append("")
 
     by_label: dict[str, CoreBlock] = {}
     for b in core_blocks:
@@ -569,6 +649,7 @@ __all__ = [
     "IncomingMessage",
     "IncomingTurn",
     "AssembledTurn",
+    "PersonaFactsView",
     "TurnContext",
     "OnTokenCb",
     "OnTurnDoneCb",

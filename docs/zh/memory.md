@@ -20,6 +20,8 @@
 
 **L1 core blocks** — 短小、稳定的文本段，无条件注入每次 prompt。`core_blocks` 表里住着五个 label：`persona`、`self`、`mood`、`user`、`relationship`。前三个跨用户共享（persona 是一个角色，它的自我形象和情绪不会因用户不同而 fork）。后两个按用户分份，key 是 `(persona_id, user_id)`。每个 block 上限 5000 字符，并且在 `core_block_appends` 里有一份 append-only 审计日志。
 
+**生平事实**(Biographic facts)— 跟 core blocks 并排住在 `personas` 行本身的十五个结构化身份列(`full_name`、`gender`、`birth_date`、`nationality`、`native_language`、`timezone`、`occupation`、`relationship_status`、…)。这些字段之所以跟散文 block 分开放,是因为代码想知道"她是什么时区"或"她是哪年生的"时可以直接查列,不用重新解析 persona block 里那段散文。十五个全部可空 — onboarding 时 LLM 抽取能填什么就填什么,用户在 review 页面校对剩下的。其中五个(姓名 / 性别 / 出生年 / 职业 / 母语)会在每个 turn 渲进系统 prompt 的 "# Who you are" 段;另外十个只供系统代码使用。
+
 **L2 raw messages** — 每一条用户消息和 persona 回复都原样写进 `recall_messages`。这是档案级的 ground truth。表里每行带一个 `channel_id`，这样前端可以渲染"via Web"或"via Discord"的小标签，但进 prompt 的查询从不在它上面过滤。L2 用 FTS5 建了索引作为关键字兜底，但**不参与**主检索 pipeline；它是所有其他路径失败时系统能永远回落的那一层。
 
 **L3 events** — 从一个关闭的 session 里抽取出的事实。以 `type='event'` 的 `ConceptNode` 行存储：一段自然语言描述、一个 `-10..+10` 的 `emotional_impact`、emotion 和 relational 标签、一份存在 sqlite-vec 伴随表里的 embedding，以及一个指回 `source_session_id` 的溯源指针。Events 是 episodic 记忆的主要单位——"那次用户告诉我 Mochi 做了手术的对话"。

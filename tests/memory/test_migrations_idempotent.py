@@ -37,6 +37,7 @@ def test_migrations_rerun_is_noop_on_fresh_db():
 
     cols_before = _column_names(engine, "recall_messages")
     concept_before = _column_names(engine, "concept_nodes")
+    personas_before = _column_names(engine, "personas")
 
     # Run the migration a second time — should complete silently
     ensure_schema_up_to_date(engine)
@@ -44,9 +45,11 @@ def test_migrations_rerun_is_noop_on_fresh_db():
 
     cols_after = _column_names(engine, "recall_messages")
     concept_after = _column_names(engine, "concept_nodes")
+    personas_after = _column_names(engine, "personas")
 
     assert cols_before == cols_after
     assert concept_before == concept_after
+    assert personas_before == personas_after
 
 
 def test_migrations_rerun_preserves_new_table():
@@ -77,6 +80,27 @@ def test_migrations_v03_columns_present_after_create_all():
     # Retry-safety columns (2026-04 P0 fix)
     assert "extracted_events" in sessions_cols
     assert "extracted_events_at" in sessions_cols
+
+    # Persona biographic facts (2026-04 · persona-facts initiative)
+    personas_cols = _column_names(engine, "personas")
+    for expected in (
+        "full_name",
+        "gender",
+        "birth_date",
+        "ethnicity",
+        "nationality",
+        "native_language",
+        "locale_region",
+        "education_level",
+        "occupation",
+        "occupation_field",
+        "location",
+        "timezone",
+        "relationship_status",
+        "life_stage",
+        "health_status",
+    ):
+        assert expected in personas_cols, f"missing personas.{expected}"
 
 
 def test_migrations_upgrade_legacy_db_without_retry_safety_columns():

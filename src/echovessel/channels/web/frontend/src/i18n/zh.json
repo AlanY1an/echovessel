@@ -275,7 +275,12 @@
     "waiting_lead": "LLM 正在把你的材料拆成事件和长期印象,然后写出 persona 的 5 个 block 草稿。通常一两分钟。",
     "review_title": "初稿来了",
     "review_punct": "。",
-    "review_lead": "基于你的材料({{events}} 个事件 · {{thoughts}} 条长期印象),LLM 写出了这 5 个 block 的草稿。任何一条都可以改。满意后点 \"完成\"。",
+    "review_lead": "基于你的材料({{events}} 个事件 · {{thoughts}} 条长期印象),LLM 起草了 5 个 block 和一组生平事实。任何一条都可以改。满意后点 \"完成\"。",
+    "review_lead_blank": "LLM 从你写的内容里抽出了 5 个 block 和生平事实。不对的直接改,不确定的留空也行。合适就点完成。",
+    "review_section_facts": "基础信息",
+    "review_section_blocks": "Persona 描述",
+    "review_section_events": "提取的事件",
+    "blank_analysing": "LLM 正在读你写的内容,抽出结构化事实。通常不到一分钟。",
     "review_block_persona": "这个 persona 是谁",
     "review_block_self": "persona 对自己的认知",
     "review_block_self_hint": "通常在 onboarding 时留空 · 之后由反思自动积累",
@@ -292,5 +297,69 @@
     "network": "网络错误 · 请检查 daemon 是否还在运行",
     "send_failed": "发送失败",
     "save_failed": "保存失败"
+  },
+  "facts": {
+    "section_title": "基础信息",
+    "section_hint": "LLM 尽力抽取 · 空的部分随时可以填 · 后面 admin 里也能改",
+    "re_extract_cta": "从已有 blocks 重新抽取",
+    "re_extracting": "正在重新抽取⋯",
+    "unknown_option": "— 未知 —",
+    "full_name": "姓名",
+    "full_name_placeholder": "例:张丽华",
+    "gender": "性别",
+    "birth_date": "生日",
+    "birth_date_hint": "只知道年份也可以 · 存为那年 1 月 1 日",
+    "ethnicity": "民族",
+    "ethnicity_placeholder": "例:汉",
+    "nationality": "国籍",
+    "nationality_placeholder": "ISO 码 · 如 CN、US、JP",
+    "native_language": "母语",
+    "native_language_placeholder": "BCP 47 · 如 zh-CN、en-US",
+    "locale_region": "地区",
+    "locale_region_placeholder": "例:东北、湾区",
+    "education_level": "学历",
+    "occupation": "职业",
+    "occupation_placeholder": "例:retired_teacher",
+    "occupation_field": "职业领域",
+    "occupation_field_placeholder": "例:literature、fintech",
+    "location": "居住地",
+    "location_placeholder": "例:沈阳、Bay Area",
+    "timezone": "时区",
+    "timezone_placeholder": "IANA · 如 Asia/Shanghai",
+    "relationship_status": "感情状态",
+    "life_stage": "生命阶段",
+    "health_status": "健康状况",
+    "enum": {
+      "gender": {
+        "female": "女",
+        "male": "男",
+        "non_binary": "非二元"
+      },
+      "education_level": {
+        "high_school": "高中",
+        "bachelor": "本科",
+        "master": "硕士",
+        "phd": "博士"
+      },
+      "relationship_status": {
+        "single": "未婚",
+        "married": "已婚",
+        "widowed": "丧偶",
+        "divorced": "离异"
+      },
+      "life_stage": {
+        "student": "学生",
+        "working": "在职",
+        "retired": "退休",
+        "new_parent": "新手父母",
+        "between_jobs": "待业"
+      },
+      "health_status": {
+        "healthy": "健康",
+        "chronic_illness": "慢性病",
+        "recovering": "康复中",
+        "serious": "重症"
+      }
+    }
   }
 }

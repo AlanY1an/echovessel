@@ -112,23 +112,35 @@ This sends the same signal the keystroke does and works even if the `run` termin
 
 ## Step 4 · Onboard your persona
 
-When the browser loads the URL for the first time, it shows a one-page onboarding form. The five text areas map directly to the persona's long-term memory core blocks.
+When the browser loads the URL for the first time, it shows a two-path onboarding wizard. Pick whichever matches how much material you already have:
+
+- **Write from scratch** — type a paragraph about who this persona is. Good when you have a specific character in mind and want total control.
+- **Upload material** — paste a bio, a journal, or chat logs with a persona you already like. The import pipeline runs once, extracts events and thoughts, and drafts the initial long-term memory from them.
+
+Both paths converge on the same **review page**. The LLM reads whatever you gave it, fills in a review form, and hands it back to you to confirm. The form has two sections.
+
+**Biographic facts — 15 fields, all optional.**
+
+The LLM tries to extract structured identity data (name, gender, birth date, nationality, timezone, occupation, relationship status, and so on). You can correct anything it got wrong or leave fields blank. Five of these — full name, gender, birth year, occupation, native language — get injected into the system prompt on every turn as a short "who you are" bullet list. The other ten are stored for admin queries and future features (birthday reminders, locale-aware phrasing, etc.).
+
+**Five prose core blocks — five fields, Persona block is the one that matters most.**
 
 | Field | What goes here |
 | --- | --- |
 | **Display name** | A friendly name you will see in the chat. Required. |
-| **Persona block** | Who the persona is: personality traits, voice, values, anything that should stay true across every conversation. This is the one block that really matters for a good first experience. Required. |
+| **Persona block** | Who the persona is: personality traits, voice, values, anything that should stay true across every conversation. This is the one block that really matters for a good first experience. |
 | **Self block** | How the persona thinks about themselves, written in first person. Optional — leave blank and it will fill in naturally as you talk. |
 | **User block** | What the persona knows about you, written in third person. Optional. |
+| **Relationship block** | People around you the persona should know — family, close friends, pets. Optional. |
 | **Mood block** | How the persona feels right now. Optional. |
 
 A minimal first onboarding is just a display name and two or three sentences of persona block. Everything else you leave blank, and the daemon grows it from conversation through the background consolidate pass.
 
-Submit the form. You will be routed to the chat view.
+Click **Finish**. You will be routed to the chat view.
 
 ### Where the onboarding data lives
 
-The form maps to a single admin API call that writes each non-empty field into the core-block layer of long-term memory. The same blocks are reloaded on every conversation turn and injected into the LLM prompt, so anything you write here shows up immediately in the persona's behaviour. You can edit them later from the admin panel without restarting the daemon.
+The review page submit maps to a single admin API call. Block text lands in the core-block memory layer; biographic facts land as structured columns on the persona row. Both are reloaded on every conversation turn and fed into the LLM prompt, so anything you write here shows up immediately in the persona's behaviour. You can edit both from the admin panel later without restarting the daemon.
 
 ---
 

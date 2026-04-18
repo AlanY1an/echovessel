@@ -33,6 +33,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   getPersona,
   getState,
+  patchPersonaFacts,
   postOnboarding,
   postPersonaUpdate,
   postVoiceToggle,
@@ -41,6 +42,7 @@ import type {
   ChatEvent,
   DaemonState,
   OnboardingPayload,
+  PersonaFacts,
   PersonaStateApi,
   PersonaUpdatePayload,
 } from '../api/types'
@@ -54,6 +56,7 @@ export interface UsePersonaResult {
   error: string | null
   refresh(): Promise<void>
   updatePersona(payload: PersonaUpdatePayload): Promise<void>
+  updateFacts(facts: Partial<PersonaFacts>): Promise<void>
   toggleVoice(enabled: boolean): Promise<void>
   completeOnboarding(payload: OnboardingPayload): Promise<void>
 }
@@ -196,6 +199,23 @@ export function usePersona(): UsePersonaResult {
     [refresh],
   )
 
+  const updateFacts = useCallback(
+    async (facts: Partial<PersonaFacts>): Promise<void> => {
+      setError(null)
+      try {
+        const result = await patchPersonaFacts({ facts })
+        // Optimistic local update: server echo is authoritative.
+        setPersona((prev) =>
+          prev === null ? prev : { ...prev, facts: result.facts },
+        )
+      } catch (err) {
+        setError(errorMessage(err))
+        throw err
+      }
+    },
+    [],
+  )
+
   return {
     persona,
     daemonState,
@@ -203,6 +223,7 @@ export function usePersona(): UsePersonaResult {
     error,
     refresh,
     updatePersona,
+    updateFacts,
     toggleVoice,
     completeOnboarding,
   }

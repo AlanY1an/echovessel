@@ -275,7 +275,12 @@
     "waiting_lead": "The LLM is breaking your material into events and thoughts, then drafting the 5 persona blocks. Usually a minute or two.",
     "review_title": "Draft ready",
     "review_punct": ".",
-    "review_lead": "Based on your material ({{events}} events · {{thoughts}} thoughts), the LLM wrote these 5 block drafts. Edit anything you like. Click \"Finish\" when satisfied.",
+    "review_lead": "Based on your material ({{events}} events · {{thoughts}} thoughts), the LLM wrote these 5 block drafts plus a set of biographic facts. Edit anything you like. Click \"Finish\" when satisfied.",
+    "review_lead_blank": "Here's what the LLM pulled from your prose — 5 blocks plus biographic facts. Edit anything you like; leave unknowns blank. Click \"Finish\" when satisfied.",
+    "review_section_facts": "Basic information",
+    "review_section_blocks": "Persona description",
+    "review_section_events": "Extracted events",
+    "blank_analysing": "The LLM is reading your prose and pulling out structured facts. Usually under a minute.",
     "review_block_persona": "Who this persona is",
     "review_block_self": "How the persona sees herself",
     "review_block_self_hint": "Usually left blank at onboarding · accrues through reflection later",
@@ -292,5 +297,69 @@
     "network": "Network error · is the daemon still running?",
     "send_failed": "Send failed",
     "save_failed": "Save failed"
+  },
+  "facts": {
+    "section_title": "Basic information",
+    "section_hint": "The LLM pulled out what it could · leave unknowns blank · you can edit anytime",
+    "re_extract_cta": "Re-run extraction from blocks",
+    "re_extracting": "Re-running⋯",
+    "unknown_option": "— unknown —",
+    "full_name": "Full name",
+    "full_name_placeholder": "e.g. Zhang Lihua",
+    "gender": "Gender",
+    "birth_date": "Birth date",
+    "birth_date_hint": "year-only is OK — save as Jan 1 of that year",
+    "ethnicity": "Ethnicity",
+    "ethnicity_placeholder": "e.g. Han Chinese",
+    "nationality": "Nationality",
+    "nationality_placeholder": "ISO code · e.g. CN, US, JP",
+    "native_language": "Native language",
+    "native_language_placeholder": "BCP 47 · e.g. zh-CN, en-US",
+    "locale_region": "Region",
+    "locale_region_placeholder": "e.g. Northeast China, Bay Area",
+    "education_level": "Education",
+    "occupation": "Occupation",
+    "occupation_placeholder": "e.g. retired_teacher",
+    "occupation_field": "Field",
+    "occupation_field_placeholder": "e.g. literature, fintech",
+    "location": "Location",
+    "location_placeholder": "e.g. Shenyang, Tokyo",
+    "timezone": "Timezone",
+    "timezone_placeholder": "IANA · e.g. Asia/Shanghai",
+    "relationship_status": "Relationship status",
+    "life_stage": "Life stage",
+    "health_status": "Health",
+    "enum": {
+      "gender": {
+        "female": "Female",
+        "male": "Male",
+        "non_binary": "Non-binary"
+      },
+      "education_level": {
+        "high_school": "High school",
+        "bachelor": "Bachelor's",
+        "master": "Master's",
+        "phd": "Doctorate"
+      },
+      "relationship_status": {
+        "single": "Single",
+        "married": "Married",
+        "widowed": "Widowed",
+        "divorced": "Divorced"
+      },
+      "life_stage": {
+        "student": "Student",
+        "working": "Working",
+        "retired": "Retired",
+        "new_parent": "New parent",
+        "between_jobs": "Between jobs"
+      },
+      "health_status": {
+        "healthy": "Healthy",
+        "chronic_illness": "Chronic illness",
+        "recovering": "Recovering",
+        "serious": "Serious condition"
+      }
+    }
   }
 }

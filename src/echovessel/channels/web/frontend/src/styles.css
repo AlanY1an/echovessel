@@ -3311,3 +3311,66 @@ input, textarea {
   .voice-clone-activate-actions button { width: 100%; }
 }
 
+/* ── Persona facts editor (2026-04 · persona-facts) ───────────────── */
+
+.facts-editor {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.facts-row {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  align-items: center;
+  gap: 16px;
+}
+
+.facts-row-label {
+  font-size: 13px;
+  color: var(--cream-soft);
+  font-family: var(--font-sans);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.facts-row-hint {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.36);
+}
+
+.facts-row-input {
+  background: var(--dusk);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--cream);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.3s ease;
+}
+
+.facts-row-input:focus {
+  border-color: var(--ember-soft);
+}
+
+.facts-section {
+  margin-bottom: 28px;
+}
+
+.facts-section-header {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--cream);
+  margin-bottom: 12px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 720px) {
+  .facts-row { grid-template-columns: 1fr; }
+  .facts-row-label { flex-direction: row; gap: 8px; align-items: center; }
+}
+

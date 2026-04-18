@@ -71,6 +71,58 @@ export interface PersonaStateApi {
     mood: string
     relationship: string
   }
+  facts: PersonaFacts
+}
+
+// ─── Biographic facts (2026-04 persona-facts initiative) ────────────────
+
+/**
+ * Structured biographic facts that live alongside the five prose core
+ * blocks on the persona row. Every field is optional; nulls mean "not
+ * set / unknown". Enum-valued fields (gender, education_level,
+ * relationship_status, life_stage, health_status) use the same vocabulary
+ * the backend's LLM extractor emits — see
+ * ``src/echovessel/prompts/persona_facts.py``.
+ *
+ * birth_date is carried on the wire as an ISO YYYY-MM-DD string; the
+ * UI renders it with an <input type="date">. Year-only dates use
+ * YYYY-01-01.
+ */
+export interface PersonaFacts {
+  full_name: string | null
+  gender: string | null // 'female' | 'male' | 'non_binary' | null
+  birth_date: string | null // ISO YYYY-MM-DD
+  ethnicity: string | null
+  nationality: string | null // ISO 3166-1 alpha-2
+  native_language: string | null // BCP 47
+  locale_region: string | null
+  education_level: string | null // 'high_school' | 'bachelor' | 'master' | 'phd'
+  occupation: string | null
+  occupation_field: string | null
+  location: string | null
+  timezone: string | null // IANA
+  relationship_status: string | null // 'single' | 'married' | 'widowed' | 'divorced'
+  life_stage: string | null // 'student' | 'working' | 'retired' | 'new_parent' | 'between_jobs'
+  health_status: string | null // 'healthy' | 'chronic_illness' | 'recovering' | 'serious'
+}
+
+/** Blank facts object with every key explicitly null. */
+export const EMPTY_PERSONA_FACTS: PersonaFacts = {
+  full_name: null,
+  gender: null,
+  birth_date: null,
+  ethnicity: null,
+  nationality: null,
+  native_language: null,
+  locale_region: null,
+  education_level: null,
+  occupation: null,
+  occupation_field: null,
+  location: null,
+  timezone: null,
+  relationship_status: null,
+  life_stage: null,
+  health_status: null,
 }
 
 // ─── HTTP · POST /api/admin/persona/onboarding ───────────────────────────
@@ -86,11 +138,78 @@ export interface OnboardingPayload {
   self_block: string
   user_block: string
   mood_block: string
+  /** Optional biographic facts written to the persona row alongside
+   *  the core blocks. Omit or send null to leave every fact unset. */
+  facts?: PersonaFacts | null
 }
 
 export interface OnboardingResponse {
   ok: true
   persona_id: string
+}
+
+// ─── HTTP · POST /api/admin/persona/extract-from-input ───────────────────
+
+/**
+ * Body for the unified extraction endpoint. ``input_type`` picks the
+ * path:
+ *
+ * - ``blank_write`` — user typed prose into the five block editors; we
+ *   feed it back to the LLM to derive structured facts.
+ * - ``import_upload`` — caller supplies ``upload_id`` (fresh pipeline)
+ *   or ``pipeline_id`` (already running); we wait for done, then run
+ *   extraction over the produced events + thoughts.
+ */
+export interface PersonaExtractRequest {
+  input_type: 'blank_write' | 'import_upload'
+  user_input?: string
+  existing_blocks?: {
+    persona_block?: string
+    self_block?: string
+    user_block?: string
+    mood_block?: string
+    relationship_block?: string
+  }
+  locale?: string
+  persona_display_name?: string
+  upload_id?: string
+  pipeline_id?: string
+}
+
+/** One imported L3 event row shown on the review page (path B only). */
+export interface ExtractedEvent {
+  description: string
+  emotional_impact: number
+  relational_tags: string[]
+}
+
+export interface PersonaExtractResponse {
+  input_type: 'blank_write' | 'import_upload'
+  core_blocks: {
+    persona_block: string
+    self_block: string
+    user_block: string
+    mood_block: string
+    relationship_block: string
+  }
+  facts: PersonaFacts
+  facts_confidence: number
+  events: ExtractedEvent[]
+  thoughts: string[]
+  pipeline_status: string | null
+}
+
+// ─── HTTP · PATCH /api/admin/persona/facts ──────────────────────────────
+
+/** Partial update — only the supplied keys are written; omitted keys
+ *  keep their existing value, explicit nulls clear. */
+export interface PersonaFactsUpdatePayload {
+  facts: Partial<PersonaFacts>
+}
+
+export interface PersonaFactsUpdateResponse {
+  ok: true
+  facts: PersonaFacts
 }
 
 // ─── HTTP · POST /api/admin/persona/bootstrap-from-material ─────────────
