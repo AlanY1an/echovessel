@@ -108,3 +108,49 @@ async def test_dispatcher_runs_handler_for_each_message():
     await asyncio.wait_for(task, timeout=2.0)
 
     assert sorted(handled) == ["hi", "hi2"]
+
+
+async def test_dispatcher_times_out_hung_handler_and_continues():
+    """Hung handler must not block the queue.
+
+    Regression test for P1-2 (audit 2026-04-17). Prior to the timeout
+    wrapper, a handler stuck on an unresponsive `llm.stream` call would
+    hold the dispatcher indefinitely and every later message on every
+    channel queued behind it with no signal.
+    """
+    reg = ChannelRegistry()
+    reg.register(
+        FakeChannel("web", [_env("web", "hung"), _env("web", "next")])
+    )
+    await reg.start_all()
+
+    handled: list[str] = []
+
+    async def handler(env: IncomingMessage) -> None:
+        if env.content == "hung":
+            # Simulate a hung LLM: await something that will never
+            # complete within the test's lifetime. The dispatcher's
+            # per-turn timeout must cancel this and continue.
+            await asyncio.sleep(60)
+        else:
+            handled.append(env.content)
+
+    shutdown = asyncio.Event()
+    dispatcher = TurnDispatcher(
+        registry=reg,
+        handler=handler,
+        shutdown_event=shutdown,
+        turn_timeout_seconds=0.1,
+    )
+
+    task = asyncio.create_task(dispatcher.run())
+    for _ in range(40):
+        if handled:
+            break
+        await asyncio.sleep(0.05)
+    shutdown.set()
+    await asyncio.wait_for(task, timeout=2.0)
+
+    assert handled == ["next"], (
+        "dispatcher must abandon hung handler and process the next envelope"
+    )

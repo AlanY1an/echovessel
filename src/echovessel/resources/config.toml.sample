@@ -10,6 +10,11 @@
 data_dir = "~/.echovessel"
 # Root logger level. One of "debug" | "info" | "warn" | "error".
 log_level = "info"
+# Per-turn timeout for the serial TurnDispatcher (seconds). A handler
+# exceeding this budget — typically a hung LLM stream — is cancelled
+# so later messages on any channel aren't blocked behind it. Set to 0
+# to disable the timeout (not recommended). Default 120.
+turn_timeout_seconds = 120
 
 [persona]
 # Stable internal id for this persona. Changing it after the first

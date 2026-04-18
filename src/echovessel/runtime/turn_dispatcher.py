@@ -33,6 +33,12 @@ class TurnDispatcher:
     registry: ChannelRegistry
     handler: TurnHandler
     shutdown_event: asyncio.Event | None = None
+    # Per-turn wall-clock cap. None = no timeout (legacy behavior). When
+    # set, a handler that exceeds this budget is cancelled and the loop
+    # continues to the next envelope. See audit P1-2: without this,
+    # a hung `llm.stream` call blocks every subsequent turn on every
+    # channel with no signal to the operator.
+    turn_timeout_seconds: float | None = None
     _queue: asyncio.Queue[TurnEnvelope] = field(
         default_factory=asyncio.Queue, init=False
     )
@@ -64,7 +70,20 @@ class TurnDispatcher:
             except TimeoutError:
                 continue
             try:
-                await self.handler(envelope)
+                if self.turn_timeout_seconds is None:
+                    await self.handler(envelope)
+                else:
+                    await asyncio.wait_for(
+                        self.handler(envelope),
+                        timeout=self.turn_timeout_seconds,
+                    )
+            except TimeoutError:
+                log.error(
+                    "turn handler exceeded %.1fs timeout; cancelled and "
+                    "continuing. channel=%s",
+                    self.turn_timeout_seconds,
+                    getattr(envelope, "channel_id", "?"),
+                )
             except Exception as e:  # noqa: BLE001
                 log.error("turn handler crashed: %s", e, exc_info=True)
 

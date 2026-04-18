@@ -123,6 +123,8 @@ channel.incoming()   ┘        │
 
 这个流程里有几个细节值得记住。LLM 引用在 `_handle_turn` 开头被捕获为**本地快照**。一个热重载替换 `self.ctx.llm` 时,in-flight turn 不会受影响——老 provider 对象会活到 turn 的局部变量出作用域为止。没有锁、没有 epoch 计数器;Python 的引用语义免费搞定这件事。
 
+每一次 handler 调用都被 `asyncio.wait_for(..., timeout=runtime.turn_timeout_seconds)` 包住。挂掉的 `llm.stream`——最常见的触发方式是 provider 代理错配到一个能 TCP 连上但永远不回应的地址——会被取消,dispatcher 直接跳到下一个 envelope。默认是 120 秒;在 `config.toml` 里设为 0 可关闭(**不推荐**——一次挂住的 handler 会静默阻塞所有 channel 后续的每一条消息)。超时发生时,事件以 `error` 级别 log 出来并带上 channel id,任何已经写入 L2 的部分 token 保留,`on_turn_done` 仍然在 `finally` 里触发,channel 的 debounce 状态机能正常回卷。
+
 Persona 的回复**先写进 memory,再让 channel 发出去**。如果写入失败,send 被拒绝——守护进程宁可不发一句 persona 不记得自己说过的话。如果 send 失败但写入成功,回复仍然在 L2,客户端下次重连就能看到。这个顺序规则是 turn loop 里最重要的不变式。
 
 `on_turn_done` 永远恰好被调一次,位置是 `assemble_turn` 底部的 `finally` 块。Turn 成功时、LLM 瞬时错误只留下部分 token 时、LLM 永久错误一个 token 都没出来时、memory ingest 失败时——channel 永远被通知。没有这条不变式,一个 channel 的 debounce 状态机会永远挂在那里等一个早就结束的 turn。

@@ -24,6 +24,7 @@ Process-level settings for the daemon itself.
 | --- | --- | --- |
 | `data_dir` | `~/.echovessel` | Where everything lives: database, logs, voice cache, cloning fingerprint cache. If you set it to an absolute path, that path must be writable by the user running the daemon. |
 | `log_level` | `"info"` | One of `"debug"`, `"info"`, `"warn"`, `"error"`. `"debug"` is extremely chatty and includes every LLM prompt — useful only when chasing a bug. |
+| `turn_timeout_seconds` | `120` | Per-turn wall-clock cap for the serial TurnDispatcher handler. A handler exceeding this budget — typically a hung `llm.stream` — is cancelled so later messages on any channel are not blocked behind it. Set to `0` to disable (not recommended). |
 
 ## `[persona]`
 

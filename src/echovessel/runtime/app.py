@@ -692,10 +692,15 @@ class Runtime:
             )
             self._memory_observer = None
 
+        # Per-turn timeout: 0 (or missing) means no timeout (legacy
+        # behavior); any positive value caps each handler invocation.
+        # See audit P1-2 · `runtime.turn_timeout_seconds` in config.toml.
+        turn_timeout = self.ctx.config.runtime.turn_timeout_seconds
         self._dispatcher = TurnDispatcher(
             registry=self.ctx.registry,
             handler=self._handle_turn,
             shutdown_event=self.ctx.shutdown_event,
+            turn_timeout_seconds=turn_timeout if turn_timeout > 0 else None,
         )
 
         self._tasks = [

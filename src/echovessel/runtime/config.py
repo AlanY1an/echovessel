@@ -35,6 +35,12 @@ class RuntimeSection(BaseModel):
 
     data_dir: Path = Field(default_factory=lambda: Path("~/.echovessel"))
     log_level: Literal["debug", "info", "warn", "error"] = "info"
+    # Per-turn wall-clock cap for the serial TurnDispatcher handler.
+    # A handler exceeding this budget (typically a hung `llm.stream`)
+    # is cancelled and the dispatcher continues to the next envelope.
+    # Audit P1-2. 0 disables the timeout; default is 120s to align with
+    # the common LLM SDK default and leave room for long streams.
+    turn_timeout_seconds: float = Field(default=120.0, ge=0)
 
     @field_validator("data_dir", mode="before")
     @classmethod

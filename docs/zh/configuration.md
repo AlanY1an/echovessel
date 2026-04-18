@@ -24,6 +24,7 @@ Daemon 自身的进程级设置。
 | --- | --- | --- |
 | `data_dir` | `~/.echovessel` | 一切都落在这里:数据库、日志、语音缓存、克隆指纹缓存。设成绝对路径时,该路径必须对运行 daemon 的用户可写。 |
 | `log_level` | `"info"` | `"debug"` / `"info"` / `"warn"` / `"error"` 之一。`"debug"` 非常啰嗦,会打印每一条 LLM prompt——只在追 bug 时才用。 |
+| `turn_timeout_seconds` | `120` | 串行 TurnDispatcher handler 的 per-turn 挂钟超时。超过这个时间的 handler(通常是挂掉的 `llm.stream`)会被取消,后续 channel 的消息不会被它堵住。设为 `0` 关闭(不推荐)。 |
 
 ## `[persona]`
 
