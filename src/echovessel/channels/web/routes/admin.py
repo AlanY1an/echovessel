@@ -41,7 +41,16 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Body,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session as DbSession
@@ -1449,8 +1458,27 @@ def build_admin_router(
 
     @router.post("/api/admin/voice/samples")
     async def post_voice_sample(
+        request: Request,
         file: UploadFile = File(...),  # noqa: B008 - FastAPI marker
     ) -> dict[str, Any]:
+        # Reject oversize uploads from the Content-Length header BEFORE
+        # reading the body — otherwise a multi-GB misclick would fully
+        # materialize in RAM before we rejected it. Audit P1-6.
+        declared_length = request.headers.get("content-length")
+        if declared_length is not None:
+            try:
+                if int(declared_length) > _VOICE_SAMPLE_MAX_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=(
+                            f"sample exceeds "
+                            f"{_VOICE_SAMPLE_MAX_BYTES // 1_000_000} MB"
+                        ),
+                    )
+            except ValueError:
+                # Malformed header — let the bounded read below catch it.
+                pass
+
         data = await file.read()
         if not data:
             raise HTTPException(

@@ -30,6 +30,12 @@ import type {
   VoiceSample,
 } from '../api/types'
 
+// Upper bound per sample. Must stay in sync with the backend constant
+// `_VOICE_SAMPLE_MAX_BYTES` in src/echovessel/channels/web/routes/admin.py.
+// Checked client-side so a misclicked movie file doesn't stream hundreds
+// of megabytes to localhost before the daemon rejects it.
+const MAX_VOICE_SAMPLE_BYTES = 50 * 1024 * 1024
+
 export type WizardStep = 'upload' | 'clone' | 'preview'
 
 export interface UseVoiceCloneResult {
@@ -79,6 +85,13 @@ export function useVoiceClone(): UseVoiceCloneResult {
   const uploadSample = useCallback(
     async (file: File) => {
       setError(null)
+      if (file.size > MAX_VOICE_SAMPLE_BYTES) {
+        const mb = (file.size / (1024 * 1024)).toFixed(1)
+        setError(
+          `File too large: ${mb}MB exceeds the 50MB per-sample limit`,
+        )
+        return
+      }
       setUploading(true)
       try {
         await postVoiceSampleUpload(file)

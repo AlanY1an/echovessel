@@ -143,6 +143,50 @@ def test_post_voice_sample_rejects_empty_upload(tmp_path: Path) -> None:
     assert "empty" in resp.json()["detail"].lower()
 
 
+def test_post_voice_sample_rejects_oversize_before_reading_body(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Oversize uploads must 413 via the Content-Length header BEFORE the
+    body is materialized into memory.
+
+    Regression test for audit P1-6. The handler used to call
+    ``await file.read()`` unconditionally, then check the size — which
+    meant a 10 GB upload fully allocated memory before being rejected.
+    The fix reads ``Content-Length`` from the request headers and
+    short-circuits with 413 before any body read.
+    """
+    from starlette.datastructures import UploadFile as StarletteUploadFile
+
+    from echovessel.channels.web.routes import admin as admin_module
+
+    # Dial the cap down so we don't need a 50 MB body in the test.
+    monkeypatch.setattr(admin_module, "_VOICE_SAMPLE_MAX_BYTES", 10)
+
+    read_calls: list[int] = []
+    original_read = StarletteUploadFile.read
+
+    async def tracking_read(self, *args, **kwargs):
+        read_calls.append(1)
+        return await original_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(StarletteUploadFile, "read", tracking_read)
+
+    _rt, client, _cfg = _build(tmp_path)
+    with client:
+        # Body is 100 bytes; cap is 10. The Content-Length of the whole
+        # multipart body will be >> 10, so the early check fires.
+        resp = client.post(
+            "/api/admin/voice/samples",
+            files={"file": ("big.wav", b"x" * 100, "audio/wav")},
+        )
+
+    assert resp.status_code == 413, resp.text
+    assert read_calls == [], (
+        "UploadFile.read must NOT be called when Content-Length exceeds the "
+        "size cap — the header check has to short-circuit the handler"
+    )
+
+
 def test_get_voice_samples_lists_uploads_with_min_required(tmp_path: Path) -> None:
     _rt, client, _cfg = _build(tmp_path)
     with client:
