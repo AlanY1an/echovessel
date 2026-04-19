@@ -319,6 +319,22 @@ This invariant matters in both directions:
 
 Sessions that die in state `extracted_events=True, status=CLOSING` are retried safely by the worker. Sessions that transition to `FAILED` (catch-all in `consolidate_worker._mark_failed`) are terminal and never retried automatically; admin intervention is required to reset them.
 
+### Manual re-consolidation
+
+Idempotency lives in the persistent `Session.extracted` flag, not in worker memory. A running worker instance will re-consolidate any session that transitions into `status='closing', extracted=false` — **no daemon restart required**. This matters for debugging (change a consolidate threshold, re-run on an old session), for recovering `FAILED` sessions after fixing a root cause, and for any "please run this again" ops flow.
+
+Flip the flags directly:
+
+```sql
+UPDATE sessions
+   SET status = 'closing', extracted = 0, extracted_events = 0
+ WHERE id = 's_xxx';
+```
+
+Within one poll interval (default 5s) the worker picks the session up and runs `consolidate_session` against the current config. `is_trivial` is re-evaluated against the live `[consolidate].trivial_*` thresholds, so a session skipped under an old threshold can now extract events if the threshold was lowered.
+
+The same short-circuit applies even if someone force-appends an already-`extracted=True` session id onto the queue: `_process_one` reads the flag and returns without calling the extractor. The persistent flag is the single source of truth; there is no in-memory `seen` set.
+
 ### Schema migration
 
 `ensure_schema_up_to_date(engine)` is called before `create_all_tables(engine)` during daemon startup. It walks a hardcoded list of "add column if not exists" and "create table if not exists" steps, each guarded by `PRAGMA table_info` or a `sqlite_master` lookup. Every new column is either nullable or has a SQL default, so existing rows do not need backfilling. The migrator does not support renames, drops, or type changes — those are postponed to a later migration framework. Failure is fatal: a half-migrated schema fails fast at startup rather than silently corrupting writes later.

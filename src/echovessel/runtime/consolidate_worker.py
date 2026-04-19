@@ -11,6 +11,18 @@ Responsibilities:
 Scheduling model: a single asyncio task that sleeps between polls. The DB
 lives in the same process as this task (SQLite single-writer), so no
 cross-process coordination is needed.
+
+**Idempotency contract.** The single source of truth is the persistent
+``Session.extracted`` flag (plus ``Session.extracted_events`` for the
+stage-B flag). ``_process_one`` short-circuits on ``session.extracted``
+before running any LLM / DB work, so a session that has already been
+fully consolidated will never be consolidated again regardless of how
+many times it lands on the queue. There is NO in-memory "seen set" —
+that was an earlier belt-and-suspenders layer that prevented legitimate
+retries after crashes and blocked debug-time workflows like
+``UPDATE sessions SET status='closing', extracted=0`` to re-trigger
+consolidation without a daemon restart. The current design lets that
+SQL-flip trigger a retry within one poll interval (default 5s).
 """
 
 from __future__ import annotations
@@ -84,13 +96,11 @@ class ConsolidateWorker:
     trivial_message_count: int = TRIVIAL_MESSAGE_COUNT
     trivial_token_count: int = TRIVIAL_TOKEN_COUNT
     reflection_hard_limit_24h: int = REFLECTION_HARD_LIMIT_24H
-    _seen: set[str] = field(default_factory=set, init=False)
     _queue: list[str] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
         for sid in self.initial_session_ids:
-            if sid not in self._seen:
-                self._seen.add(sid)
+            if sid and sid not in self._queue:
                 self._queue.append(sid)
 
     # ---- Public entry point ------------------------------------------------
@@ -135,8 +145,7 @@ class ConsolidateWorker:
             )
             for s in db.exec(stmt):  # type: ignore[attr-defined]
                 sid = s.id
-                if sid and sid not in self._seen:
-                    self._seen.add(sid)
+                if sid and sid not in self._queue:
                     self._queue.append(sid)
 
     async def _process_one(self, session_id: str) -> None:
@@ -219,9 +228,7 @@ class ConsolidateWorker:
                 db.add(session)
                 db.commit()
         except Exception as e:  # noqa: BLE001
-            log.error(
-                "failed to mark session %s as FAILED: %s", session_id, e
-            )
+            log.error("failed to mark session %s as FAILED: %s", session_id, e)
 
 
 __all__ = ["ConsolidateWorker"]
