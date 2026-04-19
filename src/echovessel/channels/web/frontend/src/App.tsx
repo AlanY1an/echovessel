@@ -79,6 +79,10 @@ function AppShell() {
           persona !== null ? (
             <ChatRoute
               moodBlock={persona.core_blocks.mood}
+              displayName={persona.display_name}
+              voiceEnabled={persona.voice_enabled}
+              voiceId={persona.voice_id}
+              hasAvatar={persona.has_avatar}
             />
           ) : (
             <BootScreen />
@@ -110,11 +114,27 @@ function AppShell() {
 
 // ─── Route wrappers (inject useNavigate) ───
 
-function ChatRoute({ moodBlock }: { moodBlock: string }) {
+function ChatRoute({
+  moodBlock,
+  displayName,
+  voiceEnabled,
+  voiceId,
+  hasAvatar,
+}: {
+  moodBlock: string
+  displayName: string
+  voiceEnabled: boolean
+  voiceId: string | null
+  hasAvatar: boolean
+}) {
   const navigate = useNavigate()
   return (
     <Chat
       moodBlock={moodBlock}
+      displayName={displayName}
+      voiceEnabled={voiceEnabled}
+      voiceId={voiceId}
+      hasAvatar={hasAvatar}
       onOpenAdmin={() => navigate('/admin')}
     />
   )

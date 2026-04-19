@@ -17,6 +17,8 @@
  */
 
 import type {
+  ChannelsPatchPayload,
+  ChannelsPatchResponse,
   ChatHistoryResponse,
   ChatSendPayload,
   ConfigGetResponse,
@@ -233,6 +235,69 @@ export async function postVoiceToggle(
 }
 
 /**
+ * POST /api/admin/persona/avatar — upload a new profile picture.
+ * Accepts png/jpg/webp/gif up to ~4 MiB. Previous avatars (possibly
+ * with a different extension) are replaced atomically on the server.
+ */
+export async function postPersonaAvatar(
+  file: File,
+): Promise<{ ok: true; size_bytes: number; ext: string }> {
+  const body = new FormData()
+  body.append('file', file)
+  const response = await fetch('/api/admin/persona/avatar', {
+    method: 'POST',
+    body,
+  })
+  if (!response.ok) {
+    const detail = await extractDetail(response)
+    throw new ApiError(response.status, detail)
+  }
+  return (await response.json()) as {
+    ok: true
+    size_bytes: number
+    ext: string
+  }
+}
+
+/**
+ * DELETE /api/admin/persona/avatar — remove the current avatar.
+ * 404 when no avatar is set.
+ */
+export async function deletePersonaAvatar(): Promise<{ deleted: true }> {
+  return fetchJson<{ deleted: true }>('/api/admin/persona/avatar', {
+    method: 'DELETE',
+  })
+}
+
+/**
+ * Build a cache-busted URL for the current avatar. Callers thread a
+ * monotonically increasing key (post-upload timestamp, or a React state
+ * counter) so <img src> reloads after every mutation without any
+ * server-side cache-control trickery.
+ */
+export function avatarUrl(version: string | number): string {
+  return `/api/admin/persona/avatar?v=${encodeURIComponent(String(version))}`
+}
+
+/**
+ * POST /api/admin/reset — nuclear wipe. Deletes every memory row,
+ * clears the persona's display_name + facts + voice_id, drops voice
+ * sample files, and returns the daemon to an onboarding-required
+ * state. Idempotent.
+ *
+ * Callers typically reload the page after this resolves so that the
+ * fresh `/api/state` bootstrap takes effect immediately.
+ */
+export async function postAdminReset(): Promise<{
+  ok: true
+  persona_id: string
+}> {
+  return fetchJson<{ ok: true; persona_id: string }>('/api/admin/reset', {
+    method: 'POST',
+  })
+}
+
+/**
  * POST /api/chat/send — ingest a user message into the turn loop. The
  * daemon responds with 202 Accepted as soon as the message is persisted;
  * the actual reply arrives asynchronously via the SSE stream.
@@ -346,6 +411,22 @@ export async function patchConfig(
   payload: ConfigPatchPayload,
 ): Promise<ConfigPatchResponse> {
   return fetchJson<ConfigPatchResponse>('/api/admin/config', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+/**
+ * PATCH /api/admin/channels — apply per-channel config changes. Writes
+ * config.toml atomically but does NOT hot-reload — the caller should
+ * display a "restart daemon to apply" banner. Secrets (Discord token,
+ * future iMessage credentials) are environment-driven and never
+ * accepted as input here.
+ */
+export async function patchChannels(
+  payload: ChannelsPatchPayload,
+): Promise<ChannelsPatchResponse> {
+  return fetchJson<ChannelsPatchResponse>('/api/admin/channels', {
     method: 'PATCH',
     body: JSON.stringify(payload),
   })

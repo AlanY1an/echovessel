@@ -32,8 +32,10 @@ Design constraints (see §3 of the tracker):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
+import tomllib
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError
@@ -51,7 +53,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session as DbSession
 from sqlmodel import func, select
@@ -400,9 +402,7 @@ def _user_id_for_label(label: BlockLabel, user_id: str) -> str | None:
     return user_id
 
 
-def _load_core_blocks_dict(
-    db: DbSession, *, persona_id: str, user_id: str
-) -> dict[str, str]:
+def _load_core_blocks_dict(db: DbSession, *, persona_id: str, user_id: str) -> dict[str, str]:
     """Return every label → content mapping, defaulting missing labels to ''."""
 
     stmt = select(CoreBlock).where(
@@ -476,6 +476,126 @@ _PERSONA_FACT_FIELDS: tuple[str, ...] = (
     "life_stage",
     "health_status",
 )
+
+
+# Avatar — stored as a single image file under `<data_dir>/persona/`.
+# We don't pin the extension in code: the filename always starts with
+# `avatar.` and carries whatever extension the user uploaded, so both
+# serve and delete operate by glob.
+_AVATAR_ALLOWED_EXTS: tuple[str, ...] = ("png", "jpg", "jpeg", "webp", "gif")
+_AVATAR_MAX_BYTES = 4 * 1024 * 1024  # 4 MiB cap — plenty for any reasonable avatar.
+
+
+def _avatar_dir(runtime: Any) -> Path:
+    """Absolute path to `<data_dir>/persona/` — created on demand."""
+    data_dir = Path(runtime.ctx.config.runtime.data_dir).expanduser()
+    return data_dir / "persona"
+
+
+def _avatar_file(runtime: Any) -> Path | None:
+    """Return the single `avatar.<ext>` in `<data_dir>/persona/`, or None."""
+    d = _avatar_dir(runtime)
+    if not d.exists():
+        return None
+    for ext in _AVATAR_ALLOWED_EXTS:
+        candidate = d / f"avatar.{ext}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _drop_existing_avatars(runtime: Any) -> None:
+    """Delete every `avatar.*` file in the persona dir (before a re-upload)."""
+    d = _avatar_dir(runtime)
+    if not d.exists():
+        return
+    for ext in _AVATAR_ALLOWED_EXTS:
+        p = d / f"avatar.{ext}"
+        if p.exists():
+            with contextlib.suppress(OSError):
+                p.unlink()
+
+
+# Channel config schema · allowlists per channel for PATCH /api/admin/channels.
+# Every field listed here is valid input; unknown fields → 400. Secrets
+# (Discord token, future iMessage creds) are explicitly NOT in this set —
+# secrets only live in environment variables, never in the TOML.
+_CHANNEL_PATCH_FIELDS: dict[str, frozenset[str]] = {
+    "web": frozenset({"enabled", "host", "port", "static_dir", "debounce_ms"}),
+    "discord": frozenset({"enabled", "token_env", "allowed_user_ids", "debounce_ms"}),
+    "imessage": frozenset(
+        {
+            "enabled",
+            "persona_apple_id",
+            "cli_path",
+            "db_path",
+            "allowed_handles",
+            "default_service",
+            "region",
+            "debounce_ms",
+        }
+    ),
+}
+
+
+def _collect_channels_config(cfg: Any, runtime: Any) -> dict[str, dict[str, Any]]:
+    """Build the scrubbed ``channels`` section for GET /api/admin/config.
+
+    Returns one entry per known channel with its config fields plus two
+    live-state fields (``ready``, ``registered``) sourced from the
+    runtime's registry. Secrets are returned only as a presence bool
+    (e.g. ``token_loaded``); the actual token string never leaves the
+    daemon process.
+    """
+    # Map channel_id → live state dict (ready / registered). We collect
+    # this once so we can decorate every channel's config blob with its
+    # current runtime status.
+    live_status: dict[str, dict[str, bool]] = {}
+    for status_row in _collect_channel_status(runtime):
+        live_status[status_row["channel_id"]] = {
+            "ready": bool(status_row.get("ready", False)),
+            "registered": bool(status_row.get("enabled", False)),
+        }
+
+    def live(channel_id: str) -> dict[str, bool]:
+        return live_status.get(channel_id, {"ready": False, "registered": False})
+
+    web_cfg = cfg.channels.web
+    discord_cfg = cfg.channels.discord
+    imessage_cfg = cfg.channels.imessage
+
+    return {
+        "web": {
+            "enabled": bool(web_cfg.enabled),
+            "channel_id": web_cfg.channel_id,
+            "host": web_cfg.host,
+            "port": int(web_cfg.port),
+            "static_dir": web_cfg.static_dir,
+            "debounce_ms": int(web_cfg.debounce_ms),
+            **live(web_cfg.channel_id),
+        },
+        "discord": {
+            "enabled": bool(discord_cfg.enabled),
+            "channel_id": discord_cfg.channel_id,
+            "token_env": discord_cfg.token_env,
+            "token_loaded": bool(os.environ.get(discord_cfg.token_env)),
+            "allowed_user_ids": list(discord_cfg.allowed_user_ids or []),
+            "debounce_ms": int(discord_cfg.debounce_ms),
+            **live(discord_cfg.channel_id),
+        },
+        "imessage": {
+            "enabled": bool(imessage_cfg.enabled),
+            "channel_id": imessage_cfg.channel_id,
+            "persona_apple_id": imessage_cfg.persona_apple_id,
+            "cli_path": imessage_cfg.cli_path,
+            "db_path": imessage_cfg.db_path,
+            "allowed_handles": list(imessage_cfg.allowed_handles),
+            "default_service": imessage_cfg.default_service,
+            "region": imessage_cfg.region,
+            "debounce_ms": int(imessage_cfg.debounce_ms),
+            **live(imessage_cfg.channel_id),
+        },
+    }
 
 
 def _apply_facts_to_persona_row(
@@ -658,6 +778,7 @@ def build_admin_router(
                 "display_name": runtime.ctx.persona.display_name,
                 "voice_enabled": bool(runtime.ctx.persona.voice_enabled),
                 "has_voice_id": runtime.ctx.persona.voice_id is not None,
+                "has_avatar": _avatar_file(runtime) is not None,
             },
             "onboarding_required": core_block_count == 0,
             "memory_counts": {
@@ -675,9 +796,7 @@ def build_admin_router(
     async def get_persona() -> dict[str, Any]:
         persona_id = _persona_id()
         with _open_db() as db:
-            blocks = _load_core_blocks_dict(
-                db, persona_id=persona_id, user_id=user_id
-            )
+            blocks = _load_core_blocks_dict(db, persona_id=persona_id, user_id=user_id)
             persona_row = db.get(Persona, persona_id)
             facts = (
                 _serialize_persona_facts(persona_row)
@@ -689,6 +808,7 @@ def build_admin_router(
             "display_name": runtime.ctx.persona.display_name,
             "voice_enabled": bool(runtime.ctx.persona.voice_enabled),
             "voice_id": runtime.ctx.persona.voice_id,
+            "has_avatar": _avatar_file(runtime) is not None,
             "core_blocks": blocks,
             "facts": facts,
         }
@@ -710,10 +830,7 @@ def build_admin_router(
                     ),
                 )
 
-            pairs = [
-                (label, getattr(req, field))
-                for field, label in _ONBOARDING_LABELS
-            ]
+            pairs = [(label, getattr(req, field)) for field, label in _ONBOARDING_LABELS]
             _write_blocks(
                 db,
                 persona_id=persona_id,
@@ -740,6 +857,174 @@ def build_admin_router(
         _try_persist_display_name(runtime, req.display_name)
 
         return {"ok": True, "persona_id": persona_id}
+
+    # ---- POST /api/admin/reset -----------------------------------------
+    #
+    # Nuclear reset: wipe everything the user has accumulated for this
+    # persona and return the daemon to a fresh-onboarding state.
+    # Specifically, for the current persona_id we delete:
+    #   - every core_block row (so `onboarding_required` flips to True)
+    #   - every core_block_append row
+    #   - every concept_node + concept_node_filling row
+    #   - every recall_message + session row
+    # Then we clear the Persona row's display_name, voice_id, and 15
+    # biographic facts; drop every voice sample file on disk; mirror the
+    # voice_id/display_name clears into the live runtime state; and, if
+    # the daemon has a writable config.toml, null out `persona.voice_id`
+    # there so a subsequent restart doesn't resurrect the old voice.
+    #
+    # The endpoint is intentionally idempotent — calling it twice in a
+    # row on an empty daemon is a no-op that still returns 200.
+
+    @router.post("/api/admin/reset")
+    async def post_reset() -> dict[str, Any]:
+        from sqlalchemy import delete as sa_delete
+
+        persona_id = _persona_id()
+
+        with _open_db() as db:
+            # Delete child tables first to avoid FK violations. Order
+            # mirrors the creation graph in reverse: appends + fillings
+            # before concept_nodes, messages before sessions, everything
+            # before the Persona row reset. We use the underlying
+            # sqlalchemy Session.execute — sqlmodel.Session.exec is
+            # shaped for SELECT, not bulk DELETE.
+            db.execute(sa_delete(CoreBlockAppend))
+            db.execute(sa_delete(ConceptNodeFilling))
+            db.execute(sa_delete(ConceptNode))
+            db.execute(sa_delete(RecallMessage))
+            db.execute(sa_delete(RecallSession))
+            db.execute(sa_delete(CoreBlock))
+
+            persona_row = db.get(Persona, persona_id)
+            if persona_row is not None:
+                persona_row.display_name = persona_id
+                persona_row.voice_id = None
+                for field_name in _PERSONA_FACT_FIELDS:
+                    setattr(persona_row, field_name, None)
+                db.add(persona_row)
+
+            db.commit()
+
+        # Nuke every on-disk voice sample. The store is keyed to a
+        # directory under the daemon's data_dir; delete the directory
+        # tree and let the next upload recreate it lazily.
+        try:
+            data_dir = Path(runtime.ctx.config.runtime.data_dir).expanduser()
+            samples_dir = _voice_samples_dir(data_dir)
+            if samples_dir.exists():
+                import shutil
+
+                shutil.rmtree(samples_dir)
+        except OSError:
+            # Non-fatal — the DB side of the reset already succeeded.
+            pass
+
+        # Drop the avatar file too, since "reset everything" includes
+        # the profile picture. This is best-effort and doesn't block
+        # success if the filesystem call fails.
+        _drop_existing_avatars(runtime)
+
+        # Mirror clears into runtime in-memory state so subsequent
+        # /api/state and outgoing turns reflect the reset without a
+        # daemon restart.
+        runtime.ctx.persona.display_name = persona_id
+        runtime.ctx.persona.voice_id = None
+
+        # Best-effort clear of voice_id in config.toml. If the daemon
+        # was booted in config_override mode there is no file to write
+        # — we swallow the error since the in-memory clear above is
+        # already authoritative for this process.
+        if runtime.ctx.config_path is not None:
+            with contextlib.suppress(OSError):
+                runtime._atomic_write_config_field(section="persona", field="voice_id", value=None)
+
+        return {"ok": True, "persona_id": persona_id}
+
+    # ---- Avatar upload / serve / delete --------------------------------
+    #
+    # The persona avatar is stored as a single file at
+    # `<data_dir>/persona/avatar.<ext>`. The file-existence check is the
+    # source of truth for `has_avatar` in every state response — there
+    # is no DB column backing it. The rationale is MVP simplicity:
+    # avatars are small, local-first, and adding a column would require
+    # a migration for a trivially cheap filesystem check.
+
+    @router.post("/api/admin/persona/avatar")
+    async def post_avatar(
+        file: UploadFile = File(...),  # noqa: B008 — FastAPI marker
+    ) -> dict[str, Any]:
+        raw = await file.read()
+        if len(raw) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="empty upload",
+            )
+        if len(raw) > _AVATAR_MAX_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=(f"avatar too large ({len(raw)} bytes); max is {_AVATAR_MAX_BYTES} bytes"),
+            )
+
+        # Resolve the extension from the uploaded filename. We don't
+        # trust the client-supplied MIME type; the extension is still
+        # what browsers use to render the file, so deriving it from the
+        # filename keeps the serve path stable.
+        raw_name = (file.filename or "").lower()
+        dot = raw_name.rfind(".")
+        ext = raw_name[dot + 1 :] if dot >= 0 else ""
+        if ext == "jpeg":
+            ext = "jpg"
+        if ext not in _AVATAR_ALLOWED_EXTS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"unsupported avatar format ({ext!r}); allowed: "
+                    f"{', '.join(_AVATAR_ALLOWED_EXTS)}"
+                ),
+            )
+
+        target_dir = _avatar_dir(runtime)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        # Drop any prior avatar (possibly with a different extension)
+        # before writing the new one so there's only ever one file.
+        _drop_existing_avatars(runtime)
+        target_path = target_dir / f"avatar.{ext}"
+        target_path.write_bytes(raw)
+
+        return {
+            "ok": True,
+            "size_bytes": len(raw),
+            "ext": ext,
+        }
+
+    @router.get("/api/admin/persona/avatar")
+    async def get_avatar() -> FileResponse:
+        path = _avatar_file(runtime)
+        if path is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="no avatar set",
+            )
+        # Headers disable intermediary caching so re-upload shows up
+        # without a hard-reload; the UI also appends a cache-bust
+        # query param for good measure.
+        return FileResponse(
+            path,
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+            },
+        )
+
+    @router.delete("/api/admin/persona/avatar")
+    async def delete_avatar() -> dict[str, Any]:
+        if _avatar_file(runtime) is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="no avatar set",
+            )
+        _drop_existing_avatars(runtime)
+        return {"deleted": True}
 
     # ---- POST /api/admin/persona ---------------------------------------
 
@@ -826,9 +1111,7 @@ def build_admin_router(
         # Pydantic normalises enum + date values; keys the caller did
         # not send become None after validation, but we remember which
         # keys they actually supplied so the handler only writes those.
-        fields_touched = {
-            k for k in raw_facts if k in _PERSONA_FACT_FIELDS
-        }
+        fields_touched = {k for k in raw_facts if k in _PERSONA_FACT_FIELDS}
         try:
             payload = PersonaFactsPayload.model_validate(raw_facts)
         except Exception as e:  # noqa: BLE001 — pydantic raises ValidationError
@@ -845,9 +1128,7 @@ def build_admin_router(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"persona {persona_id!r} not found",
                 )
-            _apply_facts_to_persona_row(
-                persona_row, payload, fields_touched=fields_touched
-            )
+            _apply_facts_to_persona_row(persona_row, payload, fields_touched=fields_touched)
             db.add(persona_row)
             db.commit()
             db.refresh(persona_row)
@@ -903,8 +1184,7 @@ def build_admin_router(
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=(
-                        "blank_write requires either user_input or "
-                        "existing_blocks to have content"
+                        "blank_write requires either user_input or existing_blocks to have content"
                     ),
                 )
             parsed = await _run_persona_facts_extraction(
@@ -935,9 +1215,7 @@ def build_admin_router(
         if req.upload_id is None and req.pipeline_id is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "import_upload requires either upload_id or pipeline_id"
-                ),
+                detail=("import_upload requires either upload_id or pipeline_id"),
             )
 
         pipeline_id: str
@@ -980,8 +1258,7 @@ def build_admin_router(
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                 detail=(
-                    f"import pipeline did not finish within "
-                    f"{EXTRACT_PIPELINE_WAIT_SECONDS:.0f}s"
+                    f"import pipeline did not finish within {EXTRACT_PIPELINE_WAIT_SECONDS:.0f}s"
                 ),
             ) from e
         if done_payload is None:
@@ -1097,10 +1374,7 @@ def build_admin_router(
             log.warning("extract-from-input: malformed LLM JSON: %s", e)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=(
-                    "LLM returned a malformed extraction response; please "
-                    f"retry. ({e})"
-                ),
+                detail=(f"LLM returned a malformed extraction response; please retry. ({e})"),
             ) from e
 
     # ---- POST /api/admin/persona/bootstrap-from-material ---------------
@@ -1206,16 +1480,11 @@ def build_admin_router(
             return None
 
         try:
-            done_payload = await asyncio.wait_for(
-                _wait_done(), timeout=PIPELINE_WAIT_SECONDS
-            )
+            done_payload = await asyncio.wait_for(_wait_done(), timeout=PIPELINE_WAIT_SECONDS)
         except TimeoutError as e:
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail=(
-                    f"import pipeline did not finish within "
-                    f"{PIPELINE_WAIT_SECONDS:.0f}s"
-                ),
+                detail=(f"import pipeline did not finish within {PIPELINE_WAIT_SECONDS:.0f}s"),
             ) from e
 
         if done_payload is None:
@@ -1281,9 +1550,7 @@ def build_admin_router(
             )
             for row in events_rows
         ]
-        thoughts_input: list[str] = [
-            row.description or "" for row in thoughts_rows
-        ]
+        thoughts_input: list[str] = [row.description or "" for row in thoughts_rows]
 
         # Step 4 · build the LLM prompt + parse the response.
         system_prompt = PERSONA_BOOTSTRAP_SYSTEM_PROMPT
@@ -1307,17 +1574,12 @@ def build_admin_router(
             ) from e
 
         try:
-            blocks: BootstrappedBlocks = parse_persona_bootstrap_response(
-                llm_response
-            )
+            blocks: BootstrappedBlocks = parse_persona_bootstrap_response(llm_response)
         except PersonaBootstrapParseError as e:
             log.warning("bootstrap LLM returned malformed JSON: %s", e)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=(
-                    "LLM returned a malformed bootstrap response; please "
-                    f"retry. ({e})"
-                ),
+                detail=(f"LLM returned a malformed bootstrap response; please retry. ({e})"),
             ) from e
 
         return {
@@ -1390,9 +1652,7 @@ def build_admin_router(
     ) -> dict[str, Any]:
         return _list_concept_nodes_payload(NodeType.THOUGHT, limit, offset)
 
-    def _list_concept_nodes_payload(
-        node_type: NodeType, limit: int, offset: int
-    ) -> dict[str, Any]:
+    def _list_concept_nodes_payload(node_type: NodeType, limit: int, offset: int) -> dict[str, Any]:
         with _open_db() as db:
             rows, total = list_concept_nodes(
                 db,
@@ -1453,9 +1713,7 @@ def build_admin_router(
 
         items = [_serialize_concept_node(h.node) for h in hits]
         snippets = [
-            {"node_id": h.node.id, "snippet": h.snippet}
-            for h in hits
-            if h.node.id is not None
+            {"node_id": h.node.id, "snippet": h.snippet} for h in hits if h.node.id is not None
         ]
         return {
             "q": q,
@@ -1513,9 +1771,7 @@ def build_admin_router(
         return {
             "target_id": preview.target_id,
             "dependent_thought_ids": list(preview.dependent_thought_ids),
-            "dependent_thought_descriptions": list(
-                preview.dependent_thought_descriptions
-            ),
+            "dependent_thought_descriptions": list(preview.dependent_thought_descriptions),
             "has_dependents": bool(preview.dependent_thought_ids),
         }
 
@@ -1645,9 +1901,7 @@ def build_admin_router(
 
     # ---- DELETE /api/admin/memory/core-blocks/{label}/appends/{append_id} ---
 
-    @router.delete(
-        "/api/admin/memory/core-blocks/{label}/appends/{append_id}"
-    )
+    @router.delete("/api/admin/memory/core-blocks/{label}/appends/{append_id}")
     async def delete_core_block_append_route(
         label: str,
         append_id: int,
@@ -1683,10 +1937,7 @@ def build_admin_router(
             if append.label != label:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=(
-                        f"append {append_id} belongs to label "
-                        f"{append.label!r}, not {label!r}"
-                    ),
+                    detail=(f"append {append_id} belongs to label {append.label!r}, not {label!r}"),
                 )
             delete_core_block_append(db, append_id)
         return {"deleted": True, "append_id": append_id, "label": label}
@@ -1718,9 +1969,7 @@ def build_admin_router(
         return {
             "id": node.id,
             "description": node.description,
-            "created_at": (
-                node.created_at.isoformat() if node.created_at else None
-            ),
+            "created_at": (node.created_at.isoformat() if node.created_at else None),
             "source_session_id": node.source_session_id,
         }
 
@@ -1761,9 +2010,7 @@ def build_admin_router(
             )
             events = list(db.exec(stmt))
 
-        source_sessions = sorted(
-            {n.source_session_id for n in events if n.source_session_id}
-        )
+        source_sessions = sorted({n.source_session_id for n in events if n.source_session_id})
         return {
             "thought_id": node_id,
             "source_events": [_serialize_trace_node(n) for n in events],
@@ -1782,11 +2029,7 @@ def build_admin_router(
         """
         with _open_db() as db:
             event = db.get(ConceptNode, node_id)
-            if (
-                event is None
-                or event.deleted_at is not None
-                or event.type != NodeType.EVENT
-            ):
+            if event is None or event.deleted_at is not None or event.type != NodeType.EVENT:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"event not found: {node_id}",
@@ -1837,9 +2080,12 @@ def build_admin_router(
             version = "unknown"
         uptime_seconds = 0
         if runtime._started_at is not None:
-            uptime_seconds = int(
-                (datetime.now() - runtime._started_at).total_seconds()
-            )
+            uptime_seconds = int((datetime.now() - runtime._started_at).total_seconds())
+
+        # Channels section · include scrubbed config for every known
+        # channel plus their live ready/enabled state. Secrets are
+        # never returned — only the env-var name and a presence bool.
+        channels_section = _collect_channels_config(cfg, runtime)
 
         return {
             "llm": {
@@ -1861,21 +2107,13 @@ def build_admin_router(
             },
             "memory": {
                 "retrieve_k": int(cfg.memory.retrieve_k),
-                "relational_bonus_weight": float(
-                    cfg.memory.relational_bonus_weight
-                ),
+                "relational_bonus_weight": float(cfg.memory.relational_bonus_weight),
                 "recent_window_size": int(cfg.memory.recent_window_size),
             },
             "consolidate": {
-                "trivial_message_count": int(
-                    cfg.consolidate.trivial_message_count
-                ),
-                "trivial_token_count": int(
-                    cfg.consolidate.trivial_token_count
-                ),
-                "reflection_hard_gate_24h": int(
-                    cfg.consolidate.reflection_hard_gate_24h
-                ),
+                "trivial_message_count": int(cfg.consolidate.trivial_message_count),
+                "trivial_token_count": int(cfg.consolidate.trivial_token_count),
+                "reflection_hard_gate_24h": int(cfg.consolidate.reflection_hard_gate_24h),
             },
             "system": {
                 "data_dir": str(cfg.runtime.data_dir),
@@ -1884,11 +2122,10 @@ def build_admin_router(
                 "uptime_seconds": uptime_seconds,
                 "db_size_bytes": db_size_bytes,
                 "config_path": (
-                    str(runtime.ctx.config_path)
-                    if runtime.ctx.config_path is not None
-                    else None
+                    str(runtime.ctx.config_path) if runtime.ctx.config_path is not None else None
                 ),
             },
+            "channels": channels_section,
         }
 
     # ---- PATCH /api/admin/config ---------------------------------------
@@ -1918,18 +2155,14 @@ def build_admin_router(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    "request body must be a non-empty object like "
-                    '{"section": {"field": value}}'
+                    'request body must be a non-empty object like {"section": {"field": value}}'
                 ),
             )
         for section, fields in body.items():
             if not isinstance(fields, dict):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        f"section {section!r} must be an object, got "
-                        f"{type(fields).__name__}"
-                    ),
+                    detail=(f"section {section!r} must be an object, got {type(fields).__name__}"),
                 )
 
         # Classify every path as hot / restart-required / unknown.
@@ -1948,17 +2181,13 @@ def build_admin_router(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
                     "these fields require a daemon restart and cannot "
-                    "be patched at runtime: "
-                    + ", ".join(sorted(restart_required))
+                    "be patched at runtime: " + ", ".join(sorted(restart_required))
                 ),
             )
         if unknown:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "unknown or read-only config fields: "
-                    + ", ".join(sorted(unknown))
-                ),
+                detail=("unknown or read-only config fields: " + ", ".join(sorted(unknown))),
             )
 
         # Delegate the atomic write + validate + reload path to the
@@ -1986,6 +2215,121 @@ def build_admin_router(
             "updated_fields": applied,
             "reload_triggered": True,
             "restart_required": [],
+        }
+
+    # ---- PATCH /api/admin/channels -------------------------------------
+    #
+    # Separate from PATCH /api/admin/config because channel fields are
+    # never hot-reloadable — flipping ``enabled`` has to spawn or tear
+    # down a subprocess (imsg) / gateway connection (Discord) / HTTP
+    # server (web). The admin PATCH /api/admin/config route enforces a
+    # strict hot-reload-only contract so we mint a dedicated route here
+    # that atomically writes the TOML and tells the caller "restart
+    # daemon to apply". No secret fields accept input — secrets are
+    # environment-driven, not TOML-driven.
+
+    @router.patch("/api/admin/channels")
+    async def patch_channels(
+        body: Annotated[dict[str, Any], Body(...)],
+    ) -> dict[str, Any]:
+        if runtime.ctx.config_path is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "cannot patch channels: daemon started without a "
+                    "config file (config_override mode)"
+                ),
+            )
+
+        if not isinstance(body, dict) or not body:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "request body must be a non-empty object like "
+                    '{"imessage": {"enabled": true, ...}}'
+                ),
+            )
+
+        # Validate channel names + field names before touching disk.
+        unknown_channels: list[str] = []
+        unknown_fields: list[str] = []
+        patches: dict[str, dict[str, Any]] = {}
+        for channel_id, fields in body.items():
+            if channel_id not in _CHANNEL_PATCH_FIELDS:
+                unknown_channels.append(channel_id)
+                continue
+            if not isinstance(fields, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"channel {channel_id!r} body must be an object, "
+                        f"got {type(fields).__name__}"
+                    ),
+                )
+            allowed = _CHANNEL_PATCH_FIELDS[channel_id]
+            for fname in fields:
+                if fname not in allowed:
+                    unknown_fields.append(f"{channel_id}.{fname}")
+            patches[f"channels.{channel_id}"] = dict(fields)
+
+        if unknown_channels:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"unknown channels: {sorted(unknown_channels)}",
+            )
+        if unknown_fields:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "unknown or read-only channel fields: " + ", ".join(sorted(unknown_fields))
+                ),
+            )
+
+        # Merge the channel sub-blocks into a single {"channels": {...}}
+        # patch that the runtime's atomic writer understands. We read
+        # the current channels block so untouched sub-keys (e.g. the
+        # discord section when only imessage is being patched) survive.
+        config_path = Path(runtime.ctx.config_path)
+        try:
+            with open(config_path, "rb") as f:
+                current = tomllib.load(f)
+        except OSError as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"failed to read config.toml: {e}",
+            ) from e
+
+        channels_block = dict(current.get("channels") or {})
+        for channel_id, fields in body.items():
+            existing = dict(channels_block.get(channel_id) or {})
+            existing.update(fields)
+            channels_block[channel_id] = existing
+
+        try:
+            runtime.write_channel_config_patches({"channels": channels_block})
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"invalid channel config: {e}",
+            ) from e
+        except RuntimeError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            ) from e
+        except OSError as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"failed to write config.toml: {e}",
+            ) from e
+
+        updated = sorted(
+            f"channels.{ch}.{fname}" for ch, fields in body.items() for fname in fields
+        )
+        return {
+            "updated_fields": updated,
+            "reload_triggered": False,
+            "restart_required": True,
         }
 
     # =======================================================================
@@ -2032,10 +2376,7 @@ def build_admin_router(
                 if int(declared_length) > _VOICE_SAMPLE_MAX_BYTES:
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail=(
-                            f"sample exceeds "
-                            f"{_VOICE_SAMPLE_MAX_BYTES // 1_000_000} MB"
-                        ),
+                        detail=(f"sample exceeds {_VOICE_SAMPLE_MAX_BYTES // 1_000_000} MB"),
                     )
             except ValueError:
                 # Malformed header — let the bounded read below catch it.
@@ -2050,9 +2391,7 @@ def build_admin_router(
         if len(data) > _VOICE_SAMPLE_MAX_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=(
-                    f"sample exceeds {_VOICE_SAMPLE_MAX_BYTES // 1_000_000} MB"
-                ),
+                detail=(f"sample exceeds {_VOICE_SAMPLE_MAX_BYTES // 1_000_000} MB"),
             )
 
         saved = _sample_store().save(
@@ -2123,13 +2462,9 @@ def build_admin_router(
         # and keeps the stub provider's deterministic hash working.
         blob = b"".join(store.read_bytes(s.sample_id) for s in samples)
         try:
-            entry = await voice.clone_voice_interactive(
-                blob, name=req.display_name
-            )
+            entry = await voice.clone_voice_interactive(blob, name=req.display_name)
         except VoicePermanentError as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
-            ) from e
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
         # Stub providers return strings that are fine for
         # ``generate_voice``; real providers return a proper id. Try to
@@ -2168,9 +2503,7 @@ def build_admin_router(
 
         async def _stream():
             try:
-                async for chunk in voice.speak(
-                    req.text, voice_id=req.voice_id, format="mp3"
-                ):
+                async for chunk in voice.speak(req.text, voice_id=req.voice_id, format="mp3"):
                     yield chunk
             except VoicePermanentError as e:
                 # Once the response has started we can't switch to an
@@ -2314,7 +2647,9 @@ def _collect_channel_status(runtime: Any) -> list[dict[str, Any]]:
 # (a future cron can sweep anything older than 7 days; for MVP we leave
 # housekeeping to the user).
 
-_VOICE_SAMPLE_MIN_COUNT = 1  # FishAudio accepts a single sample · more is better quality but not required
+_VOICE_SAMPLE_MIN_COUNT = (
+    1  # FishAudio accepts a single sample · more is better quality but not required
+)
 _VOICE_SAMPLE_MAX_BYTES = 50 * 1024 * 1024  # 50 MB per sample
 _VOICE_PREVIEW_TEXT = "你好，我是你刚刚克隆出的声音。"
 
@@ -2342,9 +2677,7 @@ class _VoiceSampleStore:
     def _sample_dir(self, sample_id: str) -> Path:
         return self._root / sample_id
 
-    def save(
-        self, data: bytes, *, filename: str, content_type: str
-    ) -> _VoiceSampleEntry:
+    def save(self, data: bytes, *, filename: str, content_type: str) -> _VoiceSampleEntry:
         import uuid as _uuid
 
         sample_id = f"s-{_uuid.uuid4().hex[:12]}"
@@ -2416,9 +2749,7 @@ def _entry_from_dict(d: dict[str, Any]) -> _VoiceSampleEntry:
         content_type=str(d.get("content_type") or "application/octet-stream"),
         size_bytes=int(d.get("size_bytes") or 0),
         duration_seconds=(
-            float(d["duration_seconds"])
-            if d.get("duration_seconds") is not None
-            else None
+            float(d["duration_seconds"]) if d.get("duration_seconds") is not None else None
         ),
         created_at=str(d.get("created_at") or ""),
     )
@@ -2453,9 +2784,7 @@ def _try_persist_display_name(runtime: Any, new_name: str) -> None:
         # fine because config_override is a tests-only path.
         return
     try:
-        runtime._atomic_write_config_field(
-            section="persona", field="display_name", value=new_name
-        )
+        runtime._atomic_write_config_field(section="persona", field="display_name", value=new_name)
     except Exception as e:  # noqa: BLE001
         log.warning(
             "failed to persist persona.display_name=%r to config.toml: %s",

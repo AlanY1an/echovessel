@@ -210,9 +210,48 @@ token_env = "ECHOVESSEL_DISCORD_TOKEN"
 debounce_ms = 2000
 
 [channels.imessage]
-# Placeholder — not functional in v0.1.0.
+# iMessage DM channel (macOS-only · requires external `imsg` CLI).
+#
+# Install imsg:     brew install steipete/tap/imsg
+# Verify rpc:       imsg rpc --help
+# Health probe:     uv run python -m echovessel.channels.imessage.probe
+#
+# Permissions (grant to the terminal / process running this daemon):
+#  · System Settings → Privacy & Security → Full Disk Access
+#  · System Settings → Privacy & Security → Automation → <terminal> → Messages
+#
+# See docs/en/channels.md "iMessage channel setup" for the full
+# walkthrough, including the recommended separate-Apple-ID pattern.
 enabled = false
 channel_id = "imessage"
+# Two deployment modes (see docs/en/channels.md "iMessage channel setup"):
+#
+#  A. Single-account (fast path, matches openclaw's default):
+#     leave persona_apple_id empty. The Mac's Messages.app uses one
+#     iMessage account; the allowlist below is the only access control.
+#     Works out-of-the-box with your existing Apple ID.
+#
+#  B. Dual-account (same macOS user):
+#     set persona_apple_id to a dedicated persona Apple ID that's
+#     signed into the same Messages.app alongside your main. Inbound
+#     messages whose destination is NOT this address are dropped —
+#     isolates persona traffic from your own iMessage inbox.
+persona_apple_id = ""
+# Path to the imsg binary. Default walks $PATH; can point at an SSH
+# wrapper script for remote-Mac deployments.
+cli_path = "imsg"
+# Optional path to a non-default chat.db. Empty = imsg uses
+# ~/Library/Messages/chat.db for the current macOS user.
+db_path = ""
+# Optional peer-handle allowlist (E.164 phone or email). Empty = accept
+# every 1:1 DM. **Strongly recommended** in single-account mode to
+# prevent random senders from reaching the persona.
+allowed_handles = []
+# Default send service: "imessage" / "sms" / "auto" (lets imsg pick).
+default_service = "auto"
+# Region used when a bare-digit phone number arrives without a "+".
+region = "US"
+debounce_ms = 2000
 
 [channels.wechat]
 # Placeholder — not functional in v0.1.0.

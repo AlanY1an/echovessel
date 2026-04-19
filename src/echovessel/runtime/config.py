@@ -117,10 +117,7 @@ class LLMSection(BaseModel):
     def _is_local_base_url(self) -> bool:
         if not self.base_url:
             return False
-        return any(
-            loc in self.base_url
-            for loc in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]")
-        )
+        return any(loc in self.base_url for loc in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]"))
 
     def _has_custom_base_url(self) -> bool:
         """True if the base_url is not an official Anthropic/OpenAI endpoint."""
@@ -306,8 +303,7 @@ class VoiceSection(BaseModel):
         if self.tts_provider != "stub":
             if not self.tts_api_key_env:
                 raise ValueError(
-                    "voice.enabled=true with non-stub TTS requires "
-                    "tts_api_key_env to be set"
+                    "voice.enabled=true with non-stub TTS requires tts_api_key_env to be set"
                 )
             if not os.environ.get(self.tts_api_key_env):
                 raise ValueError(
@@ -317,8 +313,7 @@ class VoiceSection(BaseModel):
         if self.stt_provider != "stub":
             if not self.stt_api_key_env:
                 raise ValueError(
-                    "voice.enabled=true with non-stub STT requires "
-                    "stt_api_key_env to be set"
+                    "voice.enabled=true with non-stub STT requires stt_api_key_env to be set"
                 )
             if not os.environ.get(self.stt_api_key_env):
                 raise ValueError(
@@ -371,19 +366,67 @@ class DiscordChannelSection(BaseModel):
     debounce_ms: int = Field(default=2000, ge=0, le=60_000)
 
 
+class IMessageChannelSection(BaseModel):
+    """Typed ``[channels.imessage]`` subsection.
+
+    The iMessage channel is a DM-only adapter that drives a long-lived
+    ``imsg rpc`` subprocess (see ``develop-docs/initiatives/_active/
+    2026-04-imessage-channel/00-plan.md``).
+
+    Two deployment modes are supported:
+
+    - **Single-account (fast path · aligns with openclaw).** Leave
+      ``persona_apple_id`` empty. The destination filter is disabled;
+      every inbound message addressed to the Mac's iMessage account is
+      eligible. The ``allowed_handles`` allowlist is the primary access
+      control. This mode is the right choice when only one Apple ID is
+      signed into the Mac's Messages.app.
+    - **Dual-account (same macOS user).** Set ``persona_apple_id`` to
+      the dedicated persona Apple ID. Only messages whose
+      ``destination_caller_id`` matches this address reach the LLM —
+      the user's main-account iMessage traffic is filtered out. Use
+      this when you run both a personal and a persona Apple ID inside
+      the same Messages.app.
+
+    ``cli_path`` can point at an SSH wrapper script (see plan file for
+    the remote-Mac pattern) — the channel does not care whether imsg
+    runs locally or over SSH, just that the stdio protocol works.
+
+    ``db_path`` is forwarded to ``imsg rpc --db`` when non-empty; leave
+    default to let imsg read ``~/Library/Messages/chat.db`` for the
+    current user.
+
+    ``imsg`` is an external CLI dependency (``brew install
+    steipete/tap/imsg``). Unlike ``[channels.discord]``, there is no
+    Python import to fail at startup — the runtime simply spawns the
+    binary and surfaces the error if it is missing.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    channel_id: str = "imessage"
+    persona_apple_id: str = ""
+    cli_path: str = "imsg"
+    db_path: str = ""
+    allowed_handles: list[str] = Field(default_factory=list)
+    default_service: str = Field(default="auto", pattern=r"^(imessage|sms|auto)$")
+    region: str = "US"
+    debounce_ms: int = Field(default=2000, ge=0, le=60_000)
+
+
 class ChannelsSection(BaseModel):
     """Per-channel configuration blobs.
 
-    Web and Discord are typed sub-models; iMessage and WeChat remain
-    free-form placeholders until they get their own typed schemas in
-    later releases.
+    Web, Discord and iMessage are typed sub-models; WeChat remains a
+    free-form placeholder until it gets its own typed schema.
     """
 
     model_config = ConfigDict(extra="allow")
 
     web: WebChannelSection = Field(default_factory=WebChannelSection)
     discord: DiscordChannelSection = Field(default_factory=DiscordChannelSection)
-    imessage: dict[str, Any] | None = None
+    imessage: IMessageChannelSection = Field(default_factory=IMessageChannelSection)
     wechat: dict[str, Any] | None = None
 
 

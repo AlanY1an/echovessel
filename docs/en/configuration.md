@@ -189,9 +189,25 @@ One subsection per transport. v0.0.1 ships **two** working channels: the Web UI 
 
 Enable the channel, put the bot token in `./.env`, and restart the daemon. Messages sent via Discord stream into the Web chat timeline as well (see the runtime-mirror architecture in `channels.md`).
 
-### `[channels.imessage]`, `[channels.wechat]`
+### `[channels.imessage]`
 
-These sections exist in the template as placeholders. They currently only read `enabled` and `channel_id`; setting `enabled = true` on them will not start a real channel yet. Actual adapters land in later releases.
+| Field | Default | Notes |
+| --- | --- | --- |
+| `enabled` | `false` | Whether to start the iMessage channel. macOS-only; requires the external `imsg` CLI (`brew install steipete/tap/imsg`). |
+| `channel_id` | `"imessage"` | Stable identifier. |
+| `persona_apple_id` | `""` (empty = single-account mode) | Destination filter. Empty → accept inbound for the Mac's iMessage account, no filter. Set to a dedicated persona Apple ID → only messages addressed to that ID reach the LLM (use when the same Mac is signed into both your main and persona accounts). |
+| `cli_path` | `"imsg"` | Path to the `imsg` binary. Walks `$PATH` by default; absolute path or SSH wrapper script also accepted. |
+| `db_path` | `""` | Optional override for `chat.db`. Empty → `imsg` reads `~/Library/Messages/chat.db`. |
+| `allowed_handles` | `[]` (empty = unrestricted) | Peer-handle allowlist (E.164 phone or email). Strongly recommended in single-account mode. |
+| `default_service` | `"auto"` | Send service: `"imessage"` / `"sms"` / `"auto"` (lets `imsg` pick). |
+| `region` | `"US"` | Region used to canonicalise bare-digit phone numbers without a `+`. |
+| `debounce_ms` | `2000` | Burst-grouping window before dispatching one logical turn. |
+
+See `channels.md` § "iMessage channel setup" for the full installation walkthrough (FDA / Automation permissions, single- vs dual-account modes, voice MP3 attachment behaviour).
+
+### `[channels.wechat]`
+
+This section exists as a placeholder. It currently only reads `enabled` and `channel_id`; setting `enabled = true` will not start a real channel yet. Actual adapter lands in a later release.
 
 ## What reloads live vs. what requires a restart
 
@@ -225,6 +241,6 @@ Every other field. The daemon loads them once into constructors that are not reb
 | `[runtime].data_dir` · `[memory].db_path` | Changing these mid-flight would mean reopening the database, re-running migrations, and abandoning the in-memory embedder cache. Explicitly rejected by the admin API with a 400. |
 | `[memory].embedder` | Swapping the embedder mid-process would invalidate every existing vector (different model = different embedding space). |
 | `[voice]` · `[proactive]` · `[idle_scanner]` | These drive background workers / scheduler objects that are constructed once in `Runtime.start()` and not rebuilt. |
-| `[channels.*]` | Registering and starting a new channel happens once at boot. Enabling a disabled channel requires a restart. |
+| `[channels.*]` | Registering and starting a new channel happens once at boot. The Admin → Channels UI writes through `PATCH /api/admin/channels` (which persists to TOML and surfaces a "restart required" banner) but no field in this section is hot-reloadable — toggling `enabled`, editing `allowed_handles`, or changing `persona_apple_id` only takes effect on the next `echovessel run`. |
 
 When in doubt, restart. Reload is a convenience for the handful of tunables that change often enough to care about — LLM settings, retrieval knobs, and consolidation thresholds.

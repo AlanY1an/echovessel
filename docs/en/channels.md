@@ -479,3 +479,98 @@ Run the daemon as usual. On a successful startup you should see a log line like 
 - **DM body arrives empty** — Message Content Intent is off on the Bot page. Re-enable it and restart the daemon.
 - **Bot comes online but never responds** — make sure you and the bot share a server. A bot you never invited anywhere cannot receive DMs.
 - **"Improper token" at startup** — `ECHOVESSEL_DISCORD_TOKEN` is unset or copied with surrounding whitespace. A healthy token is roughly 70 characters.
+
+## iMessage channel setup
+
+The iMessage channel lets a persona receive direct messages from allow-listed contacts over Apple's Messages.app. Same persona, same memory, same mood as Web and Discord — the only difference is the transport.
+
+The channel does **not** implement the iMessage protocol itself. Apple's IDS / APNs servers only accept genuine Apple devices, so every non-Apple project converges on the same pattern: spawn a small macOS-native helper that speaks iMessage on your behalf. EchoVessel uses [`steipete/imsg`](https://github.com/steipete/imsg) — a Swift CLI that reads `~/Library/Messages/chat.db` for inbound and drives Messages.app via AppleScript for outbound, surfaced over JSON-RPC on stdio. Our channel code spawns one long-lived `imsg rpc` subprocess, subscribes to its `message` notifications, and sends replies by calling its `send` method.
+
+### Prerequisites
+
+- **macOS**. The daemon must run on the Mac that is signed into the persona's Apple ID. Linux / Windows hosts cannot participate.
+- **Dedicated Apple ID for the persona, strongly recommended.** Use a separate iCloud email (free) so persona traffic is isolated from your personal Messages. A single-account setup works for testing but feels wrong in practice — the persona ends up looking like "you talking to yourself" on every device signed into your main Apple ID.
+- **Messages.app signed in** with the persona's Apple ID and running in the background.
+
+### 1. Install `imsg`
+
+```bash
+brew install steipete/tap/imsg
+imsg rpc --help   # sanity check
+```
+
+### 2. Grant macOS permissions
+
+Both are granted to the process context that runs EchoVessel (typically your terminal app). Changes take effect only for newly-launched processes.
+
+- **Full Disk Access** — Messages.app's `chat.db` lives under `~/Library/Messages/` which is protected. Open **System Settings → Privacy & Security → Full Disk Access**, click `+`, and add your terminal app (Terminal.app, iTerm, Warp, ghostty, VS Code — whichever you use to launch the daemon). Fully quit and reopen that terminal afterwards.
+- **Automation** — sending requires AppleScript driving Messages.app. Open **System Settings → Privacy & Security → Automation → *your terminal* → Messages**, and toggle it on. (Entry appears only after a first send attempt.)
+
+### 3. Verify the probe
+
+With the venv activated:
+
+```bash
+uv run python -m echovessel.channels.imessage.probe
+```
+
+Healthy output looks like:
+
+```
+✓ imsg RPC OK · 5 chat(s) visible
+  · [iMessage] dm +14155551234  (2026-04-19T03:51:12.934Z)
+  · [RCS     ] dm +19803698620  (2026-04-16T23:11:24.466Z)
+  ...
+```
+
+If the probe fails the error message tells you which step broke (binary missing, FDA denied, imsg crashed, etc.). Every failure includes an actionable hint.
+
+### 4. Configure EchoVessel
+
+In your `config.toml`, set:
+
+```toml
+[channels.imessage]
+enabled = true
+persona_apple_id = "anya-persona@icloud.com"     # required
+# allowed_handles = ["+14155551234", "friend@example.com"]
+# default_service = "auto"
+# region = "US"
+# debounce_ms = 2000
+```
+
+`persona_apple_id` is the destination filter — inbound messages addressed to any other Apple ID registered on the same Mac are dropped before they reach the LLM. This is the core isolation mechanism when a single Messages.app serves both the persona and the user's main account.
+
+`allowed_handles` is an optional peer allowlist. Empty means "accept every 1:1 DM addressed to `persona_apple_id`". Entries accept phone numbers (E.164 like `+14155551234`, or bare digits combined with `region`) and email addresses.
+
+You can also edit these fields from the Web UI without touching `config.toml`: open **Admin → Channels → iMessage**, toggle the channel on, and edit `persona_apple_id` / `allowed_handles` inline. Saves call `PATCH /api/admin/channels`, write the merged TOML to disk, and surface a "restart required" banner — the iMessage subprocess is bound at startup, so live edits do not take effect until you restart the daemon.
+
+### 5. Start the daemon
+
+Launch `echovessel run` as usual. A successful startup logs:
+
+```
+imessage channel: registered (persona=anya-persona@icloud.com, allowlist=open, debounce_ms=2000)
+imessage: channel started · persona=anya-persona@icloud.com allowlist=0
+```
+
+Send an iMessage from a phone or another Mac to `persona_apple_id` — after one debounce window the persona replies in the same thread.
+
+### Voice replies
+
+When the persona has voice enabled (Admin → Voice → toggle on, with a configured `voice_id`), iMessage replies arrive as an MP3 attachment alongside the text. The runtime synthesises the reply with `VoiceService.generate_voice()`, hands the resulting `VoiceResult` to `channel.send()`, and the iMessage channel forwards `voice_result.cache_path` to `imsg send --file`. If voice synthesis fails or the cache file is missing, the channel still delivers the text — voice is best-effort, never blocking. There is no separate iMessage voice toggle; the `persona.voice_enabled` switch governs every channel uniformly.
+
+### Known limitations (MVP)
+
+- **1:1 DMs only.** Group chats are dropped at the inbound pipeline. Group support would need mention detection and chat-id routing; deferred.
+- **Text in, text + optional voice MP3 out.** Inbound attachments, tapbacks, read receipts, edits, and unsends are all dropped (AppleScript does not expose most of them cleanly). Outbound is text by default; voice replies attach an MP3 file but are not transcribed iMessage audio messages — they show up as a regular file attachment.
+- **No backfill.** `imsg watch.subscribe` streams from "now" — messages that arrived while the daemon was off are **not** replayed into memory. The iMessage server-side still delivers them to Messages.app normally, they just don't propagate into the persona's memory unless the daemon was running when they arrived.
+- **Send can occasionally double-deliver** under heavy load (AppleScript race). The echo cache absorbs the inbound duplicate; the outbound duplicate is a known wrinkle of the platform.
+
+### Troubleshooting
+
+- **"Full Disk Access is missing" on probe** — you added the wrong terminal app, or didn't quit the terminal after adding it. FDA is per-process-context and inherited at fork time; existing terminal processes keep the old (denied) permission forever.
+- **`imsg` not found** — the `brew install` didn't land on this user's `PATH`. Verify with `which imsg`, and if the binary is elsewhere, set `cli_path = "/absolute/path/to/imsg"` in the config.
+- **Inbound messages are ignored silently** — check the log for `imessage: drop reason=…`. The reason string tells you whether it's the destination filter, allowlist, echo cache, or rate limiter firing.
+- **Persona sends look like they're from you** — you forgot to log the persona Apple ID into Messages.app, so AppleScript is sending from your main account. Verify the `from` in the sent thread on the recipient's side.
+- **Two bots talking in circles** — the rate limiter will suppress after 5 drops in 60s. If the storm persists, check whether both sides have an AI answering; this is unsolvable from one end.

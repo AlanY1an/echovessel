@@ -99,9 +99,7 @@ log = logging.getLogger(__name__)
 EmbedCallable = Callable[[str], list[float]]
 
 
-def build_sentence_transformers_embedder(
-    model_name: str, cache_dir: Path
-) -> EmbedCallable:
+def build_sentence_transformers_embedder(model_name: str, cache_dir: Path) -> EmbedCallable:
     """Load a sentence-transformers model and return its `.encode` callable.
 
     Lazy import so daemons that inject a custom embedder (tests, eval) don't
@@ -199,9 +197,7 @@ class RuntimeContext:
     registry: ChannelRegistry
     shutdown_event: asyncio.Event
     persona: RuntimePersonaContext = field(
-        default_factory=lambda: RuntimePersonaContext(
-            id="default", display_name="Your Companion"
-        )
+        default_factory=lambda: RuntimePersonaContext(id="default", display_name="Your Companion")
     )
     voice_service: VoiceService | None = None
     loop: asyncio.AbstractEventLoop | None = None
@@ -288,6 +284,7 @@ class Runtime:
         # the Web browser sees every channel's activity live.
         self._broadcaster: Any = None
         self._discord_channel: Any = None
+        self._imessage_channel: Any = None
         # Worker η · boot timestamp for the admin `/api/admin/config`
         # System-info card (uptime_seconds). Set by `start()`.
         self._started_at: datetime | None = None
@@ -375,9 +372,7 @@ class Runtime:
         try:
             ensure_schema_up_to_date(engine)
         except Exception as e:
-            log.error(
-                "schema migration failed, refusing to start: %s", e, exc_info=True
-            )
+            log.error("schema migration failed, refusing to start: %s", e, exc_info=True)
             raise
 
         # Import cost_logger (and any other SQLModel-backed runtime models)
@@ -484,8 +479,7 @@ class Runtime:
             voice_enabled_initial = bool(config.persona.voice_enabled)
         except Exception as e:  # noqa: BLE001
             log.warning(
-                "could not read persona.voice_enabled from config, "
-                "defaulting to False: %s",
+                "could not read persona.voice_enabled from config, defaulting to False: %s",
                 e,
             )
             voice_enabled_initial = False
@@ -583,9 +577,7 @@ class Runtime:
         #   - proactive_fn        (LARGE-tier LLM call with inline prompt)
         #   - voice_service       (may be None; proactive handles that)
         # Audit sink defaults to JSONL under <data_dir>/logs/.
-        self._proactive_scheduler = self._build_proactive_scheduler(
-            _db_factory
-        )
+        self._proactive_scheduler = self._build_proactive_scheduler(_db_factory)
 
         # --- Step 10.7 · v0.4 · Instantiate ImporterFacade -------------
         #
@@ -603,8 +595,7 @@ class Runtime:
             log.info("importer facade: built")
         except Exception as e:  # noqa: BLE001
             log.warning(
-                "importer facade construction failed, import routes will "
-                "be disabled: %s",
+                "importer facade construction failed, import routes will be disabled: %s",
                 e,
             )
             self._importer_facade = None
@@ -670,6 +661,25 @@ class Runtime:
                 )
                 self._discord_channel = None
 
+        # --- iMessage channel registration ----------------------------
+        #
+        # Relies on the `imsg` CLI (https://github.com/steipete/imsg).
+        # Mirror of the Discord block: soft-failure on misconfiguration
+        # so the daemon stays alive with whatever other channels are
+        # configured. See
+        # develop-docs/initiatives/_active/2026-04-imessage-channel/00-plan.md
+        # for the full design.
+        if self.ctx.config.channels.imessage.enabled:
+            try:
+                self._register_imessage_channel()
+            except Exception as e:  # noqa: BLE001
+                log.error(
+                    "imessage channel startup failed; continuing without imessage: %s",
+                    e,
+                    exc_info=True,
+                )
+                self._imessage_channel = None
+
         await self.ctx.registry.start_all()
 
         # --- Step 12.5 · v0.4 · Register RuntimeMemoryObserver ---------
@@ -687,9 +697,7 @@ class Runtime:
             register_observer(self._memory_observer)
             log.info("memory observer: registered")
         except Exception as e:  # noqa: BLE001
-            log.warning(
-                "runtime memory observer registration failed: %s", e
-            )
+            log.warning("runtime memory observer registration failed: %s", e)
             self._memory_observer = None
 
         # Per-turn timeout: 0 (or missing) means no timeout (legacy
@@ -718,8 +726,7 @@ class Runtime:
                 await self._proactive_scheduler.start()
             except Exception as e:  # noqa: BLE001
                 log.error(
-                    "proactive scheduler failed to start; continuing "
-                    "without proactive: %s",
+                    "proactive scheduler failed to start; continuing without proactive: %s",
                     e,
                 )
                 self._proactive_scheduler = None
@@ -737,8 +744,7 @@ class Runtime:
             await self._start_control_plane()
         except Exception as e:  # noqa: BLE001
             log.error(
-                "control plane failed to start; CLI will fall back to "
-                "signal-based stop/reload: %s",
+                "control plane failed to start; CLI will fall back to signal-based stop/reload: %s",
                 e,
             )
             self._control_server = None
@@ -775,9 +781,7 @@ class Runtime:
         # which wants a graceful finish window (spec §2.5 graceful stop).
         if self._proactive_scheduler is not None:
             try:
-                await asyncio.wait_for(
-                    self._proactive_scheduler.stop(), timeout=timeout
-                )
+                await asyncio.wait_for(self._proactive_scheduler.stop(), timeout=timeout)
             except TimeoutError:
                 log.warning("proactive scheduler stop timeout")
             except Exception as e:  # noqa: BLE001
@@ -857,8 +861,7 @@ class Runtime:
                 shutdown_event=self.ctx.shutdown_event,
             )
             log.info(
-                "proactive scheduler: built (tick=%ds, max_per_24h=%d, "
-                "voice=%s)",
+                "proactive scheduler: built (tick=%ds, max_per_24h=%d, voice=%s)",
                 self.ctx.config.proactive.tick_interval_seconds,
                 self.ctx.config.proactive.max_per_24h,
                 "enabled" if self.ctx.voice_service is not None else "disabled",
@@ -866,8 +869,7 @@ class Runtime:
             return scheduler
         except Exception as e:  # noqa: BLE001
             log.error(
-                "proactive scheduler build failed; daemon will boot "
-                "without proactive: %s",
+                "proactive scheduler build failed; daemon will boot without proactive: %s",
                 e,
                 exc_info=True,
             )
@@ -897,9 +899,7 @@ class Runtime:
 
         from echovessel.runtime.control import stop_control_server
 
-        await stop_control_server(
-            self._control_task, self._control_server, timeout=timeout
-        )
+        await stop_control_server(self._control_task, self._control_server, timeout=timeout)
         self._control_task = None
         self._control_server = None
         self.ctx.control_port = None
@@ -967,9 +967,7 @@ class Runtime:
         # a task. The runtime keeps a reference so `stop()` can request
         # graceful shutdown.
         self._web_uvicorn_server = server
-        self._web_uvicorn_task = asyncio.create_task(
-            server.serve(), name="web_uvicorn_server"
-        )
+        self._web_uvicorn_task = asyncio.create_task(server.serve(), name="web_uvicorn_server")
         log.info(
             "web channel: serving on http://%s:%d (debounce_ms=%d)",
             web_cfg.host,
@@ -1018,9 +1016,7 @@ class Runtime:
             return
 
         allowed_ids_list = discord_cfg.allowed_user_ids
-        allowed_ids = (
-            set(allowed_ids_list) if allowed_ids_list else None
-        )
+        allowed_ids = set(allowed_ids_list) if allowed_ids_list else None
 
         channel = DiscordChannel(
             token=token,
@@ -1033,6 +1029,46 @@ class Runtime:
             "discord channel: registered (allowlist=%s, debounce_ms=%d)",
             "open" if allowed_ids is None else f"{len(allowed_ids)} users",
             discord_cfg.debounce_ms,
+        )
+
+    def _register_imessage_channel(self) -> None:
+        """Instantiate and register the iMessage channel.
+
+        Called from :meth:`start` when ``[channels.imessage].enabled=true``.
+        Steps:
+
+        1. Validate ``persona_apple_id`` is set. Empty = refuse to start
+           the channel (but not the daemon) — the whole destination
+           filter rests on having a non-empty persona Apple ID.
+        2. Construct :class:`IMessageChannel` with the config-validated
+           fields. The channel's own ``start()`` (invoked later by
+           ``registry.start_all()``) is responsible for spawning the
+           ``imsg`` subprocess and subscribing to notifications.
+        """
+
+        from echovessel.channels.imessage.channel import IMessageChannel
+
+        imessage_cfg = self.ctx.config.channels.imessage
+
+        channel = IMessageChannel(
+            persona_apple_id=imessage_cfg.persona_apple_id,
+            cli_path=imessage_cfg.cli_path,
+            db_path=imessage_cfg.db_path,
+            allowed_handles=imessage_cfg.allowed_handles or None,
+            default_service=imessage_cfg.default_service,
+            region=imessage_cfg.region,
+            debounce_ms=imessage_cfg.debounce_ms,
+        )
+        self.ctx.registry.register(channel)
+        self._imessage_channel = channel
+        log.info(
+            "imessage channel: registered (mode=%s, persona=%r, allowlist=%s, debounce_ms=%d)",
+            "dual-account" if imessage_cfg.persona_apple_id.strip() else "single-account",
+            imessage_cfg.persona_apple_id or "(main account)",
+            "open"
+            if not imessage_cfg.allowed_handles
+            else f"{len(imessage_cfg.allowed_handles)} handles",
+            imessage_cfg.debounce_ms,
         )
 
     async def _stop_web_channel(self, *, timeout: float = 5.0) -> None:
@@ -1056,9 +1092,7 @@ class Runtime:
             except TimeoutError:
                 log.warning("web uvicorn stop timeout; cancelling task")
                 self._web_uvicorn_task.cancel()
-                with contextlib.suppress(
-                    asyncio.CancelledError, Exception
-                ):
+                with contextlib.suppress(asyncio.CancelledError, Exception):
                     await self._web_uvicorn_task
             except (asyncio.CancelledError, Exception) as e:  # noqa: BLE001
                 log.debug("web uvicorn task exited: %s", e)
@@ -1162,9 +1196,7 @@ class Runtime:
 
     # ---- Worker X · cross-channel SSE helpers ------------------------------
 
-    def _publish_cross_channel_event(
-        self, event: str, payload: dict
-    ) -> None:
+    def _publish_cross_channel_event(self, event: str, payload: dict) -> None:
         """Publish one event through the runtime broadcaster.
 
         Failures are swallowed — cross-channel mirroring is best-effort
@@ -1186,13 +1218,9 @@ class Runtime:
                 return
             publish(event, payload)
         except Exception as e:  # noqa: BLE001
-            log.warning(
-                "cross-channel broadcast failed (event=%s): %s", event, e
-            )
+            log.warning("cross-channel broadcast failed (event=%s): %s", event, e)
 
-    def _publish_cross_channel_done(
-        self, outgoing: OutgoingMessage, turn: IncomingTurn
-    ) -> None:
+    def _publish_cross_channel_done(self, outgoing: OutgoingMessage, turn: IncomingTurn) -> None:
         """Mirror the ``chat.message.done`` (and ``voice_ready`` if
         present) events for a non-Web turn into the runtime broadcaster.
         """
@@ -1254,10 +1282,7 @@ class Runtime:
         # live. For Web-sourced turns, WebChannel.push_user_message /
         # send already publish through the SAME broadcaster, so we skip
         # the runtime mirror to avoid duplicates.
-        mirror_to_web = (
-            self._broadcaster is not None
-            and turn.channel_id != "web"
-        )
+        mirror_to_web = self._broadcaster is not None and turn.channel_id != "web"
         if mirror_to_web:
             # Publish chat.message.user_appended for every user message
             # in the turn BEFORE assemble_turn runs — same order Web
@@ -1268,11 +1293,7 @@ class Runtime:
                     {
                         "user_id": msg.user_id,
                         "content": msg.content,
-                        "received_at": (
-                            msg.received_at.isoformat()
-                            if msg.received_at
-                            else None
-                        ),
+                        "received_at": (msg.received_at.isoformat() if msg.received_at else None),
                         "external_ref": msg.external_ref,
                         "source_channel_id": turn.channel_id,
                     },
@@ -1325,9 +1346,7 @@ class Runtime:
             return
 
         if channel is None:
-            log.warning(
-                "no channel registered for %s; skipping send", turn.channel_id
-            )
+            log.warning("no channel registered for %s; skipping send", turn.channel_id)
             return
         # Stage 7 · generate voice BEFORE channel.send so the
         # OutgoingMessage already carries the VoiceResult when it
@@ -1356,8 +1375,7 @@ class Runtime:
                 )
             except Exception as e:  # noqa: BLE001
                 log.warning(
-                    "voice generation failed for turn %s; "
-                    "falling back to text: %s",
+                    "voice generation failed for turn %s; falling back to text: %s",
                     turn.turn_id,
                     e,
                 )
@@ -1392,9 +1410,7 @@ class Runtime:
                 try:
                     await channel_on_turn_done(turn.turn_id)
                 except Exception as e:  # noqa: BLE001
-                    log.warning(
-                        "channel.on_turn_done raised: %s", e
-                    )
+                    log.warning("channel.on_turn_done raised: %s", e)
 
     # ---- Signal handling ---------------------------------------------------
 
@@ -1459,9 +1475,7 @@ class Runtime:
             try:
                 new_llm = build_llm_provider(new_config.llm)
             except Exception as e:  # noqa: BLE001
-                log.warning(
-                    "reload: failed to build new LLM provider, keeping old: %s", e
-                )
+                log.warning("reload: failed to build new LLM provider, keeping old: %s", e)
                 return reloaded
             # Re-wrap the freshly-built provider so SIGHUP reload doesn't
             # silently drop cost tracking for subsequent calls.
@@ -1494,10 +1508,7 @@ class Runtime:
         # ``ctx.config.consolidate`` alone does NOT take effect
         # without this mirror. See 2026-04-daemon-control stage 4
         # (reload matrix audit).
-        if (
-            self._worker is not None
-            and new_config.consolidate != self.ctx.config.consolidate
-        ):
+        if self._worker is not None and new_config.consolidate != self.ctx.config.consolidate:
             old = self.ctx.config.consolidate
             new = new_config.consolidate
             if old.trivial_message_count != new.trivial_message_count:
@@ -1507,9 +1518,7 @@ class Runtime:
                 self._worker.trivial_token_count = new.trivial_token_count
                 reloaded.append("consolidate.trivial_token_count")
             if old.reflection_hard_gate_24h != new.reflection_hard_gate_24h:
-                self._worker.reflection_hard_limit_24h = (
-                    new.reflection_hard_gate_24h
-                )
+                self._worker.reflection_hard_limit_24h = new.reflection_hard_gate_24h
                 reloaded.append("consolidate.reflection_hard_gate_24h")
 
         self.ctx.config = new_config
@@ -1573,8 +1582,7 @@ class Runtime:
         # corrupt the TOML file with an int instead of a bool.
         if not isinstance(enabled, bool):
             raise TypeError(
-                f"update_persona_voice_enabled: enabled must be bool, got "
-                f"{type(enabled).__name__}"
+                f"update_persona_voice_enabled: enabled must be bool, got {type(enabled).__name__}"
             )
 
         if self.ctx.config_path is None:
@@ -1587,12 +1595,12 @@ class Runtime:
         # and the caller sees a RuntimeError explaining why.
         try:
             self._atomic_write_config_field(
-                section="persona", field="voice_enabled", value=enabled,
+                section="persona",
+                field="voice_enabled",
+                value=enabled,
             )
         except Exception as e:
-            raise RuntimeError(
-                f"failed to persist voice_enabled={enabled}: {e}"
-            ) from e
+            raise RuntimeError(f"failed to persist voice_enabled={enabled}: {e}") from e
 
         # Step 3 · mirror into in-memory ctx (rollback-safe: only runs
         # after the disk write returned successfully).
@@ -1604,9 +1612,7 @@ class Runtime:
             if push is None:
                 continue
             try:
-                await push(
-                    "chat.settings.updated", {"voice_enabled": enabled}
-                )
+                await push("chat.settings.updated", {"voice_enabled": enabled})
             except Exception as e:  # noqa: BLE001
                 log.warning(
                     "channel %s push_sse failed during voice_enabled toggle: %s",
@@ -1650,9 +1656,7 @@ class Runtime:
 
         # Tempfile in same dir → os.replace is atomic on POSIX.
         parent = path.parent
-        fd, tmp_path_str = tempfile.mkstemp(
-            prefix=f".{path.name}.", suffix=".tmp", dir=str(parent)
-        )
+        fd, tmp_path_str = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(parent))
         tmp_path = Path(tmp_path_str)
         try:
             with os.fdopen(fd, "wb") as tf:
@@ -1716,9 +1720,7 @@ class Runtime:
                 data[section][fname] = value
 
         parent = path.parent
-        fd, tmp_path_str = tempfile.mkstemp(
-            prefix=f".{path.name}.", suffix=".tmp", dir=str(parent)
-        )
+        fd, tmp_path_str = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(parent))
         tmp_path = Path(tmp_path_str)
         try:
             with os.fdopen(fd, "wb") as tf:
@@ -1775,15 +1777,12 @@ class Runtime:
         """
         if self.ctx.config_path is None:
             raise RuntimeError(
-                "cannot patch config: daemon started without a config "
-                "file (config_override mode)"
+                "cannot patch config: daemon started without a config file (config_override mode)"
             )
 
         # Flatten patches into path-strings for the return value.
         applied_paths = sorted(
-            f"{section}.{fname}"
-            for section, fields in patches.items()
-            for fname in fields
+            f"{section}.{fname}" for section, fields in patches.items() for fname in fields
         )
 
         # Step 1 · load current TOML + merge patches in memory.
@@ -1791,9 +1790,7 @@ class Runtime:
         with open(path, "rb") as f:
             merged = tomllib.load(f)
         for section, fields in patches.items():
-            if section not in merged or not isinstance(
-                merged.get(section), dict
-            ):
+            if section not in merged or not isinstance(merged.get(section), dict):
                 merged[section] = {}
             for fname, value in fields.items():
                 merged[section][fname] = value
@@ -1835,11 +1832,62 @@ class Runtime:
                         db.commit()
             except Exception as e:  # noqa: BLE001
                 log.warning(
-                    "persona row display_name mirror failed (keeping "
-                    "in-memory + TOML values): %s",
+                    "persona row display_name mirror failed (keeping in-memory + TOML values): %s",
                     e,
                 )
 
+        return applied_paths
+
+    def write_channel_config_patches(
+        self,
+        patches: dict[str, dict[str, Any]],
+    ) -> list[str]:
+        """Admin-side channel-config write (no hot reload).
+
+        Companion to :meth:`apply_config_patches`. The difference:
+        channel fields (``[channels.*]``) cannot be hot-reloaded —
+        flipping ``enabled`` has to spawn / stop a subprocess or a
+        gateway connection. So this helper **only** validates + writes
+        to disk. The admin route tells the caller to restart the daemon
+        to actually apply.
+
+        ``patches`` is the same ``{section: {field: value}}`` shape as
+        :meth:`apply_config_patches`, but the caller is expected to
+        pass only ``channels`` as the top-level section.
+
+        Raises:
+            RuntimeError: daemon started in config_override mode.
+            ValueError: merged config failed pydantic validation.
+
+        Returns:
+            Sorted list of ``"section.field"`` path strings written.
+        """
+        if self.ctx.config_path is None:
+            raise RuntimeError(
+                "cannot patch config: daemon started without a config file (config_override mode)"
+            )
+
+        applied_paths = sorted(
+            f"{section}.{fname}" for section, fields in patches.items() for fname in fields
+        )
+
+        path = Path(self.ctx.config_path)
+        with open(path, "rb") as f:
+            merged = tomllib.load(f)
+        for section, fields in patches.items():
+            if section not in merged or not isinstance(merged.get(section), dict):
+                merged[section] = {}
+            for fname, value in fields.items():
+                merged[section][fname] = value
+
+        from pydantic import ValidationError
+
+        try:
+            Config.model_validate(merged)
+        except ValidationError as e:
+            raise ValueError(str(e)) from e
+
+        self._atomic_write_config_patches(patches)
         return applied_paths
 
     # ---- Local-first disclosure (spec §13.1) -------------------------------

@@ -41,6 +41,7 @@ export interface DaemonState {
     display_name: string
     voice_enabled: boolean
     has_voice_id: boolean
+    has_avatar: boolean
   }
   onboarding_required: boolean
   memory_counts: {
@@ -64,6 +65,7 @@ export interface PersonaStateApi {
   display_name: string
   voice_enabled: boolean
   voice_id: string | null
+  has_avatar: boolean
   core_blocks: {
     persona: string
     self: string
@@ -868,12 +870,59 @@ export interface ConfigSystemSection {
   config_path: string | null
 }
 
+/** Shared live-state fields every channel block carries. */
+export interface ChannelLiveStatus {
+  /** Registered in the runtime channel registry. Implies `enabled=true`
+   *  in the loaded config and that construction succeeded. */
+  registered: boolean
+  /** Transport is currently usable (gateway handshake complete, etc.). */
+  ready: boolean
+}
+
+export interface ConfigChannelWeb extends ChannelLiveStatus {
+  enabled: boolean
+  channel_id: string
+  host: string
+  port: number
+  static_dir: string
+  debounce_ms: number
+}
+
+export interface ConfigChannelDiscord extends ChannelLiveStatus {
+  enabled: boolean
+  channel_id: string
+  token_env: string
+  /** Presence-only — never carries the actual token. */
+  token_loaded: boolean
+  allowed_user_ids: number[]
+  debounce_ms: number
+}
+
+export interface ConfigChannelIMessage extends ChannelLiveStatus {
+  enabled: boolean
+  channel_id: string
+  persona_apple_id: string
+  cli_path: string
+  db_path: string
+  allowed_handles: string[]
+  default_service: 'imessage' | 'sms' | 'auto'
+  region: string
+  debounce_ms: number
+}
+
+export interface ConfigChannelsSection {
+  web: ConfigChannelWeb
+  discord: ConfigChannelDiscord
+  imessage: ConfigChannelIMessage
+}
+
 export interface ConfigGetResponse {
   llm: ConfigLlmSection
   persona: ConfigPersonaSection
   memory: ConfigMemorySection
   consolidate: ConfigConsolidateSection
   system: ConfigSystemSection
+  channels: ConfigChannelsSection
 }
 
 /**
@@ -904,6 +953,44 @@ export interface ConfigPatchPayload {
     trivial_token_count: number
     reflection_hard_gate_24h: number
   }>
+}
+
+/**
+ * Body for ``PATCH /api/admin/channels``. Unlike the main config patch
+ * route, channel fields are **not** hot-reloaded — the daemon must be
+ * restarted before the new values take effect. Every field in
+ * ``ConfigChannel*`` EXCEPT the live-state bools is patchable here.
+ */
+export interface ChannelsPatchPayload {
+  web?: Partial<{
+    enabled: boolean
+    host: string
+    port: number
+    static_dir: string
+    debounce_ms: number
+  }>
+  discord?: Partial<{
+    enabled: boolean
+    token_env: string
+    allowed_user_ids: number[]
+    debounce_ms: number
+  }>
+  imessage?: Partial<{
+    enabled: boolean
+    persona_apple_id: string
+    cli_path: string
+    db_path: string
+    allowed_handles: string[]
+    default_service: 'imessage' | 'sms' | 'auto'
+    region: string
+    debounce_ms: number
+  }>
+}
+
+export interface ChannelsPatchResponse {
+  updated_fields: string[]
+  reload_triggered: false
+  restart_required: true
 }
 
 export interface ConfigPatchResponse {
