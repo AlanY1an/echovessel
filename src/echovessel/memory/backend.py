@@ -19,7 +19,7 @@ Protocol and be a drop-in replacement (post-MVP).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(slots=True)
@@ -66,13 +66,40 @@ class StorageBackend(Protocol):
         """
         ...
 
-    def insert_vector(self, concept_node_id: int, embedding: list[float]) -> None:
-        """Insert (or upsert) the vector for a concept_node_id."""
+    def insert_vector(
+        self,
+        concept_node_id: int,
+        embedding: list[float],
+        *,
+        conn: Any | None = None,
+    ) -> None:
+        """Insert (or upsert) the vector for a concept_node_id.
+
+        If ``conn`` is provided (a SQLAlchemy Connection bound to an
+        outer transaction), the write joins that transaction instead of
+        opening a new connection. This is how callers like
+        ``consolidate_session`` avoid a self-deadlock — the main
+        DbSession has already flushed an INSERT to ``concept_nodes`` and
+        is holding SQLite's single writer lock; an independent
+        ``engine.begin()`` would deadlock against it.
+
+        Callers that do NOT have an outer transaction (import pipeline,
+        ad-hoc reindex) can omit ``conn`` and the backend will open its
+        own connection.
+        """
         ...
 
-    def delete_vector(self, concept_node_id: int) -> None:
+    def delete_vector(
+        self,
+        concept_node_id: int,
+        *,
+        conn: Any | None = None,
+    ) -> None:
         """Remove a vector from the vector table. Called during physical
-        cleanup after soft-delete retention expires."""
+        cleanup after soft-delete retention expires.
+
+        ``conn`` has the same semantics as in ``insert_vector``.
+        """
         ...
 
     # --- full-text operations on recall_messages_fts --------------------

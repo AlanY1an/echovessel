@@ -309,9 +309,11 @@ async def consolidate_session(
             db.flush()
             created_events.append(node)
 
-            # Embed + index into the vector table
+            # Embed + index into the vector table, joining the current
+            # transaction so we don't deadlock against our own flushed
+            # INSERT on concept_nodes (SQLite has a single writer).
             vec = embed_fn(ev.description)
-            backend.insert_vector(node.id, vec)
+            backend.insert_vector(node.id, vec, conn=db.connection())
 
         # Atomic: events + the resume-point flag commit together. If this
         # commit fails, neither the nodes nor the flag persist, and the
@@ -388,9 +390,10 @@ async def consolidate_session(
                     db.flush()
                     created_thoughts.append(thought)
 
-                    # Embed thought
+                    # Embed thought — join the current transaction
+                    # (see note in the event branch above).
                     vec = embed_fn(th.description)
-                    backend.insert_vector(thought.id, vec)
+                    backend.insert_vector(thought.id, vec, conn=db.connection())
 
                     # Filling links
                     for child_id in th.filling:

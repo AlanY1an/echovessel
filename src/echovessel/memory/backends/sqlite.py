@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import struct
 from collections.abc import Sequence
+from typing import Any
 
 from sqlalchemy import Engine, text
 
@@ -81,26 +82,57 @@ class SQLiteBackend(StorageBackend):
             ).all()
         return [VectorHit(concept_node_id=r[0], distance=float(r[1])) for r in rows]
 
-    def insert_vector(self, concept_node_id: int, embedding: list[float]) -> None:
+    def insert_vector(
+        self,
+        concept_node_id: int,
+        embedding: list[float],
+        *,
+        conn: Any | None = None,
+    ) -> None:
         # INSERT OR REPLACE semantics so re-extraction can overwrite.
-        with self._engine.begin() as conn:
-            # Remove any existing row first (vec0 does not support REPLACE
-            # semantics cleanly across all versions).
+        # vec0 does not support REPLACE semantics cleanly across all
+        # versions, so we DELETE then INSERT.
+        #
+        # When ``conn`` is passed, the writes join the caller's active
+        # transaction (avoids self-deadlock against a DbSession that has
+        # already flushed an INSERT to ``concept_nodes``). When absent,
+        # we open our own short-lived transaction as before.
+        if conn is not None:
             conn.execute(
                 text("DELETE FROM concept_nodes_vec WHERE id = :id"),
                 {"id": concept_node_id},
             )
             conn.execute(
-                text(
-                    "INSERT INTO concept_nodes_vec (id, embedding) "
-                    "VALUES (:id, :vec)"
-                ),
+                text("INSERT INTO concept_nodes_vec (id, embedding) VALUES (:id, :vec)"),
+                {"id": concept_node_id, "vec": _pack_vector(embedding)},
+            )
+            return
+
+        with self._engine.begin() as c:
+            c.execute(
+                text("DELETE FROM concept_nodes_vec WHERE id = :id"),
+                {"id": concept_node_id},
+            )
+            c.execute(
+                text("INSERT INTO concept_nodes_vec (id, embedding) VALUES (:id, :vec)"),
                 {"id": concept_node_id, "vec": _pack_vector(embedding)},
             )
 
-    def delete_vector(self, concept_node_id: int) -> None:
-        with self._engine.begin() as conn:
+    def delete_vector(
+        self,
+        concept_node_id: int,
+        *,
+        conn: Any | None = None,
+    ) -> None:
+        if conn is not None:
             conn.execute(
+                text("DELETE FROM concept_nodes_vec WHERE id = :id"),
+                {"id": concept_node_id},
+            )
+            return
+
+        with self._engine.begin() as c:
+            c.execute(
                 text("DELETE FROM concept_nodes_vec WHERE id = :id"),
                 {"id": concept_node_id},
             )
