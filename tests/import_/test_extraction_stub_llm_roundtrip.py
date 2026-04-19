@@ -15,7 +15,7 @@ class _StubLLM:
 
     async def complete(self, system: str, user: str, **kwargs):
         self.calls.append({"system": system, "user": user, **kwargs})
-        return self.canned
+        return self.canned, None
 
 
 CANNED_WRITES = {
