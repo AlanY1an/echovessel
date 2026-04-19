@@ -147,6 +147,18 @@ Interaction 在构造外发回复的那一刻读 `ctx.persona.voice_enabled`;pro
 
 Runtime 里每个调用点声明自己想要的 tier,provider 在调用时把 tier 映射到 model。LLMProvider 契约(`runtime/llm/base.py`)是一个微小的 `Protocol`,只有三个方法:`model_for(tier)` 用于 log 和审计,`complete(system, user, *, tier, ...)` 用于单次 completion,`stream(system, user, *, tier, ...)` 用于逐 token 流式。每个调用签名把 tier 作为关键字参数传进来,默认 `MEDIUM`。
 
+`complete` 返回 `tuple[str, Usage | None]`——回复文本与一个 `Usage` dataclass 配对,后者携带 provider SDK 上报的 `input_tokens`、`output_tokens`、`cache_read_input_tokens`、`cache_creation_input_tokens`。`stream` 先 yield `str` 类型的文本 delta,最后 yield 一个尾部 `Usage` 作为末项;流式中断时尾部 `Usage` 会被省略,而不是记录一个偏低的误导性计数。
+
+Provider 不提供 token 数据时(以 `StubProvider` 为典型)`Usage` 为 `None` 或在 stream 中缺席。只关心文本的消费者用 `isinstance` 过滤:
+
+```python
+async for item in llm.stream(system, user, tier=tier):
+    if isinstance(item, str):
+        await on_token(message_id, item)
+    # 尾部 Usage 由 CostTrackingProvider 自动吸收;
+    # 直接使用 LLMProvider 的调用者可以按需捕获
+```
+
 调用点的 tier 分配固定在代码里,不在配置里,因为它们反映的是架构意图而不是用户偏好。Extraction 和 reflection 是 SMALL——它们跑在关闭的 session 上,批量跑便宜的调用,用户也没在等。Reflection 理论上能从更强的模型里受益,但 MVP 阶段 Haiku 级的输出够用了;不同意的用户可以在 `[llm.tier_models]` 里把 SMALL 拉高而不用动代码。Judge(eval harness,未来)是 MEDIUM——严格评估要一致性,不要最贵的模型。Interaction 和 proactive 是 LARGE——用户正盯着屏幕,更好的模型能带来显著更好的回复。
 
 `runtime/llm/` 里的三个具体 provider 加起来覆盖 15+ 个真实端点。`AnthropicProvider` 用原生 `anthropic` SDK,对着 Claude。`OpenAICompatibleProvider` 用原生 `openai` SDK,`base_url` 可配,这意味着它覆盖 OpenAI 官方、OpenRouter、Ollama、LM Studio、llama.cpp server、vLLM、DeepSeek、Together、Groq、xAI,以及任何实现了 OpenAI 兼容 REST 的 provider。`StubProvider` 返回预置文本,用于测试和 dry run。
@@ -195,6 +207,7 @@ from collections.abc import AsyncIterator
 
 from echovessel.runtime.llm.base import LLMProvider, LLMTier
 from echovessel.runtime.llm.errors import LLMPermanentError, LLMTransientError
+from echovessel.runtime.llm.usage import Usage
 
 
 class MyProvider(LLMProvider):
@@ -244,10 +257,10 @@ class MyProvider(LLMProvider):
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> str:
+    ) -> tuple[str, Usage | None]:
         try:
             # ... call self._client.complete(...) ...
-            return "response text"
+            return "response text", None  # SDK 提供时返回 Usage
         except TimeoutError as e:
             raise LLMTransientError(str(e)) from e
         except ValueError as e:
@@ -262,15 +275,17 @@ class MyProvider(LLMProvider):
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str | Usage]:
         # 不能真流式的 provider 可以退化为 complete()
         # 再一次 yield 整段文本。
-        text = await self.complete(
+        text, usage = await self.complete(
             system, user,
             tier=tier, max_tokens=max_tokens,
             temperature=temperature, timeout=timeout,
         )
         yield text
+        if usage is not None:
+            yield usage  # 尾部 Usage;无 token 数据时省略
 ```
 
 在 `build_llm_provider` 里注册:
@@ -289,7 +304,7 @@ if provider == "my_provider":
     )
 ```
 
-骨架必须遵守三条规则。构造函数不能触网——用户 API key 错了应该在第一次 `complete` 时才发现,不在启动时。瞬时错误和永久错误必须是两个不同的异常类型,因为 consolidate worker 只对瞬时错误重试。Tier → model 解析必须遵循优先级 `pinned > tier_models > 默认`;用户依赖 `llm.model = "x"` 表达"用 x 跑一切"。
+骨架必须遵守四条规则。构造函数不能触网——用户 API key 错了应该在第一次 `complete` 时才发现,不在启动时。瞬时错误和永久错误必须是两个不同的异常类型,因为 consolidate worker 只对瞬时错误重试。Tier → model 解析必须遵循优先级 `pinned > tier_models > 默认`;用户依赖 `llm.model = "x"` 表达"用 x 跑一切"。`complete` 必须返回 `tuple[str, Usage | None]`,`stream` 必须 yield `AsyncIterator[str | Usage]`;provider 无法提供 token 计数时返回 `None`——成本追踪层会自动优雅处理缺失情况。
 
 ### 2. 加一个新的启动步骤
 

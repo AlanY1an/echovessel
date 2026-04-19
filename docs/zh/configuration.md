@@ -121,6 +121,17 @@ provider    = "stub"
 api_key_env = ""
 ```
 
+### 管理面板 Cost 标签页
+
+Web UI 里 **Admin → Config → Cost** 卡片展示的是从 `llm_calls` 表里汇总出来的 LLM 预估成本。Token 计数优先使用 provider SDK 上报的 usage 数据;没有 provider 上报时退回到本地 token 估算。所有数字在 UI 里都标注为估算值——权威计费数据在 provider 的账单控制台里。
+
+**「其中 N 个已缓存（of which N cached）」** ——当 provider 上报了所选时间窗口内的提示缓存命中时,这个注释会出现在 token 总量旁边。以下两个 provider 会填充该字段:
+
+- **Anthropic**(`provider = "anthropic"`)—— 每条流式响应包含 `cache_read_input_tokens`(从 Anthropic 5 分钟提示缓存读取的 token,成本约为标准输入的十分之一)和 `cache_creation_input_tokens`(本次调用写入缓存的 token,按略高于标准输入的价格计费)。缓存命中比例越高,实际成本就比账面 token 数低得多。
+- **OpenAI**(`provider = "openai_compat"`,对接 OpenAI 官方或支持 `stream_options.include_usage` 的兼容端点)—— 在 `prompt_tokens_details` 里上报缓存 token;缓存 token 按标准输入成本的一半计费。
+
+只有所选时间窗口内至少有一次缓存命中,注释才会显示。本地 provider(Ollama、LM Studio)、`stub` provider,以及任何不返回 usage 数据的端点都不会触发该注释。
+
 ## `[consolidate]`
 
 控制从已关闭 session 里抽取 event 和 thought 的后台 worker。
