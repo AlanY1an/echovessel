@@ -74,10 +74,16 @@ export function fmtT(secs: number | null | undefined): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-// ─── Emotional impact bar (−1..+1) ──────────────────────────
+// ─── Emotional impact bar (−10..+10 integer) ─────────────────
+//
+// Backend produces `emotional_impact` in [-10, +10] (see the
+// extraction prompt in src/echovessel/prompts/extraction.py — anchors
+// at ±7 for grief / major milestone, ±8 triggers SHOCK reflection).
+// Normalise by /10 so +10 fills the half, +2 shows ~20% fill, etc.
 
 export function EmotionBar({ v }: { v: number }) {
-  const pct = Math.abs(v) * 100
+  const normalised = Math.min(Math.abs(v) / 10, 1)
+  const pct = normalised * 100
   const neg = v < 0
   const color = neg ? 'oklch(58% 0.16 20)' : 'oklch(58% 0.14 140)'
   return (
@@ -90,7 +96,7 @@ export function EmotionBar({ v }: { v: number }) {
         }}
       >
         {v > 0 ? '+' : ''}
-        {v.toFixed(2)}
+        {Number.isInteger(v) ? v.toString() : v.toFixed(1)}
       </span>
       <div
         style={{
