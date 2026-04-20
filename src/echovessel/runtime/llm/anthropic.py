@@ -193,7 +193,7 @@ class AnthropicProvider:
                     etype = getattr(event, "type", None)
                     if etype == "message_start":
                         u = event.message.usage
-                        in_t = u.input_tokens
+                        in_t = getattr(u, "input_tokens", 0) or 0
                         cache_r = getattr(u, "cache_read_input_tokens", 0) or 0
                         cache_c = getattr(u, "cache_creation_input_tokens", 0) or 0
                     elif etype == "content_block_delta":
