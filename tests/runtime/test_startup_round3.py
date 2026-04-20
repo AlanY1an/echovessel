@@ -43,9 +43,7 @@ interval_seconds = 60
 
 def test_startup_step_6_5_calls_ensure_schema_up_to_date():
     cfg = load_config_from_str(TOML)
-    with patch(
-        "echovessel.runtime.app.ensure_schema_up_to_date"
-    ) as patched:
+    with patch("echovessel.runtime.app.ensure_schema_up_to_date") as patched:
         Runtime.build(
             None,
             config_override=cfg,
@@ -80,9 +78,7 @@ async def test_startup_step_12_5_observer_registered():
         llm=StubProvider(fallback=""),
         embed_fn=build_zero_embedder(),
     )
-    with patch(
-        "echovessel.runtime.app.register_observer"
-    ) as patched:
+    with patch("echovessel.runtime.app.register_observer") as patched:
         await rt.start(channels=[], register_signals=False)
         try:
             assert patched.call_count == 1

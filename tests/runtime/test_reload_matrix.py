@@ -81,9 +81,7 @@ async def _reload_with_mutation(
     # real network for llm.* mutations.
     import echovessel.runtime.app as app_mod
 
-    monkeypatch.setattr(
-        app_mod, "build_llm_provider", lambda cfg: StubProvider(fallback="new")
-    )
+    monkeypatch.setattr(app_mod, "build_llm_provider", lambda cfg: StubProvider(fallback="new"))
     return await rt.reload()
 
 
@@ -99,9 +97,7 @@ class TestReloadMatrixLLM:
             ("timeout_seconds = 30", "timeout_seconds = 60"),
         ],
     )
-    async def test_llm_field_triggers_provider_rebuild(
-        self, tmp_path, monkeypatch, replacement
-    ):
+    async def test_llm_field_triggers_provider_rebuild(self, tmp_path, monkeypatch, replacement):
         rt, toml = _build(tmp_path)
         reloaded = await _reload_with_mutation(rt, toml, replacement, monkeypatch)
         assert "llm" in reloaded
@@ -146,9 +142,7 @@ class TestReloadMatrixConsolidate:
     this; before the fix, only ctx.config was updated and the worker
     kept stale values."""
 
-    async def test_trivial_message_count_mirrors_to_worker(
-        self, tmp_path, monkeypatch
-    ):
+    async def test_trivial_message_count_mirrors_to_worker(self, tmp_path, monkeypatch):
         rt, toml = _build(tmp_path)
         # Stand in a minimal worker for the test (Runtime.build doesn't
         # construct one — that's Runtime.start's job).
@@ -175,9 +169,7 @@ class TestReloadMatrixConsolidate:
         assert "consolidate.trivial_message_count" in reloaded
         assert rt._worker.trivial_message_count == 10
 
-    async def test_trivial_token_count_mirrors_to_worker(
-        self, tmp_path, monkeypatch
-    ):
+    async def test_trivial_token_count_mirrors_to_worker(self, tmp_path, monkeypatch):
         rt, toml = _build(tmp_path)
         from echovessel.runtime.consolidate_worker import ConsolidateWorker
 
@@ -202,9 +194,7 @@ class TestReloadMatrixConsolidate:
         assert "consolidate.trivial_token_count" in reloaded
         assert rt._worker.trivial_token_count == 500
 
-    async def test_reflection_hard_gate_mirrors_to_worker(
-        self, tmp_path, monkeypatch
-    ):
+    async def test_reflection_hard_gate_mirrors_to_worker(self, tmp_path, monkeypatch):
         rt, toml = _build(tmp_path)
         from echovessel.runtime.consolidate_worker import ConsolidateWorker
 
@@ -242,9 +232,7 @@ class TestReloadMatrixPersona:
     the visible persona name; the admin API is the canonical path.
     """
 
-    async def test_reload_updates_ctx_config_but_not_ctx_persona(
-        self, tmp_path, monkeypatch
-    ):
+    async def test_reload_updates_ctx_config_but_not_ctx_persona(self, tmp_path, monkeypatch):
         rt, toml = _build(tmp_path)
         assert rt.ctx.config.persona.display_name == "Original"
 

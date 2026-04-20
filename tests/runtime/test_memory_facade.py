@@ -92,13 +92,9 @@ def test_no_channel_id_kwarg_in_reads():
             if isinstance(sub, ast.Call):
                 for kw in sub.keywords or []:
                     if kw.arg == "channel_id":
-                        violations.append(
-                            f"{node.name}: channel_id= kwarg at line {sub.lineno}"
-                        )
+                        violations.append(f"{node.name}: channel_id= kwarg at line {sub.lineno}")
 
-    assert not violations, (
-        "D4 violation in MemoryFacade reads:\n  " + "\n  ".join(violations)
-    )
+    assert not violations, "D4 violation in MemoryFacade reads:\n  " + "\n  ".join(violations)
 
 
 # ---------------------------------------------------------------------------
@@ -208,9 +204,7 @@ def test_list_recall_messages_before_cursor():
         )
 
     facade = MemoryFacade(_db_factory(engine))
-    msgs = facade.list_recall_messages(
-        "p1", "self", limit=10, before=datetime(2026, 2, 1)
-    )
+    msgs = facade.list_recall_messages("p1", "self", limit=10, before=datetime(2026, 2, 1))
     assert len(msgs) == 1
     assert msgs[0].content == "old"
 
@@ -224,9 +218,7 @@ def test_get_recent_events_empty_when_no_events():
     engine = _make_engine_with_seed()
     facade = MemoryFacade(_db_factory(engine))
 
-    events = facade.get_recent_events(
-        "p1", "self", since=datetime(2026, 1, 1), limit=10
-    )
+    events = facade.get_recent_events("p1", "self", since=datetime(2026, 1, 1), limit=10)
     assert events == []
 
 
@@ -254,9 +246,7 @@ def test_get_recent_events_filters_by_since():
         db.commit()
 
     facade = MemoryFacade(_db_factory(engine))
-    events = facade.get_recent_events(
-        "p1", "self", since=datetime(2026, 2, 1), limit=10
-    )
+    events = facade.get_recent_events("p1", "self", since=datetime(2026, 2, 1), limit=10)
     assert len(events) == 1
     assert events[0].description == "recent event"
 
@@ -288,9 +278,7 @@ def test_get_recent_events_only_events_not_thoughts():
         db.commit()
 
     facade = MemoryFacade(_db_factory(engine))
-    events = facade.get_recent_events(
-        "p1", "self", since=datetime(2026, 1, 1), limit=10
-    )
+    events = facade.get_recent_events("p1", "self", since=datetime(2026, 1, 1), limit=10)
     assert len(events) == 1
     descriptions = [e.description for e in events]
     assert "event" in descriptions
@@ -308,16 +296,13 @@ def test_get_recent_events_respects_limit_cap():
                     type=NodeType.EVENT,
                     description=f"event {i}",
                     emotional_impact=1,
-                    created_at=datetime(2026, 4, 15, 12, 0, 0)
-                    + timedelta(minutes=i),
+                    created_at=datetime(2026, 4, 15, 12, 0, 0) + timedelta(minutes=i),
                 )
             )
         db.commit()
 
     facade = MemoryFacade(_db_factory(engine))
-    events = facade.get_recent_events(
-        "p1", "self", since=datetime(2026, 1, 1), limit=3
-    )
+    events = facade.get_recent_events("p1", "self", since=datetime(2026, 1, 1), limit=3)
     assert len(events) == 3
 
 

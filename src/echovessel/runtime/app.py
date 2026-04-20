@@ -70,7 +70,7 @@ from echovessel.runtime.interaction import (
     TurnContext,
     assemble_turn,
 )
-from echovessel.runtime.llm import LLMProvider, LLMTier, build_llm_provider
+from echovessel.runtime.llm import LLMProvider, build_llm_provider
 from echovessel.runtime.memory_facade import (
     MemoryFacade,
     ProactiveChannelRegistry,
@@ -1490,7 +1490,7 @@ class Runtime:
             new_llm = CostTrackingProvider(new_llm, CostRecorder(_cost_db_factory))
             self.ctx.llm = new_llm
             try:
-                old_model = old_llm.model_for(LLMTier.LARGE)
+                old_model = old_llm.model_for("main")
             except Exception:  # noqa: BLE001
                 old_model = "?"
             log.info(
@@ -1498,7 +1498,7 @@ class Runtime:
                 old_llm.provider_name,
                 old_model,
                 new_llm.provider_name,
-                new_llm.model_for(LLMTier.LARGE),
+                new_llm.model_for("main"),
             )
             reloaded.append("llm")
 
@@ -1905,7 +1905,7 @@ class Runtime:
             self.ctx.db_path,
             self.ctx.config.persona.id,
             llm.provider_name,
-            llm.model_for(LLMTier.LARGE),
+            llm.model_for("main"),
             base_url,
             ",".join(channel_ids),
             self.ctx.config.memory.embedder,

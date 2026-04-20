@@ -38,7 +38,7 @@ from echovessel.memory.retrieve import (
     load_core_blocks,
     retrieve,
 )
-from echovessel.runtime.llm.base import LLMProvider, LLMTier
+from echovessel.runtime.llm.base import LLMProvider
 from echovessel.runtime.llm.errors import (
     LLMPermanentError,
     LLMTransientError,
@@ -368,7 +368,7 @@ async def assemble_turn(
             async for item in llm.stream(
                 system=system_prompt,
                 user=user_prompt,
-                tier=LLMTier.LARGE,
+                model_role="main",
                 max_tokens=ctx.llm_max_tokens,
                 temperature=ctx.llm_temperature,
                 timeout=ctx.llm_timeout_seconds,
@@ -406,7 +406,7 @@ async def assemble_turn(
                 reply="",
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                used_model=llm.model_for(LLMTier.LARGE),
+                used_model=llm.model_for("main"),
                 error=last_error,
                 skipped=True,
             )
@@ -433,7 +433,7 @@ async def assemble_turn(
                 reply="",
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                used_model=llm.model_for(LLMTier.LARGE),
+                used_model=llm.model_for("main"),
                 error=f"ingest persona failed: {e}",
                 skipped=True,
             )
@@ -442,7 +442,7 @@ async def assemble_turn(
             reply=full_reply,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            used_model=llm.model_for(LLMTier.LARGE),
+            used_model=llm.model_for("main"),
             error=last_error,
             # If last_error is set but full_reply is non-empty we
             # still want the caller to be able to send what we got.

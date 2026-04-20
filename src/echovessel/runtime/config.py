@@ -99,8 +99,12 @@ class LLMSection(BaseModel):
 
     The validator in this class enforces the hard rules:
     - `api_key_env` must exist in os.environ unless stub / local endpoint
-    - custom base_url requires explicit model or tier_models
-    - tier_models keys must be one of {small, medium, large}
+    - custom base_url requires explicit `model` or `models`
+    - `models` keys must be one of {fast, main, judge}
+
+    The legacy `tier_models` field is accepted for one release but
+    automatically migrated to `models` with a deprecation warning:
+      SMALL → fast · MEDIUM → judge · LARGE → main
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -109,6 +113,10 @@ class LLMSection(BaseModel):
     api_key_env: str = "OPENAI_API_KEY"
     base_url: str | None = None
     model: str | None = None
+    # New field. Keys: "fast" / "main" / "judge".
+    models: dict[str, str] = Field(default_factory=dict)
+    # Deprecated. Accepted for one release; migrated into `models` at load time.
+    # Keys: "small" / "medium" / "large".
     tier_models: dict[str, str] = Field(default_factory=dict)
     max_tokens: int = Field(default=1024, ge=64, le=32000)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
@@ -128,39 +136,74 @@ class LLMSection(BaseModel):
 
     @model_validator(mode="after")
     def _validate_provider_config(self) -> LLMSection:
-        # 1. tier_models keys sanity
+        # 0. Migrate legacy tier_models → models when only the old field is
+        #    populated. Both populated → models wins, tier_models ignored with
+        #    a warning. Either side's unknown keys are rejected below.
         if self.tier_models:
-            allowed = {"small", "medium", "large"}
-            unknown = set(self.tier_models.keys()) - allowed
-            if unknown:
+            import logging as _logging
+
+            _log = _logging.getLogger(__name__)
+            tier_to_role = {"small": "fast", "medium": "judge", "large": "main"}
+            unknown_tiers = set(self.tier_models.keys()) - set(tier_to_role.keys())
+            if unknown_tiers:
                 raise ValueError(
-                    f"Unknown tier names in llm.tier_models: {sorted(unknown)}. "
-                    f"Allowed: {sorted(allowed)}."
+                    f"Unknown tier names in llm.tier_models: {sorted(unknown_tiers)}. "
+                    f"Allowed legacy tiers: {sorted(tier_to_role.keys())}. "
+                    f"Prefer `llm.models` with keys fast/main/judge."
                 )
 
-        # 2. openai_compat with custom base_url needs explicit model/tier_models
+            if not self.models:
+                # Safe auto-migration. Preserve by mutating in-place; pydantic
+                # allows this on `after` validators by returning self.
+                migrated = {tier_to_role[k]: v for k, v in self.tier_models.items()}
+                object.__setattr__(self, "models", migrated)
+                _log.warning(
+                    "config.llm.tier_models is deprecated · use "
+                    "config.llm.models with keys fast/main/judge. "
+                    "Migrated %d entries for this run (SMALL→fast · "
+                    "MEDIUM→judge · LARGE→main).",
+                    len(migrated),
+                )
+            else:
+                _log.warning(
+                    "config.llm has BOTH tier_models (deprecated) and "
+                    "models set; using `models` and ignoring tier_models."
+                )
+
+        # 1. models keys sanity (new field)
+        if self.models:
+            allowed_roles = {"fast", "main", "judge"}
+            unknown = set(self.models.keys()) - allowed_roles
+            if unknown:
+                raise ValueError(
+                    f"Unknown role names in llm.models: {sorted(unknown)}. "
+                    f"Allowed: {sorted(allowed_roles)}."
+                )
+
+        # 2. openai_compat / anthropic with custom base_url needs explicit
+        #    model or models.
         if (
             self.provider == "openai_compat"
             and self._has_custom_base_url()
             and not self.model
-            and not self.tier_models
+            and not self.models
         ):
             raise ValueError(
                 f"llm.provider='openai_compat' with a custom base_url "
                 f"({self.base_url!r}) requires either `llm.model` or "
-                f"`llm.tier_models` to be set. We do not ship default "
-                f"tier mappings for non-official endpoints."
+                f"`llm.models` to be set. We do not ship default role "
+                f"mappings for non-official endpoints."
             )
         if (
             self.provider == "anthropic"
             and self._has_custom_base_url()
             and not self.model
-            and not self.tier_models
+            and not self.models
         ):
             raise ValueError(
                 f"llm.provider='anthropic' with a custom base_url "
                 f"({self.base_url!r}) requires either `llm.model` or "
-                f"`llm.tier_models`."
+                f"`llm.models`."
             )
 
         # 3. API key env var presence

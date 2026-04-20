@@ -56,7 +56,7 @@ from echovessel.prompts import (
     parse_judge_response,
     parse_reflection_response,
 )
-from echovessel.runtime.llm.base import LLMProvider, LLMTier
+from echovessel.runtime.llm.base import LLMProvider
 
 log = logging.getLogger(__name__)
 
@@ -116,7 +116,7 @@ def make_extract_fn(llm: LLMProvider) -> ExtractFn:
             raw, _usage = await llm.complete(
                 system=EXTRACTION_SYSTEM_PROMPT,
                 user=user_prompt,
-                tier=LLMTier.SMALL,
+                model_role="fast",
                 max_tokens=1024,
                 temperature=0.4,
             )
@@ -178,7 +178,7 @@ def make_reflect_fn(llm: LLMProvider) -> ReflectFn:
             raw, _usage = await llm.complete(
                 system=REFLECTION_SYSTEM_PROMPT,
                 user=user_prompt,
-                tier=LLMTier.SMALL,
+                model_role="fast",
                 max_tokens=800,
                 temperature=0.6,
             )
@@ -225,7 +225,7 @@ def make_judge_fn(llm: LLMProvider) -> JudgeFn:
         raw, _usage = await llm.complete(
             system=JUDGE_SYSTEM_PROMPT,
             user=user_prompt,
-            tier=LLMTier.MEDIUM,
+            model_role="judge",
             max_tokens=1024,
             temperature=0.2,
         )
@@ -461,7 +461,7 @@ def make_proactive_fn(llm: LLMProvider) -> ProactiveFn:
             raw, _usage = await llm.complete(
                 system=PROACTIVE_SYSTEM_PROMPT,
                 user=user_prompt,
-                tier=LLMTier.LARGE,
+                model_role="main",
                 max_tokens=400,
                 temperature=0.8,
             )

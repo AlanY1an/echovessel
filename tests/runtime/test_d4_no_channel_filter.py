@@ -22,9 +22,7 @@ AUDITED_CALLS = ("retrieve", "load_core_blocks", "list_recall_messages")
 # Pattern matching `<call>(...)` optionally spanning multiple lines where
 # `channel_id=` appears before the matching close paren.
 _PAREN_PATTERN = re.compile(
-    r"(?P<name>"
-    + "|".join(re.escape(c) for c in AUDITED_CALLS)
-    + r")\s*\(",
+    r"(?P<name>" + "|".join(re.escape(c) for c in AUDITED_CALLS) + r")\s*\(",
 )
 
 

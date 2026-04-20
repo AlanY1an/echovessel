@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping
 
-from echovessel.runtime.llm.base import LLMProvider, LLMTier
+from echovessel.runtime.llm.base import DEFAULT_ROLE, LLMProvider
 from echovessel.runtime.llm.usage import Usage
 
 _DEFAULT_MODEL = "stub-model"
@@ -44,19 +44,19 @@ class StubProvider:
         canned_responses: Mapping[tuple[str, str], str] | None = None,
         responder: Callable[..., str] | Callable[..., object] | None = None,
         fallback: str | None = "",
-        model_for_tier: Mapping[LLMTier, str] | None = None,
+        model_for_role: Mapping[str, str] | None = None,
     ) -> None:
         self._canned = dict(canned_responses or {})
         self._responder = responder
         self._fallback = fallback
-        self._models = dict(model_for_tier or {})
+        self._models = dict(model_for_role or {})
 
     @property
     def provider_name(self) -> str:
         return "stub"
 
-    def model_for(self, tier: LLMTier) -> str:
-        return self._models.get(tier, _DEFAULT_MODEL)
+    def model_for(self, model_role: str) -> str:
+        return self._models.get(model_role, _DEFAULT_MODEL)
 
     def set_canned(self, system: str, user: str, reply: str) -> None:
         """Test helper: add/override one canned response."""
@@ -67,7 +67,7 @@ class StubProvider:
         system: str,
         user: str,
         *,
-        tier: LLMTier = LLMTier.MEDIUM,
+        model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
@@ -79,7 +79,7 @@ class StubProvider:
             result = self._responder(
                 system=system,
                 user=user,
-                tier=tier,
+                model_role=model_role,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 timeout=timeout,
@@ -104,7 +104,7 @@ class StubProvider:
         system: str,
         user: str,
         *,
-        tier: LLMTier = LLMTier.MEDIUM,
+        model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
@@ -112,7 +112,7 @@ class StubProvider:
         text, _usage = await self.complete(
             system,
             user,
-            tier=tier,
+            model_role=model_role,
             max_tokens=max_tokens,
             temperature=temperature,
             timeout=timeout,

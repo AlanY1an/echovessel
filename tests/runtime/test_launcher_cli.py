@@ -120,9 +120,7 @@ def test_init_force_overwrites_existing(tmp_path: Path) -> None:
     target = tmp_path / "existing.toml"
     target.write_text("# old\n")
 
-    result = _runner().invoke(
-        cli, ["init", "--force", "--config-path", str(target)]
-    )
+    result = _runner().invoke(cli, ["init", "--force", "--config-path", str(target)])
 
     assert result.exit_code == 0, _stream(result)
     assert "[llm]" in target.read_text(encoding="utf-8")
@@ -147,12 +145,15 @@ def test_init_also_writes_env_template_when_missing(tmp_path: Path) -> None:
         for line in body.splitlines():
             stripped = line.strip()
             if stripped.startswith(
-                ("OPENAI_API_KEY", "FISH_AUDIO_KEY", "ECHOVESSEL_DISCORD_TOKEN",
-                 "ANTHROPIC_API_KEY"),
+                (
+                    "OPENAI_API_KEY",
+                    "FISH_AUDIO_KEY",
+                    "ECHOVESSEL_DISCORD_TOKEN",
+                    "ANTHROPIC_API_KEY",
+                ),
             ):
                 raise AssertionError(
-                    f"env.sample should have every key commented out; found "
-                    f"active line: {line!r}"
+                    f"env.sample should have every key commented out; found active line: {line!r}"
                 )
 
 
@@ -167,17 +168,13 @@ def test_init_never_clobbers_existing_env_even_with_force(tmp_path: Path) -> Non
         env_target = Path(cwd) / ".env"
         env_target.write_text("OPENAI_API_KEY=sk-real-key-keep-me\n")
 
-        result = runner.invoke(
-            cli, ["init", "--force", "--config-path", str(target)]
-        )
+        result = runner.invoke(cli, ["init", "--force", "--config-path", str(target)])
 
         assert result.exit_code == 0, _stream(result)
         # config was rewritten…
         assert "[llm]" in target.read_text(encoding="utf-8")
         # …but .env was preserved byte-for-byte.
-        assert env_target.read_text(encoding="utf-8") == (
-            "OPENAI_API_KEY=sk-real-key-keep-me\n"
-        )
+        assert env_target.read_text(encoding="utf-8") == ("OPENAI_API_KEY=sk-real-key-keep-me\n")
 
 
 # ---------------------------------------------------------------------------
@@ -256,9 +253,7 @@ def test_status_v2_pidfile_reports_control_port(tmp_path: Path) -> None:
 
     cfg = _write_config(tmp_path)
     pidfile = tmp_path / "data" / "runtime.pid"
-    pidfile.write_text(
-        json.dumps({"pid": os.getpid(), "control_port": 1, "version": 1})
-    )
+    pidfile.write_text(json.dumps({"pid": os.getpid(), "control_port": 1, "version": 1}))
 
     result = _runner().invoke(cli, ["status", "--config", str(cfg)])
 
@@ -387,9 +382,7 @@ def test_stop_prefers_control_plane_when_v2_pidfile(tmp_path: Path) -> None:
     try:
         cfg = _write_config(tmp_path)
         pidfile = tmp_path / "data" / "runtime.pid"
-        pidfile.write_text(
-            json.dumps({"pid": 99999, "control_port": port, "version": 1})
-        )
+        pidfile.write_text(json.dumps({"pid": 99999, "control_port": port, "version": 1}))
 
         captured: list[tuple[int, int]] = []
 
@@ -420,9 +413,7 @@ def test_stop_falls_back_to_signal_when_control_unreachable(tmp_path: Path) -> N
     cfg = _write_config(tmp_path)
     pidfile = tmp_path / "data" / "runtime.pid"
     # Port 1 is reserved and refuses connections immediately.
-    pidfile.write_text(
-        json.dumps({"pid": 12345, "control_port": 1, "version": 1})
-    )
+    pidfile.write_text(json.dumps({"pid": 12345, "control_port": 1, "version": 1}))
 
     captured: list[tuple[int, int]] = []
 
@@ -467,9 +458,7 @@ def test_reload_prefers_control_plane_when_v2_pidfile(tmp_path: Path) -> None:
     try:
         cfg = _write_config(tmp_path)
         pidfile = tmp_path / "data" / "runtime.pid"
-        pidfile.write_text(
-            json.dumps({"pid": 99999, "control_port": port, "version": 1})
-        )
+        pidfile.write_text(json.dumps({"pid": 99999, "control_port": port, "version": 1}))
 
         result = _runner().invoke(cli, ["reload", "--config", str(cfg)])
 

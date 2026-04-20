@@ -249,7 +249,8 @@ async def test_runtime_stop_no_leaked_tasks():
     leaked = [
         t
         for t in asyncio.all_tasks()
-        if t is not asyncio.current_task() and not t.done()
+        if t is not asyncio.current_task()
+        and not t.done()
         and t.get_name() in {"consolidate_worker", "idle_scanner", "turn_dispatcher"}
     ]
     assert leaked == [], f"background tasks still running: {[t.get_name() for t in leaked]}"

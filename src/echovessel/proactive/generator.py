@@ -20,10 +20,10 @@ Hard rules enforced here:
   guard test constructs a polluted snapshot and asserts the guard
   fires.
 
-- **LLM tier = LARGE**: this module itself never selects a tier. The
+- **Model role = "main"**: this module itself never selects a role. The
   ``proactive_fn`` callable is built by runtime in prompts_wiring with
-  ``tier=LLMTier.LARGE`` baked in. Proactive trusts runtime to keep the
-  tier at LARGE and does not pass it.
+  ``model_role="main"`` baked in. Proactive trusts runtime to keep the
+  role at "main" and does not pass it.
 
 - **Observability-only rationale**: ``ProactiveMessage.rationale`` is
   persisted to the audit trail but NEVER re-enters the prompt for the

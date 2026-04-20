@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 
 import yaml
 
-from echovessel.runtime.llm.base import LLMProvider, LLMTier
+from echovessel.runtime.llm.base import LLMProvider
 from tests.memory_eval.harness import (
     FIXTURE_ROOT,
     Fixture,
@@ -111,7 +111,7 @@ async def _synthesize_one(
     raw, _usage = await llm.complete(
         _SYSTEM_PROMPT,
         user,
-        tier=LLMTier.LARGE,
+        model_role="main",
         max_tokens=1500,
         temperature=0.7,
     )
@@ -188,7 +188,7 @@ async def synthesize_all(*, only: list[str] | None = None) -> None:
     llm = build_live_llm()
     model_name = getattr(
         llm, "pinned_model", None
-    ) or llm.model_for(LLMTier.LARGE)
+    ) or llm.model_for("main")
 
     scripted_paths = sorted(SCRIPTED_DIR.glob("*.yaml"))
     if only:

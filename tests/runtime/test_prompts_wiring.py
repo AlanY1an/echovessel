@@ -17,7 +17,6 @@ from echovessel.prompts import (
     REFLECTION_SYSTEM_PROMPT,
 )
 from echovessel.runtime.llm import StubProvider
-from echovessel.runtime.llm.base import LLMTier
 from echovessel.runtime.prompts_wiring import (
     PROACTIVE_SYSTEM_PROMPT,
     make_extract_fn,
@@ -151,9 +150,7 @@ async def test_make_extract_fn_drops_on_parse_error():
 async def test_make_reflect_fn_happy_path():
     nodes = _make_nodes()
     payload = dict(_REFLECTION_RESPONSE_TEMPLATE)
-    payload["thoughts"] = [
-        {**t, "filling": [n.id for n in nodes]} for t in payload["thoughts"]
-    ]
+    payload["thoughts"] = [{**t, "filling": [n.id for n in nodes]} for t in payload["thoughts"]]
     stub = StubProvider(fallback=json.dumps(payload))
     reflect = make_reflect_fn(stub)
     thoughts = await reflect(nodes, "shock")
@@ -182,48 +179,46 @@ async def test_make_judge_fn_happy_path():
     assert verdict.overall_score == 4.2
 
 
-async def test_extract_fn_passes_small_tier():
-    seen_tiers: list[str] = []
+async def test_extract_fn_passes_fast_role():
+    seen_roles: list[str] = []
 
-    def responder(*, tier, **kwargs):
-        seen_tiers.append(str(tier))
+    def responder(*, model_role, **kwargs):
+        seen_roles.append(str(model_role))
         return _EXTRACTION_RESPONSE
 
     stub = StubProvider(responder=responder)
     extract = make_extract_fn(stub)
     await extract(_make_messages())
-    assert seen_tiers == ["small"]
+    assert seen_roles == ["fast"]
 
 
-async def test_reflect_fn_passes_small_tier():
+async def test_reflect_fn_passes_fast_role():
     nodes = _make_nodes()
     payload = dict(_REFLECTION_RESPONSE_TEMPLATE)
-    payload["thoughts"] = [
-        {**t, "filling": [n.id for n in nodes]} for t in payload["thoughts"]
-    ]
-    seen_tiers: list[str] = []
+    payload["thoughts"] = [{**t, "filling": [n.id for n in nodes]} for t in payload["thoughts"]]
+    seen_roles: list[str] = []
 
-    def responder(*, tier, **kwargs):
-        seen_tiers.append(str(tier))
+    def responder(*, model_role, **kwargs):
+        seen_roles.append(str(model_role))
         return json.dumps(payload)
 
     stub = StubProvider(responder=responder)
     reflect = make_reflect_fn(stub)
     await reflect(nodes, "timer")
-    assert seen_tiers == ["small"]
+    assert seen_roles == ["fast"]
 
 
-async def test_judge_fn_passes_medium_tier():
-    seen_tiers: list[str] = []
+async def test_judge_fn_passes_judge_role():
+    seen_roles: list[str] = []
 
-    def responder(*, tier, **kwargs):
-        seen_tiers.append(str(tier))
+    def responder(*, model_role, **kwargs):
+        seen_roles.append(str(model_role))
         return _JUDGE_RESPONSE
 
     stub = StubProvider(responder=responder)
     judge = make_judge_fn(stub)
     await judge(user_message="a", persona_response="b")
-    assert seen_tiers == ["medium"]
+    assert seen_roles == ["judge"]
 
 
 async def test_extract_fn_sends_extraction_system_prompt():
@@ -242,9 +237,7 @@ async def test_extract_fn_sends_extraction_system_prompt():
 async def test_reflect_fn_sends_reflection_system_prompt():
     nodes = _make_nodes()
     payload = dict(_REFLECTION_RESPONSE_TEMPLATE)
-    payload["thoughts"] = [
-        {**t, "filling": [n.id for n in nodes]} for t in payload["thoughts"]
-    ]
+    payload["thoughts"] = [{**t, "filling": [n.id for n in nodes]} for t in payload["thoughts"]]
     seen: list[str] = []
 
     def responder(*, system, **kwargs):
@@ -369,20 +362,18 @@ async def test_make_proactive_fn_accepts_fenced_json():
     assert "小猫" in message.text
 
 
-async def test_make_proactive_fn_uses_large_tier():
-    seen_tiers: list = []
+async def test_make_proactive_fn_uses_main_role():
+    seen_roles: list = []
 
-    def responder(*, system, user, tier, **kwargs):
-        seen_tiers.append(tier)
+    def responder(*, system, user, model_role, **kwargs):
+        seen_roles.append(model_role)
         return _PROACTIVE_VALID_RESPONSE
 
     stub = StubProvider(responder=responder)
     proactive = make_proactive_fn(stub)
     await proactive(_make_clean_snapshot())
 
-    assert seen_tiers == [LLMTier.LARGE], (
-        f"proactive must use LLMTier.LARGE (got {seen_tiers})"
-    )
+    assert seen_roles == ["main"], f"proactive must use model_role='main' (got {seen_roles})"
 
 
 async def test_make_proactive_fn_sends_proactive_system_prompt():
@@ -427,9 +418,7 @@ async def test_make_proactive_fn_raises_on_missing_text():
 
 
 async def test_make_proactive_fn_rationale_can_be_null():
-    stub = StubProvider(
-        fallback=json.dumps({"text": "hi there", "rationale": None})
-    )
+    stub = StubProvider(fallback=json.dumps({"text": "hi there", "rationale": None}))
     proactive = make_proactive_fn(stub)
     msg = await proactive(_make_clean_snapshot())
     assert msg.text == "hi there"
@@ -493,8 +482,7 @@ async def test_make_proactive_fn_user_prompt_has_no_channel_id():
     forbidden_tokens = ("channel_id", "discord:g42", "discord:", "imessage:")
     for token in forbidden_tokens:
         assert token not in user_prompt, (
-            f"F10 violation: user prompt contains {token!r}:\n"
-            f"{user_prompt[:500]}"
+            f"F10 violation: user prompt contains {token!r}:\n{user_prompt[:500]}"
         )
 
 

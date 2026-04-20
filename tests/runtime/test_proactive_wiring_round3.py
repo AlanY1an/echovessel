@@ -33,6 +33,7 @@ class _FakeChannel:
         async def _gen():
             if False:
                 yield None
+
         return _gen()
 
     async def send(self, msg: OutgoingMessage) -> None:
@@ -72,6 +73,7 @@ def test_any_channel_in_flight_handles_missing_attribute():
             async def _gen():
                 if False:
                     yield None
+
             return _gen()
 
         async def send(self, msg: OutgoingMessage) -> None:

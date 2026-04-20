@@ -3,10 +3,11 @@
 Public API:
 
     from echovessel.runtime.llm import (
-        LLMProvider, LLMTier,
+        LLMProvider, MODEL_ROLES, DEFAULT_ROLE,
         LLMError, LLMTransientError, LLMPermanentError, LLMBudgetError,
         StubProvider,
         build_llm_provider,
+        Usage,
     )
 
 Concrete providers (`AnthropicProvider`, `OpenAICompatibleProvider`) are
@@ -14,7 +15,7 @@ imported lazily via `build_llm_provider` so the `anthropic` / `openai`
 packages only load when they're actually needed.
 """
 
-from echovessel.runtime.llm.base import LLMProvider, LLMTier
+from echovessel.runtime.llm.base import DEFAULT_ROLE, MODEL_ROLES, LLMProvider
 from echovessel.runtime.llm.errors import (
     LLMBudgetError,
     LLMError,
@@ -27,7 +28,8 @@ from echovessel.runtime.llm.usage import Usage
 
 __all__ = [
     "LLMProvider",
-    "LLMTier",
+    "MODEL_ROLES",
+    "DEFAULT_ROLE",
     "LLMError",
     "LLMTransientError",
     "LLMPermanentError",

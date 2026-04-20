@@ -5,9 +5,9 @@ so eval cost lives on a single account. The judge prompt is
 intentionally thin: "here is the scenario + produced output · answer
 YES or NO to this question · one short sentence of reasoning".
 
-We pass ``tier=LLMTier.MEDIUM`` because eval judgements are where a
-mid-tier model earns its keep — a SMALL model is too prone to rubber
-stamping and a LARGE model is overkill for a binary.
+We pass ``model_role="judge"`` because eval judgements are where a
+tuned model earns its keep — a fast model is too prone to rubber
+stamping and the main interaction model is overkill for a binary.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import logging
 import re
 from dataclasses import dataclass
 
-from echovessel.runtime.llm.base import LLMProvider, LLMTier
+from echovessel.runtime.llm.base import LLMProvider
 
 log = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ async def judge_prompts(
     llm: LLMProvider,
     evidence: str,
     prompts: list[str],
-    tier: LLMTier = LLMTier.MEDIUM,
+    model_role: str = "judge",
 ) -> list[JudgeVerdict]:
     """Run each question as its own LLM call so verdicts are
     independent. Returns one :class:`JudgeVerdict` per prompt, in
@@ -66,7 +66,7 @@ async def judge_prompts(
             raw, _usage = await llm.complete(
                 _SYSTEM_PROMPT,
                 user,
-                tier=tier,
+                model_role=model_role,
                 max_tokens=200,
                 temperature=0.0,
             )

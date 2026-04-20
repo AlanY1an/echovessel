@@ -111,9 +111,7 @@ class _ExplodingDiscordChannel(_StubDiscordChannel):
         raise RuntimeError("simulated send failure")
 
 
-def _make_turn(
-    *, channel_id: str = "discord", content: str = "hi from discord"
-) -> IncomingTurn:
+def _make_turn(*, channel_id: str = "discord", content: str = "hi from discord") -> IncomingTurn:
     msg = IncomingMessage(
         channel_id=channel_id,
         user_id="self",
@@ -124,9 +122,7 @@ def _make_turn(
     return IncomingTurn.from_single_message(msg)
 
 
-async def _drain_queue(
-    queue: asyncio.Queue, *, deadline: float = 0.5
-) -> list[dict[str, Any]]:
+async def _drain_queue(queue: asyncio.Queue, *, deadline: float = 0.5) -> list[dict[str, Any]]:
     """Pull every frame currently on ``queue`` until it's empty or
     ``deadline`` elapses since the last frame."""
 
@@ -190,9 +186,7 @@ async def test_discord_turn_mirrors_user_appended_and_done_to_web_broadcaster() 
     assert "chat.message.user_appended" in event_names
     assert "chat.message.done" in event_names
 
-    user_frame = next(
-        f for f in frames if f["event"] == "chat.message.user_appended"
-    )
+    user_frame = next(f for f in frames if f["event"] == "chat.message.user_appended")
     done_frame = next(f for f in frames if f["event"] == "chat.message.done")
     assert user_frame["data"]["source_channel_id"] == "discord"
     assert user_frame["data"]["content"] == "hi from discord"

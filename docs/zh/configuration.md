@@ -59,23 +59,31 @@ Memory 模块的存储和检索旋钮。
 | `provider` | `"openai_compat"` | `"openai_compat"` / `"anthropic"` / `"stub"` 之一。`openai_compat` 覆盖任何 OpenAI 兼容端点——实际上 OpenAI 本身 / OpenRouter / Ollama / LM Studio / vLLM / DeepSeek / Groq / Together / Fireworks / xAI / Perplexity / Moonshot / 智谱 GLM 都算。`anthropic` 用 Anthropic 原生 SDK。`stub` 返回固定回复、零网络调用——是验证干净安装最省心的方式。 |
 | `api_key_env` | `"OPENAI_API_KEY"` | 存 API key 的环境变量名。对不需要认证的 provider(比如本地 Ollama)设为 `""`。 |
 | `base_url` | 未设置 | 覆盖 API base URL。任何非 OpenAI 官方的 `openai_compat` provider 都必须设。 |
-| `model` | 未设置 | 把所有 tier 固定到同一个模型。优先级高于 `tier_models`。 |
+| `model` | 未设置 | 把所有 role 固定到同一个模型。优先级高于 `models`。 |
 | `max_tokens` | `1024` | 回复长度上限。 |
 | `temperature` | `0.7` | sampling 温度。 |
 | `timeout_seconds` | `60` | 请求超时。 |
 
-### `[llm.tier_models]`
+### `[llm.models]`
 
-EchoVessel 把 LLM 调用按语义分三档——`small` / `medium` / `large`——让你把每档映射到不同的具体模型。Extraction 和 reflection 走 `small`(跑得频繁,对模型要求低),judge 走 `medium`,persona 实时回复和 proactive 生成走 `large`。
+EchoVessel 按任务角色(**model role**)把 LLM 调用分三类——`fast` / `main` / `judge`——让你把每个 role 映射到不同的具体模型。
+
+| Role | 谁在用 | 说明 |
+| --- | --- | --- |
+| `fast` | extraction / reflection / import | 短小的后台调用 · 对模型要求低 · 用小/便宜的模型即可。 |
+| `main` | persona 实时对话 · proactive 主动推送 | 用户能直接感受的输出 · 质量要求最高。 |
+| `judge` | eval harness | 严格推理 · 产 yes/no 判定 · 没设时自动 fallback 到 `main`。 |
 
 ```toml
-[llm.tier_models]
-small  = "gpt-4o-mini"
-medium = "gpt-4o"
-large  = "gpt-4o"
+[llm.models]
+fast  = "gpt-4o-mini"
+main  = "gpt-4o"
+judge = "gpt-4o"
 ```
 
-如果设了 `model`,它压过所有 tier,`tier_models` 被忽略。两者都没设的话,provider 用自己的默认(比如 Anthropic provider 默认走 `haiku` / `sonnet` / `opus`)。
+如果设了 `model`,它压过所有 role,`models` 被忽略。两者都没设的话,provider 用自己的默认(比如 Anthropic provider 默认走 `haiku` / `sonnet` / `opus`)。
+
+**老的 `[llm.tier_models]`** —— 以前这一节用 `small` / `medium` / `large` 做 key。旧 config 仍能加载:daemon 自动把 `small` → `fast` · `medium` → `judge` · `large` → `main` · 并输出 deprecation warning。兼容层会在后续版本移除 · 建议方便时迁移到 `[llm.models]`。
 
 ### 常见 `[llm]` 配方
 
@@ -89,10 +97,9 @@ provider    = "openai_compat"
 base_url    = "http://localhost:11434/v1"
 api_key_env = ""
 
-[llm.tier_models]
-small  = "llama3:8b"
-medium = "llama3:70b"
-large  = "llama3:70b"
+[llm.models]
+fast = "llama3:8b"
+main = "llama3:70b"
 ```
 
 **OpenRouter** — 一个账号任意模型:

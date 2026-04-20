@@ -30,9 +30,9 @@ Why one process for everything? Because EchoVessel stores everything in a single
 
 **on_turn_done callback** — `on_turn_done(turn_id)`. The channel's way of knowing "runtime is done with this turn, you can clear your in-flight state and consider whether to flush the next debounced turn". Runtime always calls this exactly once per turn, from a `finally` block inside `assemble_turn`, regardless of whether the turn succeeded, failed on LLM error, or failed on memory ingest. Exceptions raised by the callback are swallowed — channels are expected to be no-throw here and a misbehaving channel must not corrupt runtime's turn pipeline.
 
-**LLM tier** — a semantic label declared at the call site. Runtime holds exactly one `LLMProvider` instance, and every call passes a `tier=LLMTier.SMALL | MEDIUM | LARGE` argument. The provider maps the tier to a concrete model name internally. The mapping resolves in this priority order: if config pins a single `llm.model`, every tier returns that one model ("one model for everything"); otherwise if config sets `[llm.tier_models]`, the per-tier values are used; otherwise the provider falls back to its built-in defaults (Anthropic: Haiku / Sonnet / Opus; OpenAI official: `gpt-4o-mini` / `gpt-4o`). EchoVessel's call-site tiering is fixed: extraction uses SMALL, reflection uses SMALL, a future judge uses MEDIUM, and interaction and proactive always use LARGE because the user is staring at the screen.
+**LLM model role** — a semantic label declared at the call site. Runtime holds exactly one `LLMProvider` instance, and every call passes `model_role="fast" | "main" | "judge"`. The provider maps the role to a concrete model name internally. The mapping resolves in this priority order: if config pins a single `llm.model`, every role returns that one model ("one model for everything"); otherwise if config sets `[llm.models]`, the per-role values are used; otherwise the provider falls back to its built-in defaults (Anthropic: Haiku / Sonnet / Opus; OpenAI official: `gpt-4o-mini` / `gpt-4o`). EchoVessel's call-site roles are fixed in code, not in config: extraction and reflection use `fast`, the eval judge uses `judge` (which falls back to `main` when unspecified), and interaction and proactive use `main` because the user is staring at the screen.
 
-**Local-first disclosure** — the single line printed at the end of startup that enumerates exactly which outbound endpoint the daemon will talk to. It includes the data directory, the resolved database path, the persona id, the LLM provider name, the model resolved for the LARGE tier, the base URL the provider will hit (e.g. `https://api.anthropic.com` or your local Ollama URL), the list of enabled channels, and the embedder name. A second line repeats the outbound URL in plain language. Any auditor running `tail -f logs/runtime-*.log | head -2` immediately sees where traffic goes.
+**Local-first disclosure** — the single line printed at the end of startup that enumerates exactly which outbound endpoint the daemon will talk to. It includes the data directory, the resolved database path, the persona id, the LLM provider name, the model resolved for the `main` role, the base URL the provider will hit (e.g. `https://api.anthropic.com` or your local Ollama URL), the list of enabled channels, and the embedder name. A second line repeats the outbound URL in plain language. Any auditor running `tail -f logs/runtime-*.log | head -2` immediately sees where traffic goes.
 
 **SIGHUP reload** — sending `SIGHUP` to the daemon (or running `echovessel reload`) causes runtime to re-read `config.toml`, validate it, rebuild the LLM provider if the `[llm]` section changed, and atomically swap `ctx.llm` for the new instance. In-flight turns keep running against the old provider because the turn handler captures a local `llm = self.ctx.llm` reference at the start of each turn — Python reference semantics give us zero-cost liveness without any lock or versioning. Structural sections (`[memory]`, `[channels.*]`, `[persona].id`) cannot be reloaded; changing them requires a full `echovessel stop && echovessel run`.
 
@@ -58,7 +58,7 @@ Seed persona and user rows. The daemon ensures a `Persona` row with `config.pers
 
 Catch up stale sessions. `catch_up_stale_sessions(db, now=...)` scans `sessions` for rows whose `status='open'` but whose `last_message_at` is older than the idle threshold, marks them `closing`, and commits. This happens before the consolidate worker starts so the initial queue sees every orphan from the last crash.
 
-Build the LLM provider. `build_llm_provider(config.llm)` dispatches on `config.llm.provider` and instantiates one of `AnthropicProvider`, `OpenAICompatibleProvider`, or `StubProvider`. Construction never calls the network — it only caches the API key and builds the tier-to-model map. The provider is attached to `ctx.llm` as the single shared instance.
+Build the LLM provider. `build_llm_provider(config.llm)` dispatches on `config.llm.provider` and instantiates one of `AnthropicProvider`, `OpenAICompatibleProvider`, or `StubProvider`. Construction never calls the network — it only caches the API key and builds the role-to-model map. The provider is attached to `ctx.llm` as the single shared instance.
 
 Build the voice service if `[voice].enabled`. When voice is enabled, `build_voice_service(VoiceServiceConfig(...))` constructs a `VoiceService` and attaches it to `ctx.voice_service`. Voice failures are non-fatal — if the TTS provider is unreachable, the daemon logs and boots with `voice_service = None`, and channels / proactive gracefully downgrade to text.
 
@@ -143,23 +143,23 @@ The effect is a clean separation: memory fires a sync hook after a successful co
 
 Interaction reads `ctx.persona.voice_enabled` at the moment it constructs the outgoing reply; proactive reads the same field via a `RuntimeContextPersonaView` adapter whose properties read live from `ctx.persona` on every access. No locks, no caching — bool reads in Python are atomic at the bytecode level and a brief race across a tick boundary is acceptable.
 
-### The LLM tier system
+### The LLM model-role system
 
-Every call site in runtime declares the tier it wants, and the provider maps the tier to a model at call time. The design of the LLMProvider contract (`runtime/llm/base.py`) is a tiny `Protocol` with three methods: `model_for(tier)` for logging and audit, `complete(system, user, *, tier, ...)` for single-shot completions, and `stream(system, user, *, tier, ...)` for token-by-token streaming. Every call signature carries the tier as a keyword argument with `MEDIUM` as the default.
+Every call site in runtime declares the role it wants, and the provider maps the role to a model at call time. The design of the LLMProvider contract (`runtime/llm/base.py`) is a tiny `Protocol` with three methods: `model_for(model_role)` for logging and audit, `complete(system, user, *, model_role, ...)` for single-shot completions, and `stream(system, user, *, model_role, ...)` for token-by-token streaming. Every call signature carries `model_role` as a keyword argument with `"main"` as the default. Valid role values live in `MODEL_ROLES = ("fast", "main", "judge")`.
 
 `complete` returns `tuple[str, Usage | None]` — the reply text paired with a `Usage` dataclass carrying `input_tokens`, `output_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens` as reported by the provider's SDK. `stream` yields `str` text deltas followed by a single trailing `Usage` as its last item; if the stream aborts mid-way the trailing `Usage` is suppressed rather than recording a misleadingly low count.
 
 `Usage` is `None` (or absent from the stream) when the provider does not supply token data — `StubProvider` is the canonical case. Callers that only need text use an `isinstance` guard:
 
 ```python
-async for item in llm.stream(system, user, tier=tier):
+async for item in llm.stream(system, user, model_role=model_role):
     if isinstance(item, str):
         await on_token(message_id, item)
     # trailing Usage is absorbed by CostTrackingProvider;
     # direct callers can capture it if they need token counts
 ```
 
-The tier assignments are fixed in code, not in config, because they reflect architectural intent rather than user preference. Extraction and reflection are SMALL — they run on closed sessions, they batch cheap calls, and the user is not waiting. Reflection could in principle benefit from a stronger model but Haiku-class output is good enough for MVP; users who disagree can lift the SMALL tier in `[llm.tier_models]` without code changes. The judge (eval harness, future) is MEDIUM — strict evaluation wants consistency, not the most expensive model. Interaction and proactive are LARGE — the user is staring at the screen, and a better model gives meaningfully better replies.
+The role assignments are fixed in code, not in config, because they reflect architectural intent rather than user preference. Extraction and reflection use the `fast` role — they run on closed sessions, they batch cheap calls, and the user is not waiting. Reflection could in principle benefit from a stronger model but Haiku-class output is good enough for MVP; users who disagree can raise the `fast` entry in `[llm.models]` without code changes. The eval judge uses the `judge` role — strict evaluation wants consistency, and if `models.judge` is unset the provider automatically falls back to the `main` model. Interaction and proactive use the `main` role — the user is staring at the screen, and a better model gives meaningfully better replies.
 
 The three concrete providers in `runtime/llm/` cover 15+ real endpoints between them. `AnthropicProvider` uses the native `anthropic` SDK and targets Claude. `OpenAICompatibleProvider` uses the native `openai` SDK with a configurable `base_url`, which means it covers OpenAI official, OpenRouter, Ollama, LM Studio, llama.cpp server, vLLM, DeepSeek, Together, Groq, xAI, and every other provider that implements OpenAI-compatible REST. `StubProvider` returns canned text for tests and dry runs.
 
@@ -205,7 +205,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from echovessel.runtime.llm.base import LLMProvider, LLMTier
+from echovessel.runtime.llm.base import DEFAULT_ROLE, LLMProvider, MODEL_ROLES
 from echovessel.runtime.llm.errors import LLMPermanentError, LLMTransientError
 from echovessel.runtime.llm.usage import Usage
 
@@ -215,10 +215,10 @@ class MyProvider(LLMProvider):
 
     provider_name = "my_provider"
 
-    _DEFAULT_TIERS = {
-        LLMTier.SMALL: "my-small-model",
-        LLMTier.MEDIUM: "my-medium-model",
-        LLMTier.LARGE: "my-large-model",
+    _DEFAULT_MODELS_BY_ROLE = {
+        "fast": "my-fast-model",
+        "main": "my-main-model",
+        "judge": "my-judge-model",
     }
 
     def __init__(
@@ -227,7 +227,7 @@ class MyProvider(LLMProvider):
         api_key: str | None,
         base_url: str | None = None,
         pinned_model: str | None = None,
-        tier_models: dict[str, str] | None = None,
+        role_models: dict[str, str] | None = None,
         default_max_tokens: int = 1024,
         default_temperature: float = 0.7,
         default_timeout: float = 60.0,
@@ -236,24 +236,24 @@ class MyProvider(LLMProvider):
         self._api_key = api_key
         self.base_url = base_url or "https://api.example.com/v1"
         self._pinned = pinned_model
-        self._tier_models = tier_models or {}
+        self._role_models = role_models or {}
         self._max_tokens = default_max_tokens
         self._temperature = default_temperature
         self._timeout = default_timeout
 
-    def model_for(self, tier: LLMTier) -> str:
+    def model_for(self, model_role: str) -> str:
         if self._pinned:
             return self._pinned
-        if tier.value in self._tier_models:
-            return self._tier_models[tier.value]
-        return self._DEFAULT_TIERS[tier]
+        if model_role in self._role_models:
+            return self._role_models[model_role]
+        return self._DEFAULT_MODELS_BY_ROLE[model_role]
 
     async def complete(
         self,
         system: str,
         user: str,
         *,
-        tier: LLMTier = LLMTier.MEDIUM,
+        model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
@@ -271,7 +271,7 @@ class MyProvider(LLMProvider):
         system: str,
         user: str,
         *,
-        tier: LLMTier = LLMTier.MEDIUM,
+        model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
@@ -280,7 +280,7 @@ class MyProvider(LLMProvider):
         # and yield the full body once.
         text, usage = await self.complete(
             system, user,
-            tier=tier, max_tokens=max_tokens,
+            model_role=model_role, max_tokens=max_tokens,
             temperature=temperature, timeout=timeout,
         )
         yield text
@@ -297,14 +297,14 @@ if provider == "my_provider":
         api_key=api_key,
         base_url=cfg.base_url,
         pinned_model=cfg.model,
-        tier_models=cfg.tier_models or None,
+        role_models=cfg.models or None,
         default_max_tokens=cfg.max_tokens,
         default_temperature=cfg.temperature,
         default_timeout=float(cfg.timeout_seconds),
     )
 ```
 
-Four rules the skeleton has to honour. Construction must not touch the network — if the user's API key is wrong we find out on the first `complete` call, not at boot. Transient and permanent failures are two different exception types because the consolidate worker retries on transient errors only. The tier-to-model resolution must follow the priority order `pinned > tier_models > defaults`; users rely on `llm.model = "x"` to mean "use x for everything". And `complete` must return `tuple[str, Usage | None]` and `stream` must yield `AsyncIterator[str | Usage]`; return `None` for `Usage` when the provider cannot supply token counts — the cost tracking layer handles the absence gracefully.
+Four rules the skeleton has to honour. Construction must not touch the network — if the user's API key is wrong we find out on the first `complete` call, not at boot. Transient and permanent failures are two different exception types because the consolidate worker retries on transient errors only. The role-to-model resolution must follow the priority order `pinned > role_models > defaults`; users rely on `llm.model = "x"` to mean "use x for everything". And `complete` must return `tuple[str, Usage | None]` and `stream` must yield `AsyncIterator[str | Usage]`; return `None` for `Usage` when the provider cannot supply token counts — the cost tracking layer handles the absence gracefully.
 
 ### 2. Add a new startup step
 

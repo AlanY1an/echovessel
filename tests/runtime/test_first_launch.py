@@ -73,9 +73,7 @@ interval_seconds = 60
 
 def _make_runtime(*, web_enabled: bool, port: int) -> Runtime:
     tmp = tempfile.mkdtemp(prefix="echovessel-firstlaunch-")
-    cfg = load_config_from_str(
-        _toml(web_enabled=web_enabled, port=port, data_dir=tmp)
-    )
+    cfg = load_config_from_str(_toml(web_enabled=web_enabled, port=port, data_dir=tmp))
     return Runtime.build(
         None,
         config_override=cfg,

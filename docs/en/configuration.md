@@ -59,23 +59,31 @@ Which model powers the persona and how to talk to it.
 | `provider` | `"openai_compat"` | One of `"openai_compat"`, `"anthropic"`, `"stub"`. `openai_compat` covers any OpenAI-compatible endpoint, which in practice means OpenAI itself, OpenRouter, Ollama, LM Studio, vLLM, DeepSeek, Groq, Together, Fireworks, xAI, Perplexity, Moonshot, and Zhipu GLM. `anthropic` uses the native Anthropic SDK. `stub` returns canned replies and makes no network calls — the easiest way to verify a fresh install. |
 | `api_key_env` | `"OPENAI_API_KEY"` | Environment variable holding the API key. Set to `""` for providers that do not need authentication, such as a local Ollama instance. |
 | `base_url` | unset | Override the API base URL. Required for any `openai_compat` provider that is not OpenAI itself. |
-| `model` | unset | Pin a single model across every semantic tier. Takes precedence over `tier_models`. |
+| `model` | unset | Pin a single model across every model role. Takes precedence over `models`. |
 | `max_tokens` | `1024` | Upper bound on reply length. |
 | `temperature` | `0.7` | Sampling temperature. |
 | `timeout_seconds` | `60` | Request timeout. |
 
-### `[llm.tier_models]`
+### `[llm.models]`
 
-EchoVessel classifies its LLM calls into three semantic tiers — `small`, `medium`, `large` — and lets you map each tier to a different concrete model. Extraction and reflection are `small` tier (they run often and tolerate weaker models), the judge pass is `medium`, and the persona's live replies plus proactive generation are `large`.
+EchoVessel classifies its LLM calls into three model **roles** — `fast`, `main`, `judge` — and lets you map each role to a different concrete model.
+
+| Role | Used by | Notes |
+| --- | --- | --- |
+| `fast` | extraction, reflection, import | Short LLM calls running in the background. A smaller / cheaper model is fine. |
+| `main` | persona interaction, proactive replies | User-facing output. Quality matters most here. |
+| `judge` | eval harness | Strict reasoning for yes/no verdicts. Falls back to `main` if unset. |
 
 ```toml
-[llm.tier_models]
-small  = "gpt-4o-mini"
-medium = "gpt-4o"
-large  = "gpt-4o"
+[llm.models]
+fast  = "gpt-4o-mini"
+main  = "gpt-4o"
+judge = "gpt-4o"
 ```
 
-If `model` is set, it wins across every tier and `tier_models` is ignored. If neither is set, the provider uses its own defaults (for example the Anthropic provider falls back to `haiku` / `sonnet` / `opus`).
+If `model` is set, it wins across every role and `models` is ignored. If neither is set, the provider uses its own defaults (for example the Anthropic provider falls back to `haiku` / `sonnet` / `opus`).
+
+**Legacy `[llm.tier_models]`** — the previous version of this section used keys `small` / `medium` / `large`. Old configs still load: the daemon maps `small` → `fast`, `medium` → `judge`, `large` → `main` automatically and logs a deprecation warning. The compatibility shim will be removed in a future release; please migrate to `[llm.models]` when convenient.
 
 ### Common `[llm]` recipes
 
@@ -89,10 +97,9 @@ provider    = "openai_compat"
 base_url    = "http://localhost:11434/v1"
 api_key_env = ""
 
-[llm.tier_models]
-small  = "llama3:8b"
-medium = "llama3:70b"
-large  = "llama3:70b"
+[llm.models]
+fast = "llama3:8b"
+main = "llama3:70b"
 ```
 
 **OpenRouter** — one account, any model:

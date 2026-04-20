@@ -71,6 +71,7 @@ class _SSEChannel:
         async def _gen():
             if False:
                 yield None
+
         return _gen()
 
     async def send(self, msg: OutgoingMessage) -> None:

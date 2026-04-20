@@ -72,9 +72,7 @@ interval_seconds = 60
 
 def _make_runtime(*, web_enabled: bool, port: int) -> Runtime:
     tmp = tempfile.mkdtemp(prefix="echovessel-web-integ-")
-    cfg = load_config_from_str(
-        _toml(web_enabled=web_enabled, port=port, data_dir=tmp)
-    )
+    cfg = load_config_from_str(_toml(web_enabled=web_enabled, port=port, data_dir=tmp))
     return Runtime.build(
         None,
         config_override=cfg,
@@ -101,9 +99,7 @@ async def _wait_for_server(port: int, timeout: float = 5.0) -> None:
         except (httpx.ConnectError, httpx.ReadError, OSError):
             pass
         await asyncio.sleep(0.05)
-    raise AssertionError(
-        f"uvicorn server on 127.0.0.1:{port} never came up"
-    )
+    raise AssertionError(f"uvicorn server on 127.0.0.1:{port} never came up")
 
 
 async def test_runtime_with_web_enabled_starts_uvicorn_and_registers_channel() -> None:
@@ -119,9 +115,7 @@ async def test_runtime_with_web_enabled_starts_uvicorn_and_registers_channel() -
         assert isinstance(channel, WebChannel)
 
         # Server responds to a real POST /api/chat/send.
-        async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{port}", timeout=2.0
-        ) as client:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=2.0) as client:
             resp = await client.post(
                 "/api/chat/send",
                 json={"content": "hello runtime", "user_id": "self"},
@@ -157,9 +151,7 @@ async def test_runtime_web_sse_stream_emits_connection_ready() -> None:
     try:
         await _wait_for_server(port)
         async with (
-            httpx.AsyncClient(
-                base_url=f"http://127.0.0.1:{port}", timeout=5.0
-            ) as client,
+            httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=5.0) as client,
             client.stream("GET", "/api/chat/events") as resp,
         ):
             assert resp.status_code == 200

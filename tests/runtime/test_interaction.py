@@ -76,11 +76,7 @@ async def test_assemble_turn_happy_path_ingests_both_user_and_persona():
         assert result.reply == "hey, what's on your mind"
 
         # Two messages in L2: the user turn and the persona reply.
-        msgs = list(
-            db.exec(
-                select(RecallMessage).order_by(RecallMessage.id)
-            )
-        )
+        msgs = list(db.exec(select(RecallMessage).order_by(RecallMessage.id)))
         assert len(msgs) == 2
         assert msgs[0].role == MessageRole.USER
         assert msgs[1].role == MessageRole.PERSONA
@@ -253,8 +249,6 @@ def test_persona_facts_view_from_none_row_is_empty():
 
 
 def test_build_user_prompt_just_user_message_when_empty():
-    out = build_user_prompt(
-        top_memories=[], recent_messages=[], user_message="hi"
-    )
+    out = build_user_prompt(top_memories=[], recent_messages=[], user_message="hi")
     assert out.endswith("hi")
     assert "What they just said" in out

@@ -427,8 +427,6 @@ long_silence_hours = 24
 
 def test_proactive_to_proactive_config_explicit_user_id():
     cfg = load_config_from_str(MINIMAL_TOML)
-    pconfig = cfg.proactive.to_proactive_config(
-        persona_id="alan", user_id="alice"
-    )
+    pconfig = cfg.proactive.to_proactive_config(persona_id="alan", user_id="alice")
     assert pconfig.persona_id == "alan"
     assert pconfig.user_id == "alice"

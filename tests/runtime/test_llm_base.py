@@ -1,26 +1,25 @@
-"""LLMProvider Protocol + LLMTier basic contract tests (PR 1)."""
+"""LLMProvider Protocol + model_role basic contract tests."""
 
 from __future__ import annotations
 
 import pytest
 
 from echovessel.runtime.llm import (
+    DEFAULT_ROLE,
+    MODEL_ROLES,
     LLMBudgetError,
     LLMError,
     LLMPermanentError,
     LLMProvider,
-    LLMTier,
     LLMTransientError,
     StubProvider,
 )
 
 
-def test_tier_values_are_stable_strings():
-    # Downstream (EVAL harness, WEB) imports these literal values.
-    assert LLMTier.SMALL == "small"
-    assert LLMTier.MEDIUM == "medium"
-    assert LLMTier.LARGE == "large"
-    assert list(LLMTier) == [LLMTier.SMALL, LLMTier.MEDIUM, LLMTier.LARGE]
+def test_model_roles_are_stable_strings():
+    # Downstream (EVAL harness, WEB admin) imports these literal values.
+    assert MODEL_ROLES == ("fast", "main", "judge")
+    assert DEFAULT_ROLE == "main"
 
 
 def test_error_hierarchy():
@@ -51,12 +50,12 @@ async def test_stub_canned_exact_match():
 
 
 async def test_stub_responder_callable():
-    def responder(*, system, user, tier, **kw):
-        return f"tier={tier} says {user}"
+    def responder(*, system, user, model_role, **kw):
+        return f"role={model_role} says {user}"
 
     stub = StubProvider(responder=responder)
-    out, usage = await stub.complete("sys", "ping", tier=LLMTier.LARGE)
-    assert "tier=large" in out
+    out, usage = await stub.complete("sys", "ping", model_role="main")
+    assert "role=main" in out
     assert "says ping" in out
     assert usage is None
 
@@ -89,6 +88,6 @@ async def test_stub_keyerror_when_no_canned_and_no_fallback():
 
 
 def test_stub_model_for_returns_configured_or_default():
-    stub = StubProvider(model_for_tier={LLMTier.LARGE: "big-model"})
-    assert stub.model_for(LLMTier.LARGE) == "big-model"
-    assert stub.model_for(LLMTier.SMALL) == "stub-model"
+    stub = StubProvider(model_for_role={"main": "big-model"})
+    assert stub.model_for("main") == "big-model"
+    assert stub.model_for("fast") == "stub-model"

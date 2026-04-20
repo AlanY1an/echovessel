@@ -1,4 +1,4 @@
-"""OpenAICompatibleProvider tier-resolution, error-classification, and usage tests."""
+"""OpenAICompatibleProvider role-resolution, error-classification, and usage tests."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from echovessel.runtime.llm.base import LLMTier
+from echovessel.runtime.llm.base import MODEL_ROLES
 from echovessel.runtime.llm.errors import (
     LLMBudgetError,
     LLMPermanentError,
@@ -73,7 +73,11 @@ def _provider_with_fake_client(
     chat = type(
         "Chat",
         (),
-        {"completions": _FakeCompletions(resp=resp, stream_chunks=stream_chunks, raise_after_chunks=raise_after_chunks)},
+        {
+            "completions": _FakeCompletions(
+                resp=resp, stream_chunks=stream_chunks, raise_after_chunks=raise_after_chunks
+            )
+        },
     )()
     p._client = type("C", (), {"chat": chat})()
     return p
@@ -82,40 +86,38 @@ def _provider_with_fake_client(
 def test_official_defaults():
     p = OpenAICompatibleProvider(api_key="fake")
     assert p.provider_name == "openai_compat"
-    assert p.model_for(LLMTier.SMALL) == "gpt-4o-mini"
-    assert p.model_for(LLMTier.MEDIUM) == "gpt-4o"
-    assert p.model_for(LLMTier.LARGE) == "gpt-4o"
+    assert p.model_for("fast") == "gpt-4o-mini"
+    assert p.model_for("main") == "gpt-4o"
+    assert p.model_for("judge") == "gpt-4o"
 
 
-def test_pinned_model_overrides_all_tiers():
+def test_pinned_model_overrides_all_roles():
     p = OpenAICompatibleProvider(api_key="fake", pinned_model="gpt-4o")
-    for tier in LLMTier:
-        assert p.model_for(tier) == "gpt-4o"
+    for role in MODEL_ROLES:
+        assert p.model_for(role) == "gpt-4o"
 
 
 def test_explicit_openai_base_url_still_gets_defaults():
-    p = OpenAICompatibleProvider(
-        api_key="fake", base_url="https://api.openai.com/v1"
-    )
-    assert p.model_for(LLMTier.SMALL) == "gpt-4o-mini"
+    p = OpenAICompatibleProvider(api_key="fake", base_url="https://api.openai.com/v1")
+    assert p.model_for("fast") == "gpt-4o-mini"
 
 
-def test_custom_base_url_requires_model_or_tier_models():
-    with pytest.raises(ValueError, match="cannot resolve model for tier"):
+def test_custom_base_url_requires_model_or_role_models():
+    with pytest.raises(ValueError, match="cannot resolve model for role"):
         OpenAICompatibleProvider(
             api_key=None,
             base_url="http://localhost:11434/v1",
         )
 
 
-def test_ollama_with_explicit_tier_models_succeeds():
+def test_ollama_with_explicit_role_models_succeeds():
     p = OpenAICompatibleProvider(
         api_key=None,
         base_url="http://localhost:11434/v1",
-        tier_models={"small": "llama3:8b", "medium": "llama3:70b", "large": "llama3:70b"},
+        role_models={"fast": "llama3:8b", "main": "llama3:70b", "judge": "llama3:70b"},
     )
-    assert p.model_for(LLMTier.SMALL) == "llama3:8b"
-    assert p.model_for(LLMTier.LARGE) == "llama3:70b"
+    assert p.model_for("fast") == "llama3:8b"
+    assert p.model_for("main") == "llama3:70b"
 
 
 def test_openrouter_with_pinned_model_succeeds():
@@ -124,8 +126,18 @@ def test_openrouter_with_pinned_model_succeeds():
         base_url="https://openrouter.ai/api/v1",
         pinned_model="anthropic/claude-sonnet-4",
     )
-    assert p.model_for(LLMTier.SMALL) == "anthropic/claude-sonnet-4"
+    assert p.model_for("fast") == "anthropic/claude-sonnet-4"
     assert p.base_url == "https://openrouter.ai/api/v1"
+
+
+def test_custom_base_url_judge_falls_back_to_main():
+    """On a custom endpoint, 'judge' auto-inherits 'main' when unspecified."""
+    p = OpenAICompatibleProvider(
+        api_key=None,
+        base_url="http://localhost:11434/v1",
+        role_models={"fast": "llama3:8b", "main": "llama3:70b"},
+    )
+    assert p.model_for("judge") == "llama3:70b"
 
 
 # ---- error classification --------------------------------------------------

@@ -71,8 +71,8 @@ async def test_extract_chunk_roundtrip():
     kinds = {it.content_type for it in items}
     assert "persona_traits" in kinds
     assert "user_events" in kinds
-    # Tier must be "small" per tracker hard constraint #4
-    assert stub.calls[0]["tier"] == "small"
+    # Model role must be "fast" per tracker hard constraint #4
+    assert stub.calls[0]["model_role"] == "fast"
 
 
 def test_parse_ignores_unknown_targets_via_dropped():

@@ -47,9 +47,7 @@ async def _drain_loop() -> None:
         await asyncio.sleep(0)
 
 
-def _make_observer_with_channel() -> tuple[
-    RuntimeMemoryObserver, ChannelRegistry, _FakeChannel
-]:
+def _make_observer_with_channel() -> tuple[RuntimeMemoryObserver, ChannelRegistry, _FakeChannel]:
     registry = ChannelRegistry()
     channel = _FakeChannel()
     registry.register(channel)
@@ -188,9 +186,7 @@ def test_hooks_are_sync_callable_without_loop_attached() -> None:
         ),
     ],
 )
-async def test_hook_with_no_channels_registered_is_noop(
-    hook_name: str, kwargs: dict
-) -> None:
+async def test_hook_with_no_channels_registered_is_noop(hook_name: str, kwargs: dict) -> None:
     """Observer with an empty registry must not raise — and must schedule
     a no-op broadcast that completes silently."""
     registry = ChannelRegistry()

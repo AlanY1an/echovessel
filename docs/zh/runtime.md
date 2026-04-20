@@ -30,9 +30,9 @@ Launcher 暴露四条子命令:`echovessel run` 在前台启动守护进程,`ech
 
 **on_turn_done 回调** — `on_turn_done(turn_id)`。Channel 借此知道"runtime 对这个 turn 已经做完了,你可以清 in-flight 状态,去考虑要不要刷下一个 debounce 过的 turn"。Runtime 保证每个 turn 恰好调用一次,在 `assemble_turn` 的 `finally` 块里,无论这个 turn 是成功、是 LLM 瞬时错误、是 LLM 永久错误,还是 memory 写入失败。回调里抛的异常会被吞掉——channels 被预期在这里零抛,坏 channel 不能污染 runtime 的 turn pipeline。
 
-**LLM tier** — 调用点声明的语义标签。Runtime 恰好持有一个 `LLMProvider` 实例,每次调用都传一个 `tier=LLMTier.SMALL | MEDIUM | LARGE`。Provider 内部把 tier 映射到具体 model 名。映射解析的优先级固定如下:如果配置里 pin 了一个 `llm.model`,所有 tier 都返回那一个模型("一个模型跑到底");否则如果配置里设了 `[llm.tier_models]`,就用每档的映射;再否则 provider 回退到内置默认值(Anthropic:Haiku / Sonnet / Opus;OpenAI 官方:`gpt-4o-mini` / `gpt-4o`)。EchoVessel 的调用点 tier 是固定的:extraction 用 SMALL,reflection 用 SMALL,未来的 judge 用 MEDIUM,interaction 和 proactive 永远用 LARGE,因为用户正盯着屏幕。
+**LLM model role** — 调用点声明的语义标签。Runtime 恰好持有一个 `LLMProvider` 实例,每次调用都传一个 `model_role="fast" | "main" | "judge"`。Provider 内部把 role 映射到具体 model 名。映射解析的优先级固定如下:如果配置里 pin 了一个 `llm.model`,所有 role 都返回那一个模型("一个模型跑到底");否则如果配置里设了 `[llm.models]`,就用每个 role 的映射;再否则 provider 回退到内置默认值(Anthropic:Haiku / Sonnet / Opus;OpenAI 官方:`gpt-4o-mini` / `gpt-4o`)。EchoVessel 的调用点 role 固定在代码里,不在配置里:extraction 和 reflection 用 `fast`,eval judge 用 `judge`(没配时自动 fallback 到 `main`),interaction 和 proactive 用 `main` —— 因为用户正盯着屏幕。
 
-**Local-first 披露** — 启动结尾那一行日志,列出守护进程将要联系的**每一个**对外地址。包含数据目录、解析后的数据库路径、persona id、LLM provider 名称、LARGE tier 解析到的 model、provider 将要打的 base URL(比如 `https://api.anthropic.com` 或者本地 Ollama 的 URL)、启用的 channel 列表、embedder 名称。紧跟一行用口语再说一次外发 URL。任何审计者跑 `tail -f logs/runtime-*.log | head -2` 立刻就能看到流量去向。
+**Local-first 披露** — 启动结尾那一行日志,列出守护进程将要联系的**每一个**对外地址。包含数据目录、解析后的数据库路径、persona id、LLM provider 名称、`main` role 解析到的 model、provider 将要打的 base URL(比如 `https://api.anthropic.com` 或者本地 Ollama 的 URL)、启用的 channel 列表、embedder 名称。紧跟一行用口语再说一次外发 URL。任何审计者跑 `tail -f logs/runtime-*.log | head -2` 立刻就能看到流量去向。
 
 **SIGHUP reload** — 给守护进程发 `SIGHUP`(或者跑 `echovessel reload`),runtime 会重读 `config.toml`、验证它、如果 `[llm]` 节有变动就重建 LLM provider、原子替换 `ctx.llm`。In-flight turn 不受影响,因为 turn handler 在每个 turn 开头把 `llm = self.ctx.llm` 捕获成一个局部变量——Python 的引用语义白送我们零成本的 liveness,不需要任何锁或版本号。结构性小节(`[memory]`、`[channels.*]`、`[persona].id`)无法重载;要改它们必须 `echovessel stop && echovessel run` 完整重启。
 
@@ -143,23 +143,23 @@ Memory 的 lifecycle hook(`on_session_closed`、`on_new_session_started`、`on_m
 
 Interaction 在构造外发回复的那一刻读 `ctx.persona.voice_enabled`;proactive 通过一个 `RuntimeContextPersonaView` 适配器读同一个字段,适配器的 property 每次访问都现读 `ctx.persona`。不加锁、不缓存——Python 里 bool 的读在字节码层是原子的,跨 tick 边界的短暂 race 可以接受。
 
-### LLM tier 体系
+### LLM model-role 体系
 
-Runtime 里每个调用点声明自己想要的 tier,provider 在调用时把 tier 映射到 model。LLMProvider 契约(`runtime/llm/base.py`)是一个微小的 `Protocol`,只有三个方法:`model_for(tier)` 用于 log 和审计,`complete(system, user, *, tier, ...)` 用于单次 completion,`stream(system, user, *, tier, ...)` 用于逐 token 流式。每个调用签名把 tier 作为关键字参数传进来,默认 `MEDIUM`。
+Runtime 里每个调用点声明自己想要的 role,provider 在调用时把 role 映射到 model。LLMProvider 契约(`runtime/llm/base.py`)是一个微小的 `Protocol`,只有三个方法:`model_for(model_role)` 用于 log 和审计,`complete(system, user, *, model_role, ...)` 用于单次 completion,`stream(system, user, *, model_role, ...)` 用于逐 token 流式。每个调用签名把 `model_role` 作为关键字参数传进来,默认 `"main"`。合法 role 值定义在 `MODEL_ROLES = ("fast", "main", "judge")`。
 
 `complete` 返回 `tuple[str, Usage | None]`——回复文本与一个 `Usage` dataclass 配对,后者携带 provider SDK 上报的 `input_tokens`、`output_tokens`、`cache_read_input_tokens`、`cache_creation_input_tokens`。`stream` 先 yield `str` 类型的文本 delta,最后 yield 一个尾部 `Usage` 作为末项;流式中断时尾部 `Usage` 会被省略,而不是记录一个偏低的误导性计数。
 
 Provider 不提供 token 数据时(以 `StubProvider` 为典型)`Usage` 为 `None` 或在 stream 中缺席。只关心文本的消费者用 `isinstance` 过滤:
 
 ```python
-async for item in llm.stream(system, user, tier=tier):
+async for item in llm.stream(system, user, model_role=model_role):
     if isinstance(item, str):
         await on_token(message_id, item)
     # 尾部 Usage 由 CostTrackingProvider 自动吸收;
     # 直接使用 LLMProvider 的调用者可以按需捕获
 ```
 
-调用点的 tier 分配固定在代码里,不在配置里,因为它们反映的是架构意图而不是用户偏好。Extraction 和 reflection 是 SMALL——它们跑在关闭的 session 上,批量跑便宜的调用,用户也没在等。Reflection 理论上能从更强的模型里受益,但 MVP 阶段 Haiku 级的输出够用了;不同意的用户可以在 `[llm.tier_models]` 里把 SMALL 拉高而不用动代码。Judge(eval harness,未来)是 MEDIUM——严格评估要一致性,不要最贵的模型。Interaction 和 proactive 是 LARGE——用户正盯着屏幕,更好的模型能带来显著更好的回复。
+调用点的 role 分配固定在代码里,不在配置里,因为它们反映的是架构意图而不是用户偏好。Extraction 和 reflection 是 `fast`——它们跑在关闭的 session 上,批量跑便宜的调用,用户也没在等。Reflection 理论上能从更强的模型里受益,但 MVP 阶段 Haiku 级的输出够用了;不同意的用户可以在 `[llm.models]` 里把 `fast` 拉高而不用动代码。Eval judge 是 `judge`——严格评估要一致性,没配时会自动 fallback 到 `main`。Interaction 和 proactive 是 `main`——用户正盯着屏幕,更好的模型能带来显著更好的回复。
 
 `runtime/llm/` 里的三个具体 provider 加起来覆盖 15+ 个真实端点。`AnthropicProvider` 用原生 `anthropic` SDK,对着 Claude。`OpenAICompatibleProvider` 用原生 `openai` SDK,`base_url` 可配,这意味着它覆盖 OpenAI 官方、OpenRouter、Ollama、LM Studio、llama.cpp server、vLLM、DeepSeek、Together、Groq、xAI,以及任何实现了 OpenAI 兼容 REST 的 provider。`StubProvider` 返回预置文本,用于测试和 dry run。
 
@@ -205,7 +205,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from echovessel.runtime.llm.base import LLMProvider, LLMTier
+from echovessel.runtime.llm.base import DEFAULT_ROLE, LLMProvider, MODEL_ROLES
 from echovessel.runtime.llm.errors import LLMPermanentError, LLMTransientError
 from echovessel.runtime.llm.usage import Usage
 
@@ -215,10 +215,10 @@ class MyProvider(LLMProvider):
 
     provider_name = "my_provider"
 
-    _DEFAULT_TIERS = {
-        LLMTier.SMALL: "my-small-model",
-        LLMTier.MEDIUM: "my-medium-model",
-        LLMTier.LARGE: "my-large-model",
+    _DEFAULT_MODELS_BY_ROLE = {
+        "fast": "my-fast-model",
+        "main": "my-main-model",
+        "judge": "my-judge-model",
     }
 
     def __init__(
@@ -227,7 +227,7 @@ class MyProvider(LLMProvider):
         api_key: str | None,
         base_url: str | None = None,
         pinned_model: str | None = None,
-        tier_models: dict[str, str] | None = None,
+        role_models: dict[str, str] | None = None,
         default_max_tokens: int = 1024,
         default_temperature: float = 0.7,
         default_timeout: float = 60.0,
@@ -236,24 +236,24 @@ class MyProvider(LLMProvider):
         self._api_key = api_key
         self.base_url = base_url or "https://api.example.com/v1"
         self._pinned = pinned_model
-        self._tier_models = tier_models or {}
+        self._role_models = role_models or {}
         self._max_tokens = default_max_tokens
         self._temperature = default_temperature
         self._timeout = default_timeout
 
-    def model_for(self, tier: LLMTier) -> str:
+    def model_for(self, model_role: str) -> str:
         if self._pinned:
             return self._pinned
-        if tier.value in self._tier_models:
-            return self._tier_models[tier.value]
-        return self._DEFAULT_TIERS[tier]
+        if model_role in self._role_models:
+            return self._role_models[model_role]
+        return self._DEFAULT_MODELS_BY_ROLE[model_role]
 
     async def complete(
         self,
         system: str,
         user: str,
         *,
-        tier: LLMTier = LLMTier.MEDIUM,
+        model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
@@ -271,7 +271,7 @@ class MyProvider(LLMProvider):
         system: str,
         user: str,
         *,
-        tier: LLMTier = LLMTier.MEDIUM,
+        model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
@@ -280,7 +280,7 @@ class MyProvider(LLMProvider):
         # 再一次 yield 整段文本。
         text, usage = await self.complete(
             system, user,
-            tier=tier, max_tokens=max_tokens,
+            model_role=model_role, max_tokens=max_tokens,
             temperature=temperature, timeout=timeout,
         )
         yield text
@@ -297,14 +297,14 @@ if provider == "my_provider":
         api_key=api_key,
         base_url=cfg.base_url,
         pinned_model=cfg.model,
-        tier_models=cfg.tier_models or None,
+        role_models=cfg.models or None,
         default_max_tokens=cfg.max_tokens,
         default_temperature=cfg.temperature,
         default_timeout=float(cfg.timeout_seconds),
     )
 ```
 
-骨架必须遵守四条规则。构造函数不能触网——用户 API key 错了应该在第一次 `complete` 时才发现,不在启动时。瞬时错误和永久错误必须是两个不同的异常类型,因为 consolidate worker 只对瞬时错误重试。Tier → model 解析必须遵循优先级 `pinned > tier_models > 默认`;用户依赖 `llm.model = "x"` 表达"用 x 跑一切"。`complete` 必须返回 `tuple[str, Usage | None]`,`stream` 必须 yield `AsyncIterator[str | Usage]`;provider 无法提供 token 计数时返回 `None`——成本追踪层会自动优雅处理缺失情况。
+骨架必须遵守四条规则。构造函数不能触网——用户 API key 错了应该在第一次 `complete` 时才发现,不在启动时。瞬时错误和永久错误必须是两个不同的异常类型,因为 consolidate worker 只对瞬时错误重试。Role → model 解析必须遵循优先级 `pinned > role_models > 默认`;用户依赖 `llm.model = "x"` 表达"用 x 跑一切"。`complete` 必须返回 `tuple[str, Usage | None]`,`stream` 必须 yield `AsyncIterator[str | Usage]`;provider 无法提供 token 计数时返回 `None`——成本追踪层会自动优雅处理缺失情况。
 
 ### 2. 加一个新的启动步骤
 

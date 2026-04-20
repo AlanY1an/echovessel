@@ -31,7 +31,6 @@ from echovessel.runtime.cost_logger import (
     list_recent,
     summarize,
 )
-from echovessel.runtime.llm.base import LLMTier
 from echovessel.runtime.llm.usage import Usage
 
 # ---------------------------------------------------------------------------
@@ -59,7 +58,7 @@ class _FakeProvider:
         self.complete_calls: list[dict] = []
         self.stream_calls: list[dict] = []
 
-    def model_for(self, tier: LLMTier) -> str:
+    def model_for(self, model_role: str) -> str:
         return self._model
 
     async def complete(
@@ -67,12 +66,12 @@ class _FakeProvider:
         system: str,
         user: str,
         *,
-        tier: LLMTier = LLMTier.MEDIUM,
+        model_role: str = "main",
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
     ) -> tuple[str, Usage | None]:
-        self.complete_calls.append({"system": system, "user": user, "tier": tier})
+        self.complete_calls.append({"system": system, "user": user, "model_role": model_role})
         return "ok response", None
 
     async def stream(
@@ -80,12 +79,12 @@ class _FakeProvider:
         system: str,
         user: str,
         *,
-        tier: LLMTier = LLMTier.MEDIUM,
+        model_role: str = "main",
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
     ) -> AsyncIterator[str | Usage]:
-        self.stream_calls.append({"system": system, "user": user, "tier": tier})
+        self.stream_calls.append({"system": system, "user": user, "model_role": model_role})
         for piece in ("hel", "lo ", "wor", "ld"):
             yield piece
 
@@ -101,7 +100,7 @@ def test_recorder_persists_row_and_returns_record() -> None:
         provider="openai_compat",
         model="gpt-4o",
         feature="chat",
-        tier="large",
+        model_role="main",
         input_text="hello system\nhello user",
         output_text="here is a reply",
         turn_id="turn-abc",
@@ -110,7 +109,7 @@ def test_recorder_persists_row_and_returns_record() -> None:
     assert record.provider == "openai_compat"
     assert record.model == "gpt-4o"
     assert record.feature == "chat"
-    assert record.tier == "large"
+    assert record.tier == "main"
     assert record.tokens_in > 0
     assert record.tokens_out > 0
     assert record.cost_usd > 0  # non-stub provider has a non-zero rate
@@ -124,7 +123,7 @@ def test_recorder_stub_provider_yields_zero_cost() -> None:
         provider="stub",
         model="stub-model",
         feature="consolidate",
-        tier="small",
+        model_role="fast",
         input_text="x" * 500,
         output_text="y" * 500,
     )
@@ -148,7 +147,7 @@ async def test_tracking_provider_records_complete_call() -> None:
     wrapped = CostTrackingProvider(inner, recorder)
 
     with feature_context("chat", turn_id="turn-1"):
-        result, usage = await wrapped.complete("sys", "usr", tier=LLMTier.LARGE)
+        result, usage = await wrapped.complete("sys", "usr", model_role="main")
     assert result == "ok response"
     assert usage is None
     assert inner.complete_calls  # delegated
@@ -158,7 +157,7 @@ async def test_tracking_provider_records_complete_call() -> None:
     assert len(rows) == 1
     assert rows[0].feature == "chat"
     assert rows[0].turn_id == "turn-1"
-    assert rows[0].tier == "large"
+    assert rows[0].tier == "main"
 
 
 @pytest.mark.asyncio
@@ -169,7 +168,7 @@ async def test_tracking_provider_records_stream_after_full_consume() -> None:
 
     with feature_context("import"):
         chunks = []
-        async for piece in wrapped.stream("sys", "usr", tier=LLMTier.SMALL):
+        async for piece in wrapped.stream("sys", "usr", model_role="fast"):
             chunks.append(piece)
     assert "".join(chunks) == "hello world"
 
@@ -177,7 +176,7 @@ async def test_tracking_provider_records_stream_after_full_consume() -> None:
         rows = list_recent(db, limit=10)
     assert len(rows) == 1
     assert rows[0].feature == "import"
-    assert rows[0].tier == "small"
+    assert rows[0].tier == "fast"
     # tokens_out reflects the joined stream output, not just one chunk.
     assert rows[0].tokens_out >= 1
 
@@ -211,7 +210,7 @@ def _seed_call(
         provider=cost_provider,
         model="gpt-4o",
         feature=feature,
-        tier="medium",
+        model_role="judge",
         input_text="hello world " * 5,
         output_text="reply " * 8,
         timestamp=when,
@@ -298,7 +297,7 @@ def test_recorder_prefers_usage_over_count_tokens() -> None:
         provider="anthropic",
         model="claude-sonnet-4-6",
         feature="chat",
-        tier="medium",
+        model_role="judge",
         input_text="short",
         output_text="hi",
         usage=usage,
@@ -318,7 +317,7 @@ def test_recorder_fallback_to_count_tokens_when_usage_none() -> None:
         provider="openai_compat",
         model="gpt-4o",
         feature="chat",
-        tier="medium",
+        model_role="judge",
         input_text="hello world " * 20,
         output_text="reply text " * 10,
         usage=None,
@@ -336,7 +335,7 @@ async def test_tracking_provider_wires_complete_usage_to_db_row() -> None:
     reflects provider-reported token counts, not _count_tokens estimates."""
 
     class _UsageProvider(_FakeProvider):
-        async def complete(self, system, user, *, tier=LLMTier.MEDIUM, **_kw):
+        async def complete(self, system, user, *, model_role="judge", **_kw):
             self.complete_calls.append({"system": system, "user": user})
             return "x", Usage(
                 input_tokens=1234,
@@ -388,7 +387,7 @@ async def test_tracking_provider_stream_with_trailing_usage_uses_sdk_counts() ->
     """When the stream yields a trailing Usage, the row reflects those counts."""
 
     class _StreamWithUsageProvider(_FakeProvider):
-        async def stream(self, system, user, *, tier=LLMTier.MEDIUM, **_kw):
+        async def stream(self, system, user, *, model_role="judge", **_kw):
             yield "hello"
             yield " world"
             yield Usage(

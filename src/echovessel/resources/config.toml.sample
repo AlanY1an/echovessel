@@ -65,17 +65,21 @@ recent_window_size = 20
 # gpt-4o.
 #
 # Swap to any OpenAI-compatible endpoint by setting base_url and either
-# `model` or `tier_models` (we don't ship tier defaults for non-official
+# `model` or `models` (we don't ship role defaults for non-official
 # endpoints).
+#
+# Model roles:
+#   "fast"   — cheap/quick tasks (extraction, reflection)
+#   "main"   — user-facing interaction + proactive replies
+#   "judge"  — eval harness (optional · falls back to "main")
 #
 # Examples:
 #   Ollama (local, no key):
 #     base_url = "http://localhost:11434/v1"
 #     api_key_env = ""
-#     [llm.tier_models]
-#     small  = "llama3:8b"
-#     medium = "llama3:70b"
-#     large  = "llama3:70b"
+#     [llm.models]
+#     fast = "llama3:8b"
+#     main = "llama3:70b"
 #
 #   OpenRouter:
 #     base_url = "https://openrouter.ai/api/v1"
@@ -85,18 +89,18 @@ recent_window_size = 20
 #   Anthropic native:
 #     provider = "anthropic"
 #     api_key_env = "ANTHROPIC_API_KEY"
-#     # tier defaults: haiku / sonnet / opus
+#     # role defaults: haiku (fast) / sonnet (main) / opus (judge)
 provider = "openai_compat"
 api_key_env = "OPENAI_API_KEY"
 
-# Optional: pin a single model across every tier.
+# Optional: pin a single model across every role.
 # model = "gpt-4o"
 
-# Optional: explicit tier mapping.
-# [llm.tier_models]
-# small  = "gpt-4o-mini"
-# medium = "gpt-4o"
-# large  = "gpt-4o"
+# Optional: explicit role → model mapping.
+# [llm.models]
+# fast  = "gpt-4o-mini"
+# main  = "gpt-4o"
+# judge = "gpt-4o"
 
 # Per-request LLM tuning knobs.
 max_tokens = 1024

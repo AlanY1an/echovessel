@@ -29,7 +29,6 @@ from echovessel.prompts.persona_facts import (
     format_persona_facts_user_prompt,
     parse_persona_facts_response,
 )
-from echovessel.runtime.llm.base import LLMTier
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +48,7 @@ class _LLMLike(Protocol):
         system: str,
         user: str,
         *,
-        tier: LLMTier = ...,
+        model_role: str = ...,
         max_tokens: int = ...,
         temperature: float = ...,
         timeout: float | None = ...,
@@ -120,7 +119,7 @@ async def extract_persona_facts_and_blocks(
     existing_blocks: dict[str, str] | None = None,
     locale: str | None = None,
     persona_display_name: str | None = None,
-    tier: LLMTier = LLMTier.LARGE,
+    model_role: str = "main",
     timeout: float | None = None,
 ) -> ExtractedPersona:
     """Run one LLM call that returns five blocks plus fifteen facts.
@@ -128,7 +127,7 @@ async def extract_persona_facts_and_blocks(
     Parameters
     ----------
     llm
-        Any object with an async ``complete(system, user, *, tier,
+        Any object with an async ``complete(system, user, *, model_role,
         max_tokens, temperature, timeout)`` method — the same shape
         :class:`echovessel.runtime.llm.base.LLMProvider` exposes.
     context_text
@@ -140,8 +139,8 @@ async def extract_persona_facts_and_blocks(
         copy these verbatim into its output rather than rewrite them.
     locale / persona_display_name
         Optional hints.
-    tier
-        Defaults to LARGE — persona-defining call, worth the tokens.
+    model_role
+        Defaults to ``"main"`` — persona-defining call, worth the tokens.
     timeout
         Passed through to the provider; ``None`` means the provider's
         default.
@@ -165,7 +164,7 @@ async def extract_persona_facts_and_blocks(
     response, _usage = await llm.complete(
         system,
         user,
-        tier=tier,
+        model_role=model_role,
         max_tokens=_MAX_TOKENS,
         temperature=_TEMPERATURE,
         timeout=timeout,

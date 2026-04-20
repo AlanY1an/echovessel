@@ -164,9 +164,7 @@ api_key_env = ""
 def _build_runtime(tmp_path):
     toml = tmp_path / "config.toml"
     toml.write_text(CONTROL_TOML)
-    return Runtime.build(
-        toml, llm=StubProvider(fallback="hi"), embed_fn=build_zero_embedder()
-    )
+    return Runtime.build(toml, llm=StubProvider(fallback="hi"), embed_fn=build_zero_embedder())
 
 
 async def test_shutdown_endpoint_sets_shutdown_event(tmp_path):
@@ -200,13 +198,13 @@ async def test_reload_endpoint_returns_reloaded_list(tmp_path, monkeypatch):
         # Now mutate the config on disk so llm section differs, reload,
         # assert "llm" shows up in the reloaded list.
         toml = rt.ctx.config_path
-        toml.write_text(CONTROL_TOML.replace('provider = "stub"', 'provider = "stub"\nmax_tokens = 4096'))
+        toml.write_text(
+            CONTROL_TOML.replace('provider = "stub"', 'provider = "stub"\nmax_tokens = 4096')
+        )
 
         import echovessel.runtime.app as app_mod
 
-        monkeypatch.setattr(
-            app_mod, "build_llm_provider", lambda cfg: StubProvider(fallback="new")
-        )
+        monkeypatch.setattr(app_mod, "build_llm_provider", lambda cfg: StubProvider(fallback="new"))
 
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as c:
             r = await c.post("/reload")
@@ -270,9 +268,7 @@ async def test_concurrent_reload_serialized_by_lock(tmp_path, monkeypatch):
 
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as c:
             # Fire both concurrently.
-            r1, r2 = await asyncio.gather(
-                c.post("/reload"), c.post("/reload")
-            )
+            r1, r2 = await asyncio.gather(c.post("/reload"), c.post("/reload"))
         assert r1.status_code == 200
         assert r2.status_code == 200
 

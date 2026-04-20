@@ -43,7 +43,7 @@ from sqlalchemy import Column, DateTime, func
 from sqlmodel import Field, SQLModel, select
 from sqlmodel import Session as DbSession
 
-from echovessel.runtime.llm.base import LLMProvider, LLMTier
+from echovessel.runtime.llm.base import DEFAULT_ROLE, LLMProvider
 from echovessel.runtime.llm.usage import Usage
 
 log = logging.getLogger(__name__)
@@ -55,17 +55,28 @@ Feature = Literal["chat", "import", "consolidate", "reflection", "proactive"]
 
 
 # ---------------------------------------------------------------------------
-# Pricing table — per-tier rates in USD per 1K tokens
+# Pricing table — per-role rates in USD per 1K tokens
 # ---------------------------------------------------------------------------
 
 # Rough 2026-04 OpenAI rates. Other providers (anthropic, openrouter, …)
 # use the same numbers — until the cost ledger grows a per-provider rate
 # matrix, treating every provider as gpt-4o-class is the honest default
 # (the front-end already labels these as estimates).
-_TIER_RATES_USD_PER_1K: dict[str, dict[str, float]] = {
-    LLMTier.SMALL.value: {"in": 0.00015, "out": 0.00060},   # gpt-4o-mini
-    LLMTier.MEDIUM.value: {"in": 0.0025, "out": 0.010},     # gpt-4o
-    LLMTier.LARGE.value: {"in": 0.0025, "out": 0.010},      # gpt-4o
+#
+# Legacy tier keys (small / medium / large) are accepted too for back-compat
+# with old ``llm_calls`` rows; see ``_rate_for_role``.
+_ROLE_RATES_USD_PER_1K: dict[str, dict[str, float]] = {
+    "fast": {"in": 0.00015, "out": 0.00060},  # gpt-4o-mini class
+    "main": {"in": 0.0025, "out": 0.010},  # gpt-4o class
+    "judge": {"in": 0.0025, "out": 0.010},  # gpt-4o class
+}
+
+# Read-only alias kept so ledger rows persisted under legacy tier names still
+# resolve to a rate. Writes always use role keys.
+_LEGACY_TIER_TO_ROLE: dict[str, str] = {
+    "small": "fast",
+    "medium": "judge",
+    "large": "main",
 }
 
 # Stub provider has zero billable cost. The wrapper short-circuits the
@@ -98,24 +109,22 @@ def _count_tokens(text: str) -> int:
         return max(1, len(text) // 4)
 
 
-def _estimate_cost_usd(
-    provider: str, tier: str, tokens_in: int, tokens_out: int
-) -> float:
-    """Convert ``(tokens_in, tokens_out, tier)`` into a USD estimate.
+def _estimate_cost_usd(provider: str, model_role: str, tokens_in: int, tokens_out: int) -> float:
+    """Convert ``(tokens_in, tokens_out, model_role)`` into a USD estimate.
 
-    Unknown tiers fall back to the SMALL rate; unknown free providers
-    return 0.0. Rounded to 6 decimal places to keep the ledger
-    column readable.
+    Accepts both new role keys (``fast`` / ``main`` / ``judge``) and
+    legacy tier keys (``small`` / ``medium`` / ``large``) — legacy rows
+    in old ledgers still resolve to a plausible rate. Unknown roles fall
+    back to the ``fast`` rate; stub provider returns 0.0. Rounded to 6
+    decimal places to keep the ledger column readable.
     """
 
     if provider in _FREE_PROVIDERS:
         return 0.0
-    rates = _TIER_RATES_USD_PER_1K.get(
-        tier, _TIER_RATES_USD_PER_1K[LLMTier.SMALL.value]
-    )
-    cost = (tokens_in / 1000.0) * rates["in"] + (
-        tokens_out / 1000.0
-    ) * rates["out"]
+    # Normalise legacy tier names to canonical roles before lookup.
+    role_key = _LEGACY_TIER_TO_ROLE.get(model_role, model_role)
+    rates = _ROLE_RATES_USD_PER_1K.get(role_key, _ROLE_RATES_USD_PER_1K["fast"])
+    cost = (tokens_in / 1000.0) * rates["in"] + (tokens_out / 1000.0) * rates["out"]
     return round(cost, 6)
 
 
@@ -195,12 +204,8 @@ def _row_to_record(row: LLMCall) -> LLMCallRecord:
 # Per-call feature context (set by callers before the LLM call)
 # ---------------------------------------------------------------------------
 
-_current_feature: ContextVar[str | None] = ContextVar(
-    "echovessel_cost_feature", default=None
-)
-_current_turn_id: ContextVar[str | None] = ContextVar(
-    "echovessel_cost_turn_id", default=None
-)
+_current_feature: ContextVar[str | None] = ContextVar("echovessel_cost_feature", default=None)
+_current_turn_id: ContextVar[str | None] = ContextVar("echovessel_cost_turn_id", default=None)
 
 
 @contextmanager
@@ -252,13 +257,18 @@ class CostRecorder:
         provider: str,
         model: str,
         feature: str,
-        tier: str,
+        model_role: str | None = None,
         input_text: str,
         output_text: str,
         turn_id: str | None = None,
         timestamp: datetime | None = None,
         usage: Usage | None = None,  # Prefer SDK-reported usage over _count_tokens fallback
+        tier: str | None = None,  # Deprecated alias for model_role; kept one release
     ) -> LLMCallRecord | None:
+        # Backwards compatibility: callers that still pass ``tier=...`` keep
+        # working for one release. Prefer the new ``model_role`` kwarg.
+        if model_role is None:
+            model_role = tier if tier is not None else DEFAULT_ROLE
         if usage is not None:
             tokens_in = usage.input_tokens
             tokens_out = usage.output_tokens
@@ -268,14 +278,17 @@ class CostRecorder:
             tokens_in = _count_tokens(input_text)
             tokens_out = _count_tokens(output_text)
             cache_read = cache_create = 0
-        cost_usd = _estimate_cost_usd(provider, tier, tokens_in, tokens_out)
+        cost_usd = _estimate_cost_usd(provider, model_role, tokens_in, tokens_out)
         ts = timestamp or datetime.now()
+        # DB column is still named `tier` (free-text label) — we store the
+        # role value there so historical tier-named rows and new role-named
+        # rows coexist in one column. UI reads and interprets both.
         row = LLMCall(
             timestamp=ts,
             provider=provider,
             model=model,
             feature=feature,
-            tier=tier,
+            tier=model_role,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             cost_usd=cost_usd,
@@ -316,15 +329,15 @@ class CostTrackingProvider:
     def provider_name(self) -> str:
         return self._inner.provider_name
 
-    def model_for(self, tier: LLMTier) -> str:
-        return self._inner.model_for(tier)
+    def model_for(self, model_role: str) -> str:
+        return self._inner.model_for(model_role)
 
     async def complete(
         self,
         system: str,
         user: str,
         *,
-        tier: LLMTier = LLMTier.MEDIUM,
+        model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
@@ -332,12 +345,12 @@ class CostTrackingProvider:
         text, usage = await self._inner.complete(
             system,
             user,
-            tier=tier,
+            model_role=model_role,
             max_tokens=max_tokens,
             temperature=temperature,
             timeout=timeout,
         )
-        self._record(tier, system, user, text, usage=usage)
+        self._record(model_role, system, user, text, usage=usage)
         return text, usage
 
     async def stream(
@@ -345,7 +358,7 @@ class CostTrackingProvider:
         system: str,
         user: str,
         *,
-        tier: LLMTier = LLMTier.MEDIUM,
+        model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
@@ -355,7 +368,7 @@ class CostTrackingProvider:
         async for item in self._inner.stream(
             system,
             user,
-            tier=tier,
+            model_role=model_role,
             max_tokens=max_tokens,
             temperature=temperature,
             timeout=timeout,
@@ -365,11 +378,11 @@ class CostTrackingProvider:
                 yield item
             else:
                 trailing_usage = item
-        self._record(tier, system, user, "".join(chunks), usage=trailing_usage)
+        self._record(model_role, system, user, "".join(chunks), usage=trailing_usage)
 
     def _record(
         self,
-        tier: LLMTier,
+        model_role: str,
         system: str,
         user: str,
         output: str,
@@ -381,9 +394,9 @@ class CostTrackingProvider:
         try:
             self._recorder.record(
                 provider=self._inner.provider_name,
-                model=self._inner.model_for(tier),
+                model=self._inner.model_for(model_role),
                 feature=feature,
-                tier=tier.value if isinstance(tier, LLMTier) else str(tier),
+                model_role=model_role,
                 input_text=f"{system}\n{user}",
                 output_text=output,
                 turn_id=turn_id,
@@ -408,9 +421,7 @@ def _range_to_window(range_label: str, now: datetime | None = None) -> datetime:
         return now - timedelta(days=7)
     if range_label == "30d":
         return now - timedelta(days=30)
-    raise ValueError(
-        f"unknown cost range {range_label!r}; expected today | 7d | 30d"
-    )
+    raise ValueError(f"unknown cost range {range_label!r}; expected today | 7d | 30d")
 
 
 def summarize(
@@ -428,9 +439,7 @@ def summarize(
     """
 
     since = _range_to_window(range_label, now=now)
-    rows: list[LLMCall] = list(
-        db.exec(select(LLMCall).where(LLMCall.timestamp >= since)).all()
-    )
+    rows: list[LLMCall] = list(db.exec(select(LLMCall).where(LLMCall.timestamp >= since)).all())
 
     total_usd = round(sum(float(r.cost_usd) for r in rows), 6)
     total_tokens_in = sum(int(r.tokens_in) for r in rows)
@@ -454,9 +463,7 @@ def summarize(
         bucket["calls"] += 1
         bucket["tokens_in"] += int(row.tokens_in)
         bucket["tokens_out"] += int(row.tokens_out)
-        bucket["cost_usd"] = round(
-            float(bucket["cost_usd"]) + float(row.cost_usd), 6
-        )
+        bucket["cost_usd"] = round(float(bucket["cost_usd"]) + float(row.cost_usd), 6)
         bucket["cache_read_input_tokens"] += int(row.cache_read_input_tokens)
         bucket["cache_creation_input_tokens"] += int(row.cache_creation_input_tokens)
 

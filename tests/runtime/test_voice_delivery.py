@@ -101,9 +101,7 @@ class _RecordingChannel:
             received_at=datetime.now(),
             external_ref="ref",
         )
-        await self._queue.put(
-            IncomingTurn.from_single_message(msg)
-        )
+        await self._queue.put(IncomingTurn.from_single_message(msg))
 
 
 def _make_voice_result(*, cached: bool = False) -> VoiceResult:
@@ -133,7 +131,9 @@ async def test_handle_turn_no_voice_when_disabled():
     """voice_enabled=false → delivery='text', voice_result=None."""
     tmp = tempfile.mkdtemp()
     cfg = load_config_from_str(_toml(tmp, voice_enabled=False))
-    rt = Runtime.build(None, config_override=cfg, llm=StubProvider(fallback="ok"), embed_fn=build_zero_embedder())
+    rt = Runtime.build(
+        None, config_override=cfg, llm=StubProvider(fallback="ok"), embed_fn=build_zero_embedder()
+    )
     ch = _RecordingChannel()
     await rt.start(channels=[ch], register_signals=False)
     try:
@@ -148,7 +148,9 @@ async def test_handle_turn_voice_when_enabled():
     """voice_enabled=true + mock voice_service → delivery='voice_neutral'."""
     tmp = tempfile.mkdtemp()
     cfg = load_config_from_str(_toml(tmp, voice_enabled=True))
-    rt = Runtime.build(None, config_override=cfg, llm=StubProvider(fallback="ok"), embed_fn=build_zero_embedder())
+    rt = Runtime.build(
+        None, config_override=cfg, llm=StubProvider(fallback="ok"), embed_fn=build_zero_embedder()
+    )
 
     mock_vs = AsyncMock()
     mock_vs.generate_voice = AsyncMock(return_value=_make_voice_result())
@@ -170,7 +172,9 @@ async def test_handle_turn_voice_failure_falls_back_to_text():
     """voice generation raises → delivery='text', voice_result=None."""
     tmp = tempfile.mkdtemp()
     cfg = load_config_from_str(_toml(tmp, voice_enabled=True))
-    rt = Runtime.build(None, config_override=cfg, llm=StubProvider(fallback="ok"), embed_fn=build_zero_embedder())
+    rt = Runtime.build(
+        None, config_override=cfg, llm=StubProvider(fallback="ok"), embed_fn=build_zero_embedder()
+    )
 
     mock_vs = AsyncMock()
     mock_vs.generate_voice = AsyncMock(side_effect=RuntimeError("TTS down"))
@@ -190,7 +194,9 @@ async def test_handle_turn_voice_disabled_no_voice_service():
     """voice_service is None → no crash, text delivery."""
     tmp = tempfile.mkdtemp()
     cfg = load_config_from_str(_toml(tmp, voice_enabled=True))
-    rt = Runtime.build(None, config_override=cfg, llm=StubProvider(fallback="ok"), embed_fn=build_zero_embedder())
+    rt = Runtime.build(
+        None, config_override=cfg, llm=StubProvider(fallback="ok"), embed_fn=build_zero_embedder()
+    )
     rt.ctx.voice_service = None
 
     ch = _RecordingChannel()

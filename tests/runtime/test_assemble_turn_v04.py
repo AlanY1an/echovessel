@@ -35,7 +35,6 @@ from echovessel.runtime.interaction import (
     assemble_turn,
 )
 from echovessel.runtime.llm import StubProvider
-from echovessel.runtime.llm.base import LLMTier
 from echovessel.runtime.llm.errors import LLMTransientError
 
 
@@ -79,7 +78,7 @@ class _TokenRecordingStub(StubProvider):
         system: str,
         user: str,
         *,
-        tier: LLMTier = LLMTier.MEDIUM,
+        model_role: str = "main",
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
@@ -87,7 +86,7 @@ class _TokenRecordingStub(StubProvider):
         text, _usage = await self.complete(
             system,
             user,
-            tier=tier,
+            model_role=model_role,
             max_tokens=max_tokens,
             temperature=temperature,
             timeout=timeout,
@@ -129,9 +128,7 @@ async def test_assemble_turn_single_message():
             received_at=datetime(2026, 4, 14, 9, 0, 1),
         )
         stub = _TokenRecordingStub(fallback="hello")
-        result = await assemble_turn(
-            _ctx(db, backend), turn, stub, on_token=_on_token
-        )
+        result = await assemble_turn(_ctx(db, backend), turn, stub, on_token=_on_token)
 
         assert not result.skipped
         assert result.reply == "hello"
@@ -248,9 +245,7 @@ async def test_assemble_turn_on_turn_done_called():
             turn_id="t-ok",
         )
         stub = _TokenRecordingStub(fallback="sure")
-        result = await assemble_turn(
-            _ctx(db, backend), turn, stub, on_turn_done=_on_done
-        )
+        result = await assemble_turn(_ctx(db, backend), turn, stub, on_turn_done=_on_done)
         assert not result.skipped
         assert done_ids == ["t-ok"]
 
@@ -285,9 +280,7 @@ async def test_assemble_turn_on_turn_done_on_error():
             ),
             turn_id="t-err",
         )
-        result = await assemble_turn(
-            _ctx(db, backend), turn, _BoomStub(), on_turn_done=_on_done
-        )
+        result = await assemble_turn(_ctx(db, backend), turn, _BoomStub(), on_turn_done=_on_done)
         # Skipped because nothing made it through the stream.
         assert result.skipped
         # on_turn_done fired even though LLM errored.
@@ -321,8 +314,6 @@ async def test_assemble_turn_on_turn_done_exception_swallowed():
         stub = _TokenRecordingStub(fallback="reply")
         # Must NOT raise — the finally block swallows on_turn_done's
         # exception and logs a warning instead.
-        result = await assemble_turn(
-            _ctx(db, backend), turn, stub, on_turn_done=_angry_done
-        )
+        result = await assemble_turn(_ctx(db, backend), turn, stub, on_turn_done=_angry_done)
         assert not result.skipped
         assert result.reply == "reply"

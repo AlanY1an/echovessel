@@ -85,9 +85,7 @@ async def test_registry_all_incoming_merges_sources():
 
 async def test_dispatcher_runs_handler_for_each_message():
     reg = ChannelRegistry()
-    reg.register(
-        FakeChannel("web", [_env("web", "hi"), _env("web", "hi2")])
-    )
+    reg.register(FakeChannel("web", [_env("web", "hi"), _env("web", "hi2")]))
     await reg.start_all()
 
     handled: list[str] = []
@@ -119,9 +117,7 @@ async def test_dispatcher_times_out_hung_handler_and_continues():
     channel queued behind it with no signal.
     """
     reg = ChannelRegistry()
-    reg.register(
-        FakeChannel("web", [_env("web", "hung"), _env("web", "next")])
-    )
+    reg.register(FakeChannel("web", [_env("web", "hung"), _env("web", "next")]))
     await reg.start_all()
 
     handled: list[str] = []
@@ -151,6 +147,4 @@ async def test_dispatcher_times_out_hung_handler_and_continues():
     shutdown.set()
     await asyncio.wait_for(task, timeout=2.0)
 
-    assert handled == ["next"], (
-        "dispatcher must abandon hung handler and process the next envelope"
-    )
+    assert handled == ["next"], "dispatcher must abandon hung handler and process the next envelope"

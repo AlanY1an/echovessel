@@ -13,11 +13,11 @@ The caller (``pipeline.run_pipeline``) provides an ``llm`` object that
 implements the ``LLMProvider`` Protocol from ``runtime/llm/base.py``.
 We intentionally do NOT import that module (tracker §4 #11 —
 ``import_`` may not depend on runtime), so we duck-type the call site:
-``await llm.complete(system=..., user=..., tier="small", ...)``.
+``await llm.complete(system=..., user=..., model_role="fast", ...)``.
 
-Tracker hard constraint #4: extraction tier = SMALL. We pass the
-literal string ``"small"`` which matches ``LLMTier.SMALL`` at runtime
-because the enum is a ``StrEnum``.
+Tracker hard constraint #4: extraction uses the "fast" model role.
+The literal string is passed through to the provider's ``model_for()``
+lookup.
 """
 
 from __future__ import annotations
@@ -32,9 +32,9 @@ from echovessel.import_.models import Chunk, ContentItem, DroppedItem
 log = logging.getLogger(__name__)
 
 
-#: Tier string accepted by the LLM provider. Tracker hard constraint #4.
-#: Matches ``echovessel.runtime.llm.base.LLMTier.SMALL`` (StrEnum → "small").
-EXTRACTION_TIER: str = "small"
+#: Model role accepted by the LLM provider. Tracker hard constraint #4.
+#: One of the canonical roles in ``echovessel.runtime.llm.base.MODEL_ROLES``.
+EXTRACTION_ROLE: str = "fast"
 
 
 #: Closed vocabulary for the ``relational_tags`` field on L3.event writes.
@@ -148,7 +148,7 @@ async def extract_chunk(
     raw, _usage = await llm.complete(
         system=IMPORT_EXTRACTION_SYSTEM_PROMPT,
         user=user_prompt,
-        tier=EXTRACTION_TIER,
+        model_role=EXTRACTION_ROLE,
         max_tokens=2048,
         temperature=0.3,
     )
@@ -268,7 +268,7 @@ def parse_llm_response(
 
 
 __all__ = [
-    "EXTRACTION_TIER",
+    "EXTRACTION_ROLE",
     "IMPORT_EXTRACTION_SYSTEM_PROMPT",
     "LEGAL_LLM_TARGETS",
     "RELATIONAL_TAG_VOCAB",

@@ -44,9 +44,7 @@ async def test_reload_replaces_llm_on_config_diff(monkeypatch, tmp_path):
     toml_path.write_text(SIGHUP_TOML)
 
     old_stub = StubProvider(fallback="OLD")
-    rt = Runtime.build(
-        toml_path, llm=old_stub
-    )
+    rt = Runtime.build(toml_path, llm=old_stub)
     # Worker ζ wraps every provider in CostTrackingProvider, so
     # ``rt.ctx.llm`` is the wrapper; the raw provider lives at
     # ``rt.ctx.llm._inner``.
