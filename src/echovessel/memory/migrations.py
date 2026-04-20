@@ -86,6 +86,23 @@ _V0_3_COLUMNS: tuple[_ColumnSpec, ...] = (
 )
 
 
+# llm_calls cache token breakdown (2026-04 · issue #1 Stage 3).
+# Two new columns track prompt-cache savings per call so the admin
+# Cost tab can show "(of which N cached)" breakdowns.
+_LLM_CALLS_COLUMNS: tuple[_ColumnSpec, ...] = (
+    _ColumnSpec(
+        table="llm_calls",
+        column="cache_read_input_tokens",
+        sql_type="INTEGER NOT NULL DEFAULT 0",
+    ),
+    _ColumnSpec(
+        table="llm_calls",
+        column="cache_creation_input_tokens",
+        sql_type="INTEGER NOT NULL DEFAULT 0",
+    ),
+)
+
+
 # Persona biographic facts (2026-04 · `2026-04-persona-facts` initiative).
 # 15 additive columns on personas. All nullable — LLM extraction fills what
 # it can during onboarding; the user reviews/edits from the Web admin page.
@@ -160,7 +177,7 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
                 conn.execute(text(ddl))
                 log.info("schema migration: created table %s", table_name)
 
-        for spec in (*_V0_3_COLUMNS, *_PERSONA_FACTS_COLUMNS):
+        for spec in (*_V0_3_COLUMNS, *_PERSONA_FACTS_COLUMNS, *_LLM_CALLS_COLUMNS):
             if not _table_exists(conn, spec.table):
                 # Legacy DB that predates the parent table entirely.
                 # Skip; create_all_tables will build it later with the

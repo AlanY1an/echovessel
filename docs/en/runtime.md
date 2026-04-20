@@ -147,6 +147,18 @@ Interaction reads `ctx.persona.voice_enabled` at the moment it constructs the ou
 
 Every call site in runtime declares the tier it wants, and the provider maps the tier to a model at call time. The design of the LLMProvider contract (`runtime/llm/base.py`) is a tiny `Protocol` with three methods: `model_for(tier)` for logging and audit, `complete(system, user, *, tier, ...)` for single-shot completions, and `stream(system, user, *, tier, ...)` for token-by-token streaming. Every call signature carries the tier as a keyword argument with `MEDIUM` as the default.
 
+`complete` returns `tuple[str, Usage | None]` — the reply text paired with a `Usage` dataclass carrying `input_tokens`, `output_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens` as reported by the provider's SDK. `stream` yields `str` text deltas followed by a single trailing `Usage` as its last item; if the stream aborts mid-way the trailing `Usage` is suppressed rather than recording a misleadingly low count.
+
+`Usage` is `None` (or absent from the stream) when the provider does not supply token data — `StubProvider` is the canonical case. Callers that only need text use an `isinstance` guard:
+
+```python
+async for item in llm.stream(system, user, tier=tier):
+    if isinstance(item, str):
+        await on_token(message_id, item)
+    # trailing Usage is absorbed by CostTrackingProvider;
+    # direct callers can capture it if they need token counts
+```
+
 The tier assignments are fixed in code, not in config, because they reflect architectural intent rather than user preference. Extraction and reflection are SMALL — they run on closed sessions, they batch cheap calls, and the user is not waiting. Reflection could in principle benefit from a stronger model but Haiku-class output is good enough for MVP; users who disagree can lift the SMALL tier in `[llm.tier_models]` without code changes. The judge (eval harness, future) is MEDIUM — strict evaluation wants consistency, not the most expensive model. Interaction and proactive are LARGE — the user is staring at the screen, and a better model gives meaningfully better replies.
 
 The three concrete providers in `runtime/llm/` cover 15+ real endpoints between them. `AnthropicProvider` uses the native `anthropic` SDK and targets Claude. `OpenAICompatibleProvider` uses the native `openai` SDK with a configurable `base_url`, which means it covers OpenAI official, OpenRouter, Ollama, LM Studio, llama.cpp server, vLLM, DeepSeek, Together, Groq, xAI, and every other provider that implements OpenAI-compatible REST. `StubProvider` returns canned text for tests and dry runs.
@@ -195,6 +207,7 @@ from collections.abc import AsyncIterator
 
 from echovessel.runtime.llm.base import LLMProvider, LLMTier
 from echovessel.runtime.llm.errors import LLMPermanentError, LLMTransientError
+from echovessel.runtime.llm.usage import Usage
 
 
 class MyProvider(LLMProvider):
@@ -244,10 +257,10 @@ class MyProvider(LLMProvider):
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> str:
+    ) -> tuple[str, Usage | None]:
         try:
             # ... call self._client.complete(...) ...
-            return "response text"
+            return "response text", None  # return Usage when SDK provides it
         except TimeoutError as e:
             raise LLMTransientError(str(e)) from e
         except ValueError as e:
@@ -262,15 +275,17 @@ class MyProvider(LLMProvider):
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str | Usage]:
         # For providers that cannot stream, fall back to complete()
         # and yield the full body once.
-        text = await self.complete(
+        text, usage = await self.complete(
             system, user,
             tier=tier, max_tokens=max_tokens,
             temperature=temperature, timeout=timeout,
         )
         yield text
+        if usage is not None:
+            yield usage  # trailing Usage; omit when token data is unavailable
 ```
 
 Register it in `build_llm_provider`:
@@ -289,7 +304,7 @@ if provider == "my_provider":
     )
 ```
 
-Three rules the skeleton has to honour. Construction must not touch the network — if the user's API key is wrong we find out on the first `complete` call, not at boot. Transient and permanent failures are two different exception types because the consolidate worker retries on transient errors only. And the tier-to-model resolution must follow the priority order `pinned > tier_models > defaults`; users rely on `llm.model = "x"` to mean "use x for everything".
+Four rules the skeleton has to honour. Construction must not touch the network — if the user's API key is wrong we find out on the first `complete` call, not at boot. Transient and permanent failures are two different exception types because the consolidate worker retries on transient errors only. The tier-to-model resolution must follow the priority order `pinned > tier_models > defaults`; users rely on `llm.model = "x"` to mean "use x for everything". And `complete` must return `tuple[str, Usage | None]` and `stream` must yield `AsyncIterator[str | Usage]`; return `None` for `Usage` when the provider cannot supply token counts — the cost tracking layer handles the absence gracefully.
 
 ### 2. Add a new startup step
 

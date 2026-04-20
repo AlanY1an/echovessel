@@ -23,6 +23,7 @@ from echovessel.runtime.llm.errors import (
 )
 from echovessel.runtime.llm.factory import build_llm_provider
 from echovessel.runtime.llm.stub import StubProvider
+from echovessel.runtime.llm.usage import Usage
 
 __all__ = [
     "LLMProvider",
@@ -33,4 +34,5 @@ __all__ = [
     "LLMBudgetError",
     "StubProvider",
     "build_llm_provider",
+    "Usage",
 ]

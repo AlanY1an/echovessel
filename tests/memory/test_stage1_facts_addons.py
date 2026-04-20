@@ -120,7 +120,7 @@ class _CaptureLLM(StubProvider):
         system: str,
         user: str,
         **kwargs,
-    ) -> str:
+    ) -> tuple[str, object]:
         self.calls.append((system, user))
         return await super().complete(system, user, **kwargs)
 

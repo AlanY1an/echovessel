@@ -74,6 +74,11 @@ export function CostCard() {
         </div>
         <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>
           {(data.total_tokens / 1000).toFixed(0)}k tokens
+          {data.total_cache_read_input_tokens > 0 && (
+            <span style={{ marginLeft: 6, color: 'var(--ink-3)', fontStyle: 'italic' }}>
+              (of which {(data.total_cache_read_input_tokens / 1000).toFixed(0)}k cached)
+            </span>
+          )}
         </div>
       </div>
       {buckets.length === 0 ? (

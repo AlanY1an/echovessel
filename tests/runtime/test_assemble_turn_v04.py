@@ -84,7 +84,7 @@ class _TokenRecordingStub(StubProvider):
         temperature: float = 0.7,
         timeout: float | None = None,
     ) -> AsyncIterator[str]:
-        text = await self.complete(
+        text, _usage = await self.complete(
             system,
             user,
             tier=tier,
@@ -173,7 +173,7 @@ async def test_assemble_turn_multi_message_burst():
             assert "one" in user
             assert "two" in user
             assert "three" in user
-            return "burst-ok"
+            return "burst-ok", None
 
     with DbSession(engine) as db:
         _seed(db)

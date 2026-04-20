@@ -1357,7 +1357,7 @@ def build_admin_router(
             persona_display_name=persona_display_name,
         )
         try:
-            response_text = await runtime.ctx.llm.complete(
+            response_text, _usage = await runtime.ctx.llm.complete(
                 system,
                 user,
                 max_tokens=4096,
@@ -1561,7 +1561,7 @@ def build_admin_router(
         )
 
         try:
-            llm_response = await runtime.ctx.llm.complete(
+            llm_response, _usage = await runtime.ctx.llm.complete(
                 system_prompt,
                 user_prompt,
                 max_tokens=2048,

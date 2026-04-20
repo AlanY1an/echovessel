@@ -162,7 +162,7 @@ async def extract_persona_facts_and_blocks(
         persona_display_name=persona_display_name,
     )
 
-    response = await llm.complete(
+    response, _usage = await llm.complete(
         system,
         user,
         tier=tier,

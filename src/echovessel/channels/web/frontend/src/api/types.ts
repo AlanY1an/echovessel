@@ -649,6 +649,8 @@ export interface CostFeatureBucket {
   tokens_in: number
   tokens_out: number
   cost_usd: number
+  cache_read_input_tokens: number
+  cache_creation_input_tokens: number
 }
 
 /** One day's roll-up inside ``CostSummaryResponse.by_day``. */
@@ -667,6 +669,8 @@ export interface CostSummaryResponse {
   total_tokens: number
   total_tokens_in: number
   total_tokens_out: number
+  total_cache_read_input_tokens: number
+  total_cache_creation_input_tokens: number
   by_feature: Record<string, CostFeatureBucket>
   by_day: CostDayBucket[]
 }
@@ -682,6 +686,8 @@ export interface CostCallRecord {
   tokens_in: number
   tokens_out: number
   cost_usd: number
+  cache_read_input_tokens: number
+  cache_creation_input_tokens: number
   turn_id: string | null
 }
 

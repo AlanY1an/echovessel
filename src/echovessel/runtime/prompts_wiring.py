@@ -113,7 +113,7 @@ def make_extract_fn(llm: LLMProvider) -> ExtractFn:
         )
 
         with feature_context("consolidate"):
-            raw = await llm.complete(
+            raw, _usage = await llm.complete(
                 system=EXTRACTION_SYSTEM_PROMPT,
                 user=user_prompt,
                 tier=LLMTier.SMALL,
@@ -175,7 +175,7 @@ def make_reflect_fn(llm: LLMProvider) -> ReflectFn:
         )
 
         with feature_context("reflection"):
-            raw = await llm.complete(
+            raw, _usage = await llm.complete(
                 system=REFLECTION_SYSTEM_PROMPT,
                 user=user_prompt,
                 tier=LLMTier.SMALL,
@@ -222,7 +222,7 @@ def make_judge_fn(llm: LLMProvider) -> JudgeFn:
             ground_truth=ground_truth,
         )
 
-        raw = await llm.complete(
+        raw, _usage = await llm.complete(
             system=JUDGE_SYSTEM_PROMPT,
             user=user_prompt,
             tier=LLMTier.MEDIUM,
@@ -458,7 +458,7 @@ def make_proactive_fn(llm: LLMProvider) -> ProactiveFn:
         user_prompt = _format_proactive_user_prompt(snapshot)
 
         with feature_context("proactive"):
-            raw = await llm.complete(
+            raw, _usage = await llm.complete(
                 system=PROACTIVE_SYSTEM_PROMPT,
                 user=user_prompt,
                 tier=LLMTier.LARGE,

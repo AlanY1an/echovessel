@@ -121,6 +121,17 @@ provider    = "stub"
 api_key_env = ""
 ```
 
+### Admin Cost tab
+
+The **Admin → Config → Cost** card in the Web UI shows estimated LLM spending drawn from the `llm_calls` table. Token counts are taken directly from the SDK's usage response when the provider returns one; calls with no provider-reported usage fall back to a local token estimate. All figures are labelled as estimates in the UI — authoritative billing lives on the provider's own dashboard.
+
+**"(of which N cached)"** — this annotation appears next to the token total when the provider reports prompt-cache hits for the selected time window. Two providers populate it:
+
+- **Anthropic** (`provider = "anthropic"`) — every streaming response includes `cache_read_input_tokens` (tokens served from Anthropic's 5-minute prompt cache, billed at roughly one-tenth of the standard input rate) and `cache_creation_input_tokens` (tokens written into the cache on this call, billed at a small premium). A high cached fraction means the actual cost is significantly lower than the raw token count suggests.
+- **OpenAI** (`provider = "openai_compat"` pointing at OpenAI or a compatible endpoint that honours `stream_options.include_usage`) — reports cached tokens inside `prompt_tokens_details`; cached tokens are billed at half the standard input rate.
+
+The annotation is only shown when at least one call in the selected window had a cache hit. It does not appear for local providers (Ollama, LM Studio), the `stub` provider, or any endpoint that returns no usage data.
+
 ## `[consolidate]`
 
 Controls the background worker that extracts events and thoughts from closed sessions.

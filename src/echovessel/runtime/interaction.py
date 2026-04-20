@@ -365,7 +365,7 @@ async def assemble_turn(
         last_error: str | None = None
 
         try:
-            async for token in llm.stream(
+            async for item in llm.stream(
                 system=system_prompt,
                 user=user_prompt,
                 tier=LLMTier.LARGE,
@@ -373,6 +373,9 @@ async def assemble_turn(
                 temperature=ctx.llm_temperature,
                 timeout=ctx.llm_timeout_seconds,
             ):
+                if not isinstance(item, str):
+                    continue  # skip trailing Usage sentinel
+                token = item
                 accumulated.append(token)
                 if on_token is not None:
                     try:

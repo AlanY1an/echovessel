@@ -22,6 +22,7 @@ from echovessel.runtime.llm.errors import (
     LLMPermanentError,
     LLMTransientError,
 )
+from echovessel.runtime.llm.usage import Usage
 
 log = logging.getLogger(__name__)
 
@@ -132,7 +133,7 @@ class AnthropicProvider:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> str:
+    ) -> tuple[str, Usage | None]:
         model = self.model_for(tier)
         client = self._get_client()
         try:
@@ -148,13 +149,23 @@ class AnthropicProvider:
             raise _classify_anthropic_error(e) from e
 
         if not getattr(resp, "content", None):
-            return ""
+            return "", None
         parts: list[str] = []
         for block in resp.content:
             text = getattr(block, "text", None)
             if isinstance(text, str):
                 parts.append(text)
-        return "".join(parts)
+        raw_usage = getattr(resp, "usage", None)
+        usage: Usage | None = None
+        if raw_usage is not None:
+            usage = Usage(
+                input_tokens=raw_usage.input_tokens,
+                output_tokens=raw_usage.output_tokens,
+                cache_read_input_tokens=getattr(raw_usage, "cache_read_input_tokens", 0) or 0,
+                cache_creation_input_tokens=getattr(raw_usage, "cache_creation_input_tokens", 0)
+                or 0,
+            )
+        return "".join(parts), usage
 
     async def stream(
         self,
@@ -165,9 +176,10 @@ class AnthropicProvider:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str | Usage]:
         model = self.model_for(tier)
         client = self._get_client()
+        in_t = out_t = cache_r = cache_c = 0
         try:
             async with client.messages.stream(  # type: ignore[attr-defined]
                 model=model,
@@ -176,11 +188,26 @@ class AnthropicProvider:
                 max_tokens=max_tokens or self._default_max_tokens,
                 temperature=temperature,
                 timeout=timeout or self._default_timeout,
-            ) as stream:
-                async for delta in stream.text_stream:
-                    yield delta
+            ) as s:
+                async for event in s:  # type: ignore[attr-defined]
+                    etype = getattr(event, "type", None)
+                    if etype == "message_start":
+                        u = event.message.usage
+                        in_t = getattr(u, "input_tokens", 0) or 0
+                        cache_r = getattr(u, "cache_read_input_tokens", 0) or 0
+                        cache_c = getattr(u, "cache_creation_input_tokens", 0) or 0
+                    elif etype == "content_block_delta":
+                        delta = getattr(event, "delta", None)
+                        if getattr(delta, "type", None) == "text_delta":
+                            yield delta.text
+                    elif etype == "message_delta":
+                        out_t = event.usage.output_tokens
         except Exception as e:  # noqa: BLE001
             raise _classify_anthropic_error(e) from e
+        # Intentional: trailing Usage is only yielded on clean stream completion.
+        # If the stream aborted (exception re-raised above), partial token counts
+        # are discarded rather than recorded as misleadingly low.
+        yield Usage(in_t, out_t, cache_r, cache_c)
 
 
 def _is_official_anthropic(url: str) -> bool:

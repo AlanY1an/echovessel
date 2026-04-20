@@ -42,7 +42,7 @@ class _StubLLM:
         self.tier_seen = tier
         self.max_tokens_seen = max_tokens
         self.calls += 1
-        return self.response
+        return self.response, None
 
 
 def _valid_json(**facts_override: object) -> str:

@@ -96,4 +96,5 @@ async def test_in_flight_reference_snapshot_survives_reload():
     assert isinstance(local_snapshot, CostTrackingProvider)
     assert local_snapshot._inner is old  # type: ignore[attr-defined]
     # And the snapshot still produces the old provider's output.
-    assert await local_snapshot.complete("s", "u") == "OLD"
+    text, _usage = await local_snapshot.complete("s", "u")
+    assert text == "OLD"

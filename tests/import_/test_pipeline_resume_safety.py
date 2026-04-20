@@ -38,8 +38,8 @@ class _StubLLM:
 
     async def complete(self, system: str, user: str, **kwargs):
         if not self.responses:
-            return '{"writes": [], "chunk_summary": ""}'
-        return self.responses.pop(0)
+            return '{"writes": [], "chunk_summary": ""}', None
+        return self.responses.pop(0), None
 
 
 # Text deliberately long / structurally split enough that chunk_text

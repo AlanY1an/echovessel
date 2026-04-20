@@ -26,6 +26,7 @@ from echovessel.runtime.llm.errors import (
     LLMPermanentError,
     LLMTransientError,
 )
+from echovessel.runtime.llm.usage import Usage
 
 log = logging.getLogger(__name__)
 
@@ -135,7 +136,7 @@ class OpenAICompatibleProvider:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> str:
+    ) -> tuple[str, Usage | None]:
         model = self.model_for(tier)
         client = self._get_client()
         try:
@@ -154,10 +155,19 @@ class OpenAICompatibleProvider:
 
         choices = getattr(resp, "choices", None) or []
         if not choices:
-            return ""
+            return "", None
         msg = choices[0].message
         content = getattr(msg, "content", None)
-        return content or ""
+        raw_usage = getattr(resp, "usage", None)
+        usage: Usage | None = None
+        if raw_usage is not None:
+            details = getattr(raw_usage, "prompt_tokens_details", None)
+            usage = Usage(
+                input_tokens=raw_usage.prompt_tokens,
+                output_tokens=raw_usage.completion_tokens,
+                cache_read_input_tokens=getattr(details, "cached_tokens", 0) or 0,
+            )
+        return content or "", usage
 
     async def stream(
         self,
@@ -168,9 +178,10 @@ class OpenAICompatibleProvider:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str | Usage]:
         model = self.model_for(tier)
         client = self._get_client()
+        trailing_usage: Usage | None = None
         try:
             stream = await client.chat.completions.create(  # type: ignore[attr-defined]
                 model=model,
@@ -182,10 +193,21 @@ class OpenAICompatibleProvider:
                 temperature=temperature,
                 timeout=timeout or self._default_timeout,
                 stream=True,
+                stream_options={"include_usage": True},
             )
             async for chunk in stream:
                 choices = getattr(chunk, "choices", None) or []
                 if not choices:
+                    raw_usage = getattr(chunk, "usage", None)
+                    if raw_usage is not None:
+                        # Terminal chunk per OpenAI spec with stream_options.include_usage=True.
+                        details = getattr(raw_usage, "prompt_tokens_details", None)
+                        trailing_usage = Usage(
+                            input_tokens=raw_usage.prompt_tokens,
+                            output_tokens=raw_usage.completion_tokens,
+                            cache_read_input_tokens=getattr(details, "cached_tokens", 0) or 0,
+                        )
+                    # Safely skip any other empty-choices chunk (heartbeat, proxy artifact).
                     continue
                 delta = getattr(choices[0], "delta", None)
                 content = getattr(delta, "content", None) if delta else None
@@ -193,6 +215,8 @@ class OpenAICompatibleProvider:
                     yield content
         except Exception as e:  # noqa: BLE001
             raise _classify_openai_error(e) from e
+        if trailing_usage is not None:
+            yield trailing_usage
 
 
 def _is_official_openai(url: str) -> bool:

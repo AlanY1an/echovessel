@@ -81,6 +81,11 @@ def test_migrations_v03_columns_present_after_create_all():
     assert "extracted_events" in sessions_cols
     assert "extracted_events_at" in sessions_cols
 
+    # llm_calls cache token breakdown (2026-04 · issue #1 Stage 3)
+    llm_calls_cols = _column_names(engine, "llm_calls")
+    assert "cache_read_input_tokens" in llm_calls_cols
+    assert "cache_creation_input_tokens" in llm_calls_cols
+
     # Persona biographic facts (2026-04 · persona-facts initiative)
     personas_cols = _column_names(engine, "personas")
     for expected in (
@@ -101,6 +106,72 @@ def test_migrations_v03_columns_present_after_create_all():
         "health_status",
     ):
         assert expected in personas_cols, f"missing personas.{expected}"
+
+
+def test_migrations_add_cache_columns_to_legacy_llm_calls():
+    """Simulate a pre-Stage-3 DB: llm_calls exists but lacks the two cache
+    token columns. Upgrading via ensure_schema_up_to_date must add them and
+    leave existing rows intact.
+    """
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+
+    # Re-create llm_calls without cache columns to simulate old schema.
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE llm_calls RENAME TO llm_calls_old"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE llm_calls (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    feature TEXT NOT NULL,
+                    tier TEXT NOT NULL DEFAULT 'medium',
+                    tokens_in INTEGER NOT NULL DEFAULT 0,
+                    tokens_out INTEGER NOT NULL DEFAULT 0,
+                    cost_usd REAL NOT NULL DEFAULT 0.0,
+                    turn_id TEXT
+                )
+                """
+            )
+        )
+        # Seed one pre-existing row to verify it survives the ALTER.
+        conn.execute(
+            text(
+                "INSERT INTO llm_calls "
+                "(provider, model, feature, tier, tokens_in, tokens_out, cost_usd) "
+                "VALUES ('openai_compat', 'gpt-4o', 'chat', 'medium', 100, 50, 0.001)"
+            )
+        )
+        conn.execute(text("DROP TABLE llm_calls_old"))
+
+    legacy_cols = _column_names(engine, "llm_calls")
+    assert "cache_read_input_tokens" not in legacy_cols
+    assert "cache_creation_input_tokens" not in legacy_cols
+
+    ensure_schema_up_to_date(engine)
+
+    upgraded_cols = _column_names(engine, "llm_calls")
+    assert "cache_read_input_tokens" in upgraded_cols
+    assert "cache_creation_input_tokens" in upgraded_cols
+
+    # Existing row must still be there with cache columns defaulting to 0.
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT cache_read_input_tokens, cache_creation_input_tokens "
+                "FROM llm_calls LIMIT 1"
+            )
+        ).first()
+    assert row is not None
+    assert row[0] == 0
+    assert row[1] == 0
+
+    # Second run must be a no-op.
+    ensure_schema_up_to_date(engine)
+    assert _column_names(engine, "llm_calls") == upgraded_cols
 
 
 def test_migrations_upgrade_legacy_db_without_retry_safety_columns():

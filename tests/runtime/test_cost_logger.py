@@ -32,6 +32,7 @@ from echovessel.runtime.cost_logger import (
     summarize,
 )
 from echovessel.runtime.llm.base import LLMTier
+from echovessel.runtime.llm.usage import Usage
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -70,9 +71,9 @@ class _FakeProvider:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> str:
+    ) -> tuple[str, Usage | None]:
         self.complete_calls.append({"system": system, "user": user, "tier": tier})
-        return "ok response"
+        return "ok response", None
 
     async def stream(
         self,
@@ -83,7 +84,7 @@ class _FakeProvider:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str | Usage]:
         self.stream_calls.append({"system": system, "user": user, "tier": tier})
         for piece in ("hel", "lo ", "wor", "ld"):
             yield piece
@@ -147,8 +148,9 @@ async def test_tracking_provider_records_complete_call() -> None:
     wrapped = CostTrackingProvider(inner, recorder)
 
     with feature_context("chat", turn_id="turn-1"):
-        result = await wrapped.complete("sys", "usr", tier=LLMTier.LARGE)
+        result, usage = await wrapped.complete("sys", "usr", tier=LLMTier.LARGE)
     assert result == "ok response"
+    assert usage is None
     assert inner.complete_calls  # delegated
 
     with DbSession(engine) as db:
@@ -271,6 +273,146 @@ def test_list_recent_orders_newest_first_and_caps_limit() -> None:
     # ISO timestamps strictly decreasing.
     times = [r.timestamp for r in rows]
     assert times == sorted(times, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# Acceptance criteria — issue #1 Stage 3: usage passthrough to DB rows
+# ---------------------------------------------------------------------------
+
+
+def test_recorder_prefers_usage_over_count_tokens() -> None:
+    """When `usage` is supplied, the row reflects SDK-reported token counts.
+
+    The input_text "short" and output_text "hi" would produce ~1-2 tokens
+    from _count_tokens, but the Usage carries 999/333 — the row must use
+    those exact numbers, proving _count_tokens was bypassed.
+    """
+    _engine, recorder = _build_engine_and_recorder()
+    usage = Usage(
+        input_tokens=999,
+        output_tokens=333,
+        cache_read_input_tokens=500,
+        cache_creation_input_tokens=100,
+    )
+    record = recorder.record(
+        provider="anthropic",
+        model="claude-sonnet-4-6",
+        feature="chat",
+        tier="medium",
+        input_text="short",
+        output_text="hi",
+        usage=usage,
+    )
+    assert record is not None
+    assert record.tokens_in == 999
+    assert record.tokens_out == 333
+    assert record.cache_read_input_tokens == 500
+    assert record.cache_creation_input_tokens == 100
+
+
+def test_recorder_fallback_to_count_tokens_when_usage_none() -> None:
+    """When `usage` is None, tokens_in/out come from _count_tokens and
+    cache columns are 0."""
+    _engine, recorder = _build_engine_and_recorder()
+    record = recorder.record(
+        provider="openai_compat",
+        model="gpt-4o",
+        feature="chat",
+        tier="medium",
+        input_text="hello world " * 20,
+        output_text="reply text " * 10,
+        usage=None,
+    )
+    assert record is not None
+    assert record.tokens_in > 0
+    assert record.tokens_out > 0
+    assert record.cache_read_input_tokens == 0
+    assert record.cache_creation_input_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_tracking_provider_wires_complete_usage_to_db_row() -> None:
+    """CostTrackingProvider with a provider that returns real Usage → row
+    reflects provider-reported token counts, not _count_tokens estimates."""
+
+    class _UsageProvider(_FakeProvider):
+        async def complete(self, system, user, *, tier=LLMTier.MEDIUM, **_kw):
+            self.complete_calls.append({"system": system, "user": user})
+            return "x", Usage(
+                input_tokens=1234,
+                output_tokens=567,
+                cache_read_input_tokens=800,
+                cache_creation_input_tokens=50,
+            )
+
+    engine, recorder = _build_engine_and_recorder()
+    wrapped = CostTrackingProvider(_UsageProvider(), recorder)
+
+    with feature_context("chat"):
+        await wrapped.complete("sys", "usr")
+
+    with DbSession(engine) as db:
+        rows = list_recent(db, limit=5)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.tokens_in == 1234
+    assert r.tokens_out == 567
+    assert r.cache_read_input_tokens == 800
+    assert r.cache_creation_input_tokens == 50
+
+
+@pytest.mark.asyncio
+async def test_tracking_provider_stream_without_trailing_usage_falls_back() -> None:
+    """When the stream yields no trailing Usage, the row uses _count_tokens
+    and cache columns are 0."""
+    engine, recorder = _build_engine_and_recorder()
+    # _FakeProvider.stream yields str chunks only, no trailing Usage
+    wrapped = CostTrackingProvider(_FakeProvider(), recorder)
+
+    with feature_context("import"):
+        async for _ in wrapped.stream("sys", "usr"):
+            pass
+
+    with DbSession(engine) as db:
+        rows = list_recent(db, limit=5)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.tokens_in > 0
+    assert r.tokens_out > 0
+    assert r.cache_read_input_tokens == 0
+    assert r.cache_creation_input_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_tracking_provider_stream_with_trailing_usage_uses_sdk_counts() -> None:
+    """When the stream yields a trailing Usage, the row reflects those counts."""
+
+    class _StreamWithUsageProvider(_FakeProvider):
+        async def stream(self, system, user, *, tier=LLMTier.MEDIUM, **_kw):
+            yield "hello"
+            yield " world"
+            yield Usage(
+                input_tokens=400,
+                output_tokens=50,
+                cache_read_input_tokens=200,
+                cache_creation_input_tokens=0,
+            )
+
+    engine, recorder = _build_engine_and_recorder()
+    wrapped = CostTrackingProvider(_StreamWithUsageProvider(), recorder)
+
+    with feature_context("chat"):
+        async for _ in wrapped.stream("sys", "usr"):
+            pass
+
+    with DbSession(engine) as db:
+        rows = list_recent(db, limit=5)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.tokens_in == 400
+    assert r.tokens_out == 50
+    assert r.cache_read_input_tokens == 200
+    assert r.cache_creation_input_tokens == 0
 
 
 # ---------------------------------------------------------------------------

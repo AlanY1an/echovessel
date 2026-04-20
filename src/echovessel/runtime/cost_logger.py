@@ -44,6 +44,7 @@ from sqlmodel import Field, SQLModel, select
 from sqlmodel import Session as DbSession
 
 from echovessel.runtime.llm.base import LLMProvider, LLMTier
+from echovessel.runtime.llm.usage import Usage
 
 log = logging.getLogger(__name__)
 
@@ -146,6 +147,8 @@ class LLMCall(SQLModel, table=True):
     tokens_in: int = 0
     tokens_out: int = 0
     cost_usd: float = 0.0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
     turn_id: str | None = None
 
 
@@ -166,6 +169,8 @@ class LLMCallRecord:
     tokens_in: int
     tokens_out: int
     cost_usd: float
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
     turn_id: str | None
 
 
@@ -180,6 +185,8 @@ def _row_to_record(row: LLMCall) -> LLMCallRecord:
         tokens_in=int(row.tokens_in),
         tokens_out=int(row.tokens_out),
         cost_usd=float(row.cost_usd),
+        cache_read_input_tokens=int(row.cache_read_input_tokens),
+        cache_creation_input_tokens=int(row.cache_creation_input_tokens),
         turn_id=row.turn_id,
     )
 
@@ -250,9 +257,17 @@ class CostRecorder:
         output_text: str,
         turn_id: str | None = None,
         timestamp: datetime | None = None,
+        usage: Usage | None = None,  # Prefer SDK-reported usage over _count_tokens fallback
     ) -> LLMCallRecord | None:
-        tokens_in = _count_tokens(input_text)
-        tokens_out = _count_tokens(output_text)
+        if usage is not None:
+            tokens_in = usage.input_tokens
+            tokens_out = usage.output_tokens
+            cache_read = usage.cache_read_input_tokens
+            cache_create = usage.cache_creation_input_tokens
+        else:
+            tokens_in = _count_tokens(input_text)
+            tokens_out = _count_tokens(output_text)
+            cache_read = cache_create = 0
         cost_usd = _estimate_cost_usd(provider, tier, tokens_in, tokens_out)
         ts = timestamp or datetime.now()
         row = LLMCall(
@@ -264,6 +279,8 @@ class CostRecorder:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             cost_usd=cost_usd,
+            cache_read_input_tokens=cache_read,
+            cache_creation_input_tokens=cache_create,
             turn_id=turn_id,
         )
         try:
@@ -311,8 +328,8 @@ class CostTrackingProvider:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> str:
-        result = await self._inner.complete(
+    ) -> tuple[str, Usage | None]:
+        text, usage = await self._inner.complete(
             system,
             user,
             tier=tier,
@@ -320,8 +337,8 @@ class CostTrackingProvider:
             temperature=temperature,
             timeout=timeout,
         )
-        self._record(tier, system, user, result)
-        return result
+        self._record(tier, system, user, text, usage=usage)
+        return text, usage
 
     async def stream(
         self,
@@ -332,9 +349,10 @@ class CostTrackingProvider:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str | Usage]:
         chunks: list[str] = []
-        async for chunk in self._inner.stream(
+        trailing_usage: Usage | None = None
+        async for item in self._inner.stream(
             system,
             user,
             tier=tier,
@@ -342,9 +360,12 @@ class CostTrackingProvider:
             temperature=temperature,
             timeout=timeout,
         ):
-            chunks.append(chunk)
-            yield chunk
-        self._record(tier, system, user, "".join(chunks))
+            if isinstance(item, str):
+                chunks.append(item)
+                yield item
+            else:
+                trailing_usage = item
+        self._record(tier, system, user, "".join(chunks), usage=trailing_usage)
 
     def _record(
         self,
@@ -352,6 +373,8 @@ class CostTrackingProvider:
         system: str,
         user: str,
         output: str,
+        *,
+        usage: Usage | None = None,
     ) -> None:
         feature = _current_feature.get() or "unknown"
         turn_id = _current_turn_id.get()
@@ -364,6 +387,7 @@ class CostTrackingProvider:
                 input_text=f"{system}\n{user}",
                 output_text=output,
                 turn_id=turn_id,
+                usage=usage,
             )
         except Exception as e:  # noqa: BLE001
             log.warning("cost_logger: record_call raised: %s", e)
@@ -411,6 +435,8 @@ def summarize(
     total_usd = round(sum(float(r.cost_usd) for r in rows), 6)
     total_tokens_in = sum(int(r.tokens_in) for r in rows)
     total_tokens_out = sum(int(r.tokens_out) for r in rows)
+    total_cache_read_input_tokens = sum(int(r.cache_read_input_tokens) for r in rows)
+    total_cache_creation_input_tokens = sum(int(r.cache_creation_input_tokens) for r in rows)
 
     by_feature: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -421,6 +447,8 @@ def summarize(
                 "tokens_in": 0,
                 "tokens_out": 0,
                 "cost_usd": 0.0,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
             },
         )
         bucket["calls"] += 1
@@ -429,6 +457,8 @@ def summarize(
         bucket["cost_usd"] = round(
             float(bucket["cost_usd"]) + float(row.cost_usd), 6
         )
+        bucket["cache_read_input_tokens"] += int(row.cache_read_input_tokens)
+        bucket["cache_creation_input_tokens"] += int(row.cache_creation_input_tokens)
 
     by_day_acc: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -457,6 +487,8 @@ def summarize(
         "total_tokens_in": total_tokens_in,
         "total_tokens_out": total_tokens_out,
         "total_tokens": total_tokens_in + total_tokens_out,
+        "total_cache_read_input_tokens": total_cache_read_input_tokens,
+        "total_cache_creation_input_tokens": total_cache_creation_input_tokens,
         "by_feature": by_feature,
         "by_day": by_day,
     }

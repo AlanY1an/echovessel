@@ -37,14 +37,17 @@ def test_stub_satisfies_protocol():
 
 async def test_stub_complete_fallback():
     stub = StubProvider(fallback="canned-fallback")
-    out = await stub.complete(system="sys", user="anything")
-    assert out == "canned-fallback"
+    text, usage = await stub.complete(system="sys", user="anything")
+    assert text == "canned-fallback"
+    assert usage is None
 
 
 async def test_stub_canned_exact_match():
     stub = StubProvider(canned_responses={("sys", "hello"): "HEY"}, fallback="default")
-    assert await stub.complete("sys", "hello") == "HEY"
-    assert await stub.complete("sys", "other") == "default"
+    text_hey, _ = await stub.complete("sys", "hello")
+    assert text_hey == "HEY"
+    text_def, _ = await stub.complete("sys", "other")
+    assert text_def == "default"
 
 
 async def test_stub_responder_callable():
@@ -52,9 +55,10 @@ async def test_stub_responder_callable():
         return f"tier={tier} says {user}"
 
     stub = StubProvider(responder=responder)
-    out = await stub.complete("sys", "ping", tier=LLMTier.LARGE)
+    out, usage = await stub.complete("sys", "ping", tier=LLMTier.LARGE)
     assert "tier=large" in out
     assert "says ping" in out
+    assert usage is None
 
 
 async def test_stub_async_responder():
@@ -62,21 +66,24 @@ async def test_stub_async_responder():
         return "async-ok"
 
     stub = StubProvider(responder=aresponder)
-    out = await stub.complete("s", "u")
+    out, usage = await stub.complete("s", "u")
     assert out == "async-ok"
+    assert usage is None
 
 
 async def test_stub_stream_yields_once_from_complete():
     stub = StubProvider(fallback="streamed")
     pieces: list[str] = []
-    async for chunk in stub.stream("s", "u"):
-        pieces.append(chunk)
+    async for item in stub.stream("s", "u"):
+        if isinstance(item, str):
+            pieces.append(item)
     assert pieces == ["streamed"]
 
 
 async def test_stub_keyerror_when_no_canned_and_no_fallback():
     stub = StubProvider(canned_responses={("a", "b"): "x"}, fallback=None)
-    assert await stub.complete("a", "b") == "x"
+    text, _ = await stub.complete("a", "b")
+    assert text == "x"
     with pytest.raises(KeyError):
         await stub.complete("zz", "nope")
 

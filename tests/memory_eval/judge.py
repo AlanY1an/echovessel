@@ -63,7 +63,7 @@ async def judge_prompts(
         )
         raw = ""
         try:
-            raw = await llm.complete(
+            raw, _usage = await llm.complete(
                 _SYSTEM_PROMPT,
                 user,
                 tier=tier,

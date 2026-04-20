@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable, Mapping
 
 from echovessel.runtime.llm.base import LLMProvider, LLMTier
+from echovessel.runtime.llm.usage import Usage
 
 _DEFAULT_MODEL = "stub-model"
 
@@ -70,9 +71,9 @@ class StubProvider:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> str:
+    ) -> tuple[str, Usage | None]:
         if (system, user) in self._canned:
-            return self._canned[(system, user)]
+            return self._canned[(system, user)], None
 
         if self._responder is not None:
             result = self._responder(
@@ -87,10 +88,10 @@ class StubProvider:
             # await twice.
             if hasattr(result, "__await__"):
                 result = await result  # type: ignore[assignment]
-            return str(result)
+            return str(result), None
 
         if self._fallback is not None:
-            return self._fallback
+            return self._fallback, None
 
         raise KeyError(
             f"StubProvider has no canned response for system/user pair "
@@ -107,8 +108,8 @@ class StubProvider:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> AsyncIterator[str]:
-        text = await self.complete(
+    ) -> AsyncIterator[str | Usage]:
+        text, _usage = await self.complete(
             system,
             user,
             tier=tier,

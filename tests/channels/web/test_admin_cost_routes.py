@@ -172,6 +172,8 @@ def test_cost_recent_returns_newest_first() -> None:
         "tier",
         "tokens_in",
         "tokens_out",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
         "cost_usd",
         "turn_id",
     }

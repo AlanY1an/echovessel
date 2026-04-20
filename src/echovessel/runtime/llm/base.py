@@ -19,6 +19,8 @@ from collections.abc import AsyncIterator
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
+from echovessel.runtime.llm.usage import Usage
+
 
 class LLMTier(StrEnum):
     """Semantic quality/cost tier for an LLM call site.
@@ -63,8 +65,12 @@ class LLMProvider(Protocol):
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> str:
-        """Single-shot text completion. Returns the raw text body.
+    ) -> tuple[str, Usage | None]:
+        """Single-shot text completion. Returns (text, usage).
+
+        `usage` is None when the provider cannot report token counts (stub,
+        or provider that doesn't expose usage in its response). Callers MUST
+        unpack the tuple; they MUST NOT assume `usage` is non-None.
 
         On transient HTTP failure (5xx, timeout, rate limit): raise
         LLMTransientError. On permanent failure (4xx, auth, content filter):
@@ -81,13 +87,17 @@ class LLMProvider(Protocol):
         max_tokens: int = 1024,
         temperature: float = 0.7,
         timeout: float | None = None,
-    ) -> AsyncIterator[str]:
-        """Token-by-token streaming. Yields text deltas.
+    ) -> AsyncIterator[str | Usage]:
+        """Token-by-token streaming. Yields text deltas, then optionally Usage.
+
+        Text chunks are `str`. A trailing `Usage` item may appear after the
+        last text chunk when the provider can report token counts mid-stream.
+        Callers MUST skip non-str items or use `isinstance(item, str)` guards.
 
         Stub implementations MAY fall back to `await complete()` followed by
-        one yield.
+        one text yield (no trailing Usage).
         """
         ...
 
 
-__all__ = ["LLMTier", "LLMProvider"]
+__all__ = ["LLMTier", "LLMProvider", "Usage"]

@@ -145,7 +145,7 @@ async def extract_chunk(
         persona_context=persona_context,
         source_label=source_label,
     )
-    raw = await llm.complete(
+    raw, _usage = await llm.complete(
         system=IMPORT_EXTRACTION_SYSTEM_PROMPT,
         user=user_prompt,
         tier=EXTRACTION_TIER,

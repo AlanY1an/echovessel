@@ -108,7 +108,7 @@ async def _synthesize_one(
     llm: LLMProvider, scripted: Fixture, length_hint: str
 ) -> dict | None:
     user = _user_prompt(scripted, length_hint)
-    raw = await llm.complete(
+    raw, _usage = await llm.complete(
         _SYSTEM_PROMPT,
         user,
         tier=LLMTier.LARGE,

@@ -13,7 +13,7 @@ class _SlowLLM:
     async def complete(self, system: str, user: str, **kwargs):
         # Block long enough that the cancel can arrive mid-pipeline.
         await asyncio.sleep(5.0)
-        return '{"writes": [], "chunk_summary": ""}'
+        return ('{"writes": [], "chunk_summary": ""}', None)
 
 
 class _MemStub:
