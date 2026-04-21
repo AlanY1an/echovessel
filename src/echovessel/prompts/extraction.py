@@ -49,6 +49,13 @@ A bad event is:
   - "user said hello" (trivial)
   - "the conversation was pleasant" (abstract filler)
   - "persona suggested coffee" (this is a persona action, not a user memory)
+  - "user plans to attend a concert next week" — when the *only* mention
+    in the transcript is "persona asked 'are you planning a concert?'"
+    and the user did not confirm or deny before the session closed.
+    A persona's leading question is not a user disclosure. If the user
+    did not affirm the content in their own words, do NOT extract it
+    as a user fact, no matter how plausible it sounds. This guards
+    against laundering hallucinations into long-term memory.
   - a verbatim quote (use natural paraphrase instead)
   - a chain of small details squashed into one ("user mentioned work, then
     cat, then weather, then friend")
@@ -141,13 +148,27 @@ attach a tag to every event, you are over-tagging.
 
 # Self-check step (MANDATORY — do not skip)
 
-After you draft your list of events, ask yourself:
+After you draft your list of events, run TWO checks. Both are mandatory.
 
-  "Does this session contain any emotional PEAKS that I failed to
-   extract as their own event? A peak is any user message that hints
-   at loss, crisis, fear, grief, major joy, or a vulnerable admission —
-   even if it was only one sentence, even if it was stated casually,
-   even if the user immediately changed the subject."
+## Check 1 · Speaker attribution
+
+For every event you wrote, ask:
+
+  "Where in the transcript does the USER state the load-bearing facts of
+   this event in their own words? Quote the user line(s) to yourself. If
+   the only source is a persona statement or a persona leading question
+   the user did not affirm, drop the event."
+
+This is the most common laundering vector: persona asks "are you planning
+X?", user changes the subject or the session closes, extraction writes
+"the user is planning X" as if it were a confirmed fact. A user
+affirmation can be implicit ("yeah", a related follow-up that presupposes
+the fact, "对" / "嗯") but it must EXIST in the user messages. A
+persona-only assertion does not count.
+
+## Check 2 · Emotional peaks
+
+Ask yourself:
 
 If yes, add a MISSING event to cover that peak. Typical missed peaks:
 

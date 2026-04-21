@@ -32,6 +32,30 @@ def test_system_prompt_starts_with_extraction_engine_line():
     )
 
 
+def test_system_prompt_warns_against_persona_led_uncontested_extraction():
+    # Stability guard for the 2026-04-20 anti-laundering rule. The
+    # original prompt only covered the clean case (persona declarative
+    # statement → drop). It missed the ambiguous case where persona
+    # asks a leading question and the user neither confirms nor denies
+    # before the session closes — extraction was treating those as
+    # confirmed user disclosures and writing them into concept_nodes,
+    # which retrieve then surfaced as "memories" the user never made.
+    # If this assertion fails, the anti-laundering guidance was
+    # silently removed; restore it before merging.
+    assert "persona asked" in EXTRACTION_SYSTEM_PROMPT
+    assert "did not confirm" in EXTRACTION_SYSTEM_PROMPT
+
+
+def test_self_check_includes_speaker_attribution_check():
+    # The self-check section gained a second mandatory question on
+    # 2026-04-20: for every drafted event, verify the user actually
+    # said the load-bearing facts. Catches cases where the LLM passed
+    # the bad-event filter on the first read but extracted persona-led
+    # content anyway. If this fails, restore the speaker-attribution
+    # self-check before merging.
+    assert "speaker attribution" in EXTRACTION_SYSTEM_PROMPT.lower()
+
+
 def test_relational_tag_vocabulary_is_exactly_six_values():
     assert frozenset(
         {
