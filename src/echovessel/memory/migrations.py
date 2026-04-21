@@ -152,6 +152,19 @@ _V0_3_NEW_TABLES: tuple[tuple[str, str], ...] = (
         )
         """,
     ),
+    (
+        "external_identities",
+        """
+        CREATE TABLE IF NOT EXISTS external_identities (
+            channel_id TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            internal_user_id TEXT NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (channel_id, external_id),
+            FOREIGN KEY(internal_user_id) REFERENCES users (id)
+        )
+        """,
+    ),
 )
 
 

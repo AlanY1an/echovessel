@@ -126,6 +126,29 @@ class User(SQLModel, table=True):
     deleted_at: datetime | None = None
 
 
+class ExternalIdentity(SQLModel, table=True):
+    """Maps a transport-native identity to an internal user_id.
+
+    Channels surface their own identity tokens (Discord snowflakes, phone
+    handles, web "self"). The memory layer scopes everything by
+    ``internal_user_id`` so retrieve / consolidate / core_blocks stay
+    coherent across channels. This table is the bridge.
+
+    MVP semantics: every external id resolves to ``"self"`` — the local
+    daemon has one human owner. Future multi-user / group-chat work
+    rebinds rows here without touching the rest of the schema.
+    """
+
+    __tablename__ = "external_identities"
+
+    channel_id: str = Field(primary_key=True)
+    external_id: str = Field(primary_key=True)
+    internal_user_id: str = Field(foreign_key="users.id")
+    created_at: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+
+
 # ---------------------------------------------------------------------------
 # L1 · Core blocks
 # ---------------------------------------------------------------------------

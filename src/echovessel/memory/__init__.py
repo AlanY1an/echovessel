@@ -41,6 +41,7 @@ from echovessel.memory.models import (
     ConceptNodeFilling,
     CoreBlock,
     CoreBlockAppend,
+    ExternalIdentity,
     Persona,
     RecallMessage,
     Session,
@@ -70,6 +71,7 @@ __all__ = [
     "ConceptNode",
     "ConceptNodeFilling",
     "CoreBlockAppend",
+    "ExternalIdentity",
     # DB
     "create_engine",
     "create_all_tables",
