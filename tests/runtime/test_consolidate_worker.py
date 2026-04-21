@@ -233,6 +233,114 @@ async def test_worker_marks_failed_on_permanent_error():
         assert sess.status == SessionStatus.FAILED
 
 
+async def test_worker_retries_on_sqlite_database_locked():
+    """SQLite WAL contention is transient infra, not a permanent unknown
+    fault. Reproduces the 2026-04-20 dogfood symptom where consolidate hit
+    `sqlite3.OperationalError: database is locked` on first try and was
+    marked FAILED with no retry, silently dropping a 22-message session."""
+    import sqlite3
+
+    import sqlalchemy.exc
+
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+    _seed(engine)
+    _add_closing_session(
+        engine,
+        "s_lock",
+        ["aaaaaaa" * 40, "bbbbbbb" * 40, "ccccccc" * 40, "ddddddd" * 40, "eeeeeee" * 40],
+    )
+
+    call_count = [0]
+
+    async def flaky_then_ok(msgs):
+        call_count[0] += 1
+        if call_count[0] < 3:
+            raise sqlalchemy.exc.OperationalError(
+                "SELECT 1", {}, sqlite3.OperationalError("database is locked")
+            )
+        return [
+            ExtractedEvent(
+                description="finally extracted after lock contention",
+                emotional_impact=2,
+                emotion_tags=["relief"],
+            )
+        ]
+
+    def db_factory():
+        return DbSession(engine)
+
+    worker = ConsolidateWorker(
+        db_factory=db_factory,
+        backend=backend,
+        extract_fn=flaky_then_ok,
+        reflect_fn=_noop_reflect,
+        embed_fn=_embed,
+        max_retries=3,
+    )
+
+    import asyncio as _asyncio
+
+    orig_sleep = _asyncio.sleep
+
+    async def fast(_t):
+        return None
+
+    _asyncio.sleep = fast  # type: ignore[assignment]
+    try:
+        await worker.drain_once()
+    finally:
+        _asyncio.sleep = orig_sleep  # type: ignore[assignment]
+
+    assert call_count[0] == 3
+    with DbSession(engine) as db:
+        sess = db.get(Session, "s_lock")
+        assert sess is not None
+        assert sess.status == SessionStatus.CLOSED
+        assert sess.extracted is True
+
+
+async def test_worker_does_not_retry_truly_unexpected_error():
+    """Guard against over-broad transient classification: a non-infra
+    exception (programming bug, schema mismatch, etc.) must still be marked
+    FAILED on first hit instead of burning the retry budget."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+    _seed(engine)
+    _add_closing_session(
+        engine,
+        "s_oops",
+        ["xx" * 40, "yy" * 40, "zz" * 40, "ww" * 40, "vv" * 40],
+    )
+
+    call_count = [0]
+
+    async def buggy(msgs):
+        call_count[0] += 1
+        raise ValueError("not transient — a real programming bug")
+
+    def db_factory():
+        return DbSession(engine)
+
+    worker = ConsolidateWorker(
+        db_factory=db_factory,
+        backend=backend,
+        extract_fn=buggy,
+        reflect_fn=_noop_reflect,
+        embed_fn=_embed,
+        max_retries=3,
+    )
+    await worker.drain_once()
+
+    assert call_count[0] == 1
+    with DbSession(engine) as db:
+        sess = db.get(Session, "s_oops")
+        assert sess is not None
+        assert sess.status == SessionStatus.FAILED
+
+
 async def test_worker_does_not_duplicate_events_on_transient_reflect_failure():
     """Regression test for the P0 retry-duplication bug.
 

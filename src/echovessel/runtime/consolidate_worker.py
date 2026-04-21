@@ -33,6 +33,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
+import sqlalchemy.exc
 from sqlmodel import select
 
 from echovessel.core.types import SessionStatus
@@ -48,6 +49,21 @@ from echovessel.memory.consolidate import (
 )
 from echovessel.memory.models import Session
 from echovessel.runtime.llm.errors import LLMPermanentError, LLMTransientError
+
+
+def _is_transient_infra_error(e: BaseException) -> bool:
+    """Whether ``e`` is an infrastructure transient that is safe to retry.
+
+    SQLite WAL contention surfaces as ``sqlalchemy.exc.OperationalError``
+    wrapping ``sqlite3.OperationalError("database is locked" | "database is
+    busy")`` and is the dominant case in the local-first single-file
+    deployment — the consolidate worker and the live runtime share one db
+    file and occasionally race. New transient classes get added here as
+    they are observed in the wild (YAGNI for unproven candidates)."""
+    if isinstance(e, sqlalchemy.exc.OperationalError):
+        msg = str(getattr(e, "orig", "") or e)
+        return "database is locked" in msg or "database is busy" in msg
+    return False
 
 log = logging.getLogger(__name__)
 
@@ -208,6 +224,29 @@ class ConsolidateWorker:
                 self._mark_failed(session_id, f"permanent: {e}")
                 return
             except Exception as e:  # noqa: BLE001
+                if _is_transient_infra_error(e):
+                    retries += 1
+                    if retries > self.max_retries:
+                        log.error(
+                            "consolidate exhausted retries for %s "
+                            "(transient infra): %s",
+                            session_id,
+                            e,
+                        )
+                        self._mark_failed(session_id, f"transient_infra: {e}")
+                        return
+                    backoff = 2**retries
+                    log.warning(
+                        "consolidate transient infra error on %s "
+                        "(retry %d/%d in %ds): %s",
+                        session_id,
+                        retries,
+                        self.max_retries,
+                        backoff,
+                        e,
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
                 log.error(
                     "consolidate unexpected error on %s: %s",
                     session_id,
