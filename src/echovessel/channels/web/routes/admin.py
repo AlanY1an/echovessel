@@ -66,7 +66,7 @@ from echovessel.core.config_paths import (
     HOT_RELOADABLE_CONFIG_PATHS,
     RESTART_REQUIRED_CONFIG_PATHS,
 )
-from echovessel.core.types import BlockLabel, NodeType
+from echovessel.core.types import BlockLabel, NodeType, SessionStatus
 from echovessel.memory import (
     CoreBlock,
     Persona,
@@ -2547,6 +2547,43 @@ def build_admin_router(
         runtime.ctx.persona.voice_id = req.voice_id
 
         return {"activated": True, "voice_id": req.voice_id}
+
+    # ---- GET /api/admin/sessions/failed --------------------------------
+    #
+    # Surfaces sessions the consolidate worker marked FAILED so the
+    # admin UI can render a banner instead of leaving the operator to
+    # discover silent data loss via ``sqlite3``. Deliberately NOT scoped
+    # by ``user_id`` — a single human shows up under multiple ``user_id``
+    # values across channels and the operator wants every failure
+    # visible regardless of which shard owned it.
+
+    @router.get("/api/admin/sessions/failed")
+    async def list_failed_sessions() -> dict[str, Any]:
+        from echovessel.memory.models import Session as _Session
+
+        with _open_db() as db:
+            stmt = (
+                select(_Session)
+                .where(
+                    _Session.status == SessionStatus.FAILED,
+                    _Session.deleted_at.is_(None),  # type: ignore[union-attr]
+                )
+                .order_by(_Session.started_at.desc())  # type: ignore[attr-defined]
+            )
+            rows = list(db.exec(stmt))
+
+        items = [
+            {
+                "id": s.id,
+                "channel_id": s.channel_id,
+                "user_id": s.user_id,
+                "message_count": s.message_count,
+                "started_at": s.started_at.isoformat() if s.started_at else None,
+                "close_trigger": s.close_trigger,
+            }
+            for s in rows
+        ]
+        return {"count": len(items), "items": items}
 
     return router
 
