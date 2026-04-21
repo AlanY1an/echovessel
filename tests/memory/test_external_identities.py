@@ -110,3 +110,73 @@ def test_external_identity_same_external_id_different_channel_allowed():
             )
         )
         db.commit()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# resolve_internal_user_id — channel-side lookup with auto-bootstrap
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_returns_existing_mapping():
+    from echovessel.memory.identity import resolve_internal_user_id
+
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    _seed_user(engine)
+    with DbSession(engine) as db:
+        db.add(
+            ExternalIdentity(
+                channel_id="discord",
+                external_id="753654474022584361",
+                internal_user_id="self",
+            )
+        )
+        db.commit()
+
+    with DbSession(engine) as db:
+        out = resolve_internal_user_id(db, "discord", "753654474022584361")
+    assert out == "self"
+
+
+def test_resolve_creates_self_mapping_for_new_external_id():
+    from echovessel.memory.identity import resolve_internal_user_id
+
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    _seed_user(engine)
+
+    with DbSession(engine) as db:
+        out = resolve_internal_user_id(db, "discord", "first-time-snowflake")
+    assert out == "self"
+
+    # Second call returns the same mapping without raising on duplicate insert.
+    with DbSession(engine) as db:
+        again = resolve_internal_user_id(db, "discord", "first-time-snowflake")
+    assert again == "self"
+
+    # Exactly one row landed in the table.
+    with DbSession(engine) as db:
+        rows = db.exec(
+            ExternalIdentity.__table__.select()  # type: ignore[attr-defined]
+        ).all()
+    assert len(rows) == 1
+
+
+def test_resolve_different_channels_get_independent_mappings():
+    from echovessel.memory.identity import resolve_internal_user_id
+
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    _seed_user(engine)
+
+    with DbSession(engine) as db:
+        a = resolve_internal_user_id(db, "discord", "999")
+        b = resolve_internal_user_id(db, "imessage", "999")
+    assert a == "self"
+    assert b == "self"
+
+    with DbSession(engine) as db:
+        rows = db.exec(
+            ExternalIdentity.__table__.select()  # type: ignore[attr-defined]
+        ).all()
+    assert len(rows) == 2
