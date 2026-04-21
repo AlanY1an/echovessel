@@ -1065,3 +1065,23 @@ export class ApiError extends Error {
     this.detail = detail
   }
 }
+
+// ─── Failed sessions (observability) ─────────────────────────────────────
+
+/**
+ * One row of `GET /api/admin/sessions/failed`. Surfaces consolidate-worker
+ * FAILED sessions to the admin UI so silent data loss becomes visible.
+ */
+export interface FailedSession {
+  id: string
+  channel_id: string
+  user_id: string
+  message_count: number
+  started_at: string | null
+  close_trigger: string | null
+}
+
+export interface FailedSessionsResponse {
+  count: number
+  items: FailedSession[]
+}

@@ -10,6 +10,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { FailedSessionsBanner } from '../../components/FailedSessionsBanner'
 import { LanguageToggle } from '../../components/LanguageToggle'
 import type {
   DaemonState,
@@ -68,6 +69,7 @@ export function Admin({
         <div className="flex1" />
         <LanguageToggle />
       </div>
+      <FailedSessionsBanner />
       <div className="adm">
         <div className="adm-nav">
           <span className="lbl">{persona.display_name}</span>

@@ -30,6 +30,7 @@ import type {
   DeleteChoice,
   DeleteResponse,
   EventDependentsResponse,
+  FailedSessionsResponse,
   ImportCancelPayload,
   ImportCancelResponse,
   ImportEstimatePayload,
@@ -675,5 +676,13 @@ export async function postVoiceActivate(
     method: 'POST',
     body: JSON.stringify({ voice_id: voiceId }),
   })
+}
+
+/**
+ * GET /api/admin/sessions/failed — every session the consolidate worker
+ * marked FAILED, newest first. Empty list when nothing has failed.
+ */
+export async function getFailedSessions(): Promise<FailedSessionsResponse> {
+  return fetchJson<FailedSessionsResponse>('/api/admin/sessions/failed')
 }
 

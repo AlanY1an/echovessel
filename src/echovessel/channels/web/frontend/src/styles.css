@@ -1255,3 +1255,49 @@ select.facts-row-input {
   border-radius: 99px;
   border: 2px solid var(--paper-2);
 }
+
+/* ─── Failed-sessions banner ────────────────────────────── */
+
+.adm-failed-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--rule);
+}
+.adm-failed-banner .chip.warn { cursor: pointer; }
+.adm-failed-list {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 4px 0 0 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.adm-failed-list li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.adm-failed-list code {
+  font-size: 11px;
+  color: var(--ink-2);
+}
+.adm-failed-reason {
+  flex-basis: 100%;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
