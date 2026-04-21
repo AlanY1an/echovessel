@@ -40,6 +40,7 @@ from sqlalchemy import text
 from sqlmodel import Session as DbSession
 
 from echovessel.memory.db import create_engine
+from echovessel.memory.migrations import ensure_schema_up_to_date
 
 _DEFAULT_DB = Path.home() / ".echovessel" / "memory.db"
 _INTERNAL_DEFAULT = "self"
@@ -169,6 +170,10 @@ def main() -> int:
         return 2
 
     engine = create_engine(args.db)
+    # The script may run on a db that predates the external_identities
+    # table (the migration only fires on daemon startup). Apply the
+    # idempotent schema bring-up here so the INSERT below has a target.
+    ensure_schema_up_to_date(engine)
     mode = "COMMIT" if args.commit else "DRY-RUN"
 
     with DbSession(engine) as db:
