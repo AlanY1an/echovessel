@@ -31,6 +31,7 @@ from sqlmodel import Session as DbSession
 
 from echovessel.channels.base import IncomingMessage, IncomingTurn
 from echovessel.core.types import BlockLabel, MessageRole
+from echovessel.memory.identity import resolve_internal_user_id
 from echovessel.memory.ingest import ingest_message
 from echovessel.memory.models import CoreBlock, Persona, RecallMessage
 from echovessel.memory.retrieve import (
@@ -260,13 +261,34 @@ async def assemble_turn(
     last_message = turn.messages[-1]
 
     try:
+        # ---- Step 0: resolve transport-native user_id to internal --
+        # Channels mint user_id from their transport (Discord snowflake,
+        # phone handle, web "self"). The memory layer is scoped by
+        # internal user_id so retrieve / consolidate / core_blocks stay
+        # coherent across channels — collapse external→internal here.
+        # All messages in a burst share the same channel_id and external
+        # id, so resolving once for the last message is sufficient.
+        try:
+            resolved_user_id = resolve_internal_user_id(
+                ctx.db,
+                channel_id=last_message.channel_id,
+                external_id=last_message.user_id,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "resolve_internal_user_id failed; falling back to raw "
+                "transport id: %s",
+                e,
+            )
+            resolved_user_id = last_message.user_id
+
         # ---- Step 1: ingest each user message with shared turn_id --
         try:
             for msg in turn.messages:
                 ingest_message(
                     ctx.db,
                     persona_id=ctx.persona_id,
-                    user_id=msg.user_id,
+                    user_id=resolved_user_id,
                     channel_id=msg.channel_id,  # only legitimate channel_id use
                     role=MessageRole.USER,
                     content=msg.content,
@@ -289,7 +311,7 @@ async def assemble_turn(
             core_blocks = load_core_blocks(
                 ctx.db,
                 persona_id=ctx.persona_id,
-                user_id=last_message.user_id,
+                user_id=resolved_user_id,
             )
         except Exception as e:  # noqa: BLE001
             log.warning("load_core_blocks failed; continuing with empty: %s", e)
@@ -316,7 +338,7 @@ async def assemble_turn(
                 ctx.db,
                 backend=ctx.backend,
                 persona_id=ctx.persona_id,
-                user_id=last_message.user_id,
+                user_id=resolved_user_id,
                 query_text=last_message.content,
                 embed_fn=ctx.embed_fn,
                 top_k=ctx.retrieve_k,
@@ -333,7 +355,7 @@ async def assemble_turn(
             recent_desc = list_recall_messages(
                 ctx.db,
                 persona_id=ctx.persona_id,
-                user_id=last_message.user_id,
+                user_id=resolved_user_id,
                 limit=ctx.recent_window_size,
                 before=None,
             )
@@ -416,7 +438,7 @@ async def assemble_turn(
             ingest_message(
                 ctx.db,
                 persona_id=ctx.persona_id,
-                user_id=last_message.user_id,
+                user_id=resolved_user_id,
                 channel_id=last_message.channel_id,
                 role=MessageRole.PERSONA,
                 content=full_reply,

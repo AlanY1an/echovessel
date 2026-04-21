@@ -252,3 +252,89 @@ def test_build_user_prompt_just_user_message_when_empty():
     out = build_user_prompt(top_memories=[], recent_messages=[], user_message="hi")
     assert out.endswith("hi")
     assert "What they just said" in out
+
+
+# ---------------------------------------------------------------------------
+# External user_id resolution at the turn boundary
+# ---------------------------------------------------------------------------
+
+
+async def test_assemble_turn_resolves_external_user_id_to_internal():
+    """A Discord snowflake (or any transport-native id) must be collapsed
+    to the internal ``"self"`` before reaching the memory layer, so
+    retrieve / consolidate / core_blocks stay scoped consistently across
+    channels. The transport id is preserved in `external_identities` so
+    future multi-user work can rebind without touching memory.
+    """
+    from echovessel.memory import ExternalIdentity
+
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+
+    with DbSession(engine) as db:
+        _seed(db)
+        ctx = TurnContext(
+            persona_id="p",
+            persona_display_name="Sage",
+            db=db,
+            backend=backend,
+            embed_fn=_embed,
+        )
+        envelope = IncomingMessage(
+            channel_id="discord",
+            user_id="753654474022584361",
+            content="hi from discord",
+            received_at=datetime(2026, 4, 18, 9, 0, 0),
+        )
+        stub = StubProvider(fallback="welcome")
+        result = await assemble_turn(ctx, envelope, stub)
+
+        assert not result.skipped
+
+        msgs = list(db.exec(select(RecallMessage).order_by(RecallMessage.id)))
+        assert len(msgs) == 2
+        # Both the user turn and the persona reply are scoped to internal
+        # user_id, NOT to the Discord snowflake.
+        assert all(m.user_id == "self" for m in msgs)
+        # channel_id stays transport-native — only user_id collapses.
+        assert all(m.channel_id == "discord" for m in msgs)
+
+        # The mapping is recorded so future snowflakes-to-internal work
+        # has a queryable history.
+        mapping = db.get(ExternalIdentity, ("discord", "753654474022584361"))
+        assert mapping is not None
+        assert mapping.internal_user_id == "self"
+
+
+async def test_assemble_turn_web_self_is_idempotent_under_resolve():
+    """Web already uses ``"self"`` as the user_id. Resolution must be a
+    no-op for the steady-state case — bootstrap creates a (web, self) →
+    self row and downstream behaviour is unchanged.
+    """
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+
+    with DbSession(engine) as db:
+        _seed(db)
+        ctx = TurnContext(
+            persona_id="p",
+            persona_display_name="Sage",
+            db=db,
+            backend=backend,
+            embed_fn=_embed,
+        )
+        envelope = IncomingMessage(
+            channel_id="web",
+            user_id="self",
+            content="hello",
+            received_at=datetime(2026, 4, 18, 10, 0, 0),
+        )
+        stub = StubProvider(fallback="hi")
+        result = await assemble_turn(ctx, envelope, stub)
+
+        assert not result.skipped
+        msgs = list(db.exec(select(RecallMessage).order_by(RecallMessage.id)))
+        assert len(msgs) == 2
+        assert all(m.user_id == "self" for m in msgs)
