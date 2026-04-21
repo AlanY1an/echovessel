@@ -370,6 +370,7 @@ async def assemble_turn(
             persona_display_name=ctx.persona_display_name,
             core_blocks=core_blocks,
             persona_facts=persona_facts,
+            now=_now(),
         )
         user_prompt = build_turn_user_prompt(
             top_memories=top_memories,
@@ -509,11 +510,34 @@ def _pending_id_for_turn(turn: IncomingTurn) -> int:
 # ---------------------------------------------------------------------------
 
 
+_DAY_NAMES_EN: tuple[str, ...] = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+
+
+def _format_now_section(now: datetime) -> str:
+    """Render ``now`` as the ``# Right now`` section.
+
+    Uses an explicit weekday map instead of ``strftime('%A')`` so the
+    output is deterministic across host locales (a zh_CN host's libc
+    would otherwise emit ``"星期二"`` and break LLMs / tests that key
+    on the English name)."""
+    day = _DAY_NAMES_EN[now.weekday()]
+    return f"# Right now\n- {now.strftime('%Y-%m-%d')} {day} {now.strftime('%H:%M')}\n"
+
+
 def build_system_prompt(
     *,
     persona_display_name: str,
     core_blocks: list[CoreBlock],
     persona_facts: PersonaFactsView | None = None,
+    now: datetime | None = None,
 ) -> str:
     """Assemble the system prompt for one turn.
 
@@ -525,6 +549,12 @@ def build_system_prompt(
     (or ``persona_facts=None``) produces the same prompt as before the
     initiative landed.
 
+    ``now`` (when supplied) renders as a ``# Right now`` section above
+    the persona facts so the model has temporal grounding (date +
+    weekday + clock time). Without it the persona has no anchor for
+    "today is the weekend" / "what month is it" and tends to fabricate.
+    Passing ``None`` (default) preserves pre-temporal behaviour.
+
     Core blocks are rendered in a fixed order; missing blocks are
     silently skipped. The STYLE_INSTRUCTIONS block is ALWAYS appended
     last.
@@ -534,6 +564,9 @@ def build_system_prompt(
         "with this user as a real friend, not an assistant.",
         "",
     ]
+
+    if now is not None:
+        lines.append(_format_now_section(now))
 
     facts = persona_facts or PersonaFactsView.empty()
     fact_lines: list[str] = []
@@ -590,8 +623,11 @@ def build_turn_user_prompt(
 
     Multi-message case prints each message on its own line under the
     `# What they just said` section, preserving order. Per spec
-    §17a.1, no transport / channel metadata or timestamps appear in
-    the rendered prompt (F10 铁律).
+    §17a.1, no transport / channel metadata appears in the rendered
+    user prompt (F10 铁律). Timestamps on individual recall messages
+    are still scrubbed here — they would expose conversation cadence
+    in a way that has no upside; the system-prompt ``# Right now``
+    section is the single canonical surface for temporal grounding.
     """
     if not turn_messages:
         user_message = ""

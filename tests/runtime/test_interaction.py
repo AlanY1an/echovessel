@@ -255,6 +255,75 @@ def test_build_user_prompt_just_user_message_when_empty():
 
 
 # ---------------------------------------------------------------------------
+# Temporal grounding — system prompt must show "right now"
+# ---------------------------------------------------------------------------
+
+
+def test_build_system_prompt_renders_now_section_when_now_passed():
+    out = build_system_prompt(
+        persona_display_name="Sage",
+        core_blocks=[],
+        now=datetime(2026, 4, 21, 23, 30),
+    )
+    assert "# Right now" in out
+    assert "2026-04-21" in out
+    # Day-of-week is the load-bearing piece — without it the persona has no
+    # cue for "today is the weekend / a workday".
+    assert "Tuesday" in out
+    assert "23:30" in out
+
+
+def test_build_system_prompt_omits_now_section_when_now_is_none():
+    out = build_system_prompt(persona_display_name="Sage", core_blocks=[])
+    assert "# Right now" not in out
+
+
+async def test_assemble_turn_passes_now_to_system_prompt():
+    """End-to-end: a real turn must surface the current time in the LLM
+    prompt so persona stops fabricating weekday context (Issue 3-A)."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+
+    captured: dict[str, str] = {}
+
+    class CapturingProvider(StubProvider):
+        async def stream(self, *, system, user, **kwargs):
+            captured["system"] = system
+            async for token in super().stream(system=system, user=user, **kwargs):
+                yield token
+
+    with DbSession(engine) as db:
+        _seed(db)
+        ctx = TurnContext(
+            persona_id="p",
+            persona_display_name="Sage",
+            db=db,
+            backend=backend,
+            embed_fn=_embed,
+        )
+        envelope = IncomingMessage(
+            channel_id="web",
+            user_id="self",
+            content="hi",
+            received_at=datetime(2026, 4, 21, 23, 30),
+        )
+
+        # Pin _now so the captured prompt is deterministic.
+        result = await assemble_turn(
+            ctx,
+            envelope,
+            CapturingProvider(fallback="hello"),
+            now_fn=lambda: datetime(2026, 4, 21, 23, 30),
+        )
+        assert not result.skipped
+
+        assert "# Right now" in captured["system"]
+        assert "2026-04-21" in captured["system"]
+        assert "Tuesday" in captured["system"]
+
+
+# ---------------------------------------------------------------------------
 # External user_id resolution at the turn boundary
 # ---------------------------------------------------------------------------
 
