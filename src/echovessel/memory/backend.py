@@ -102,6 +102,52 @@ class StorageBackend(Protocol):
         """
         ...
 
+    # --- vector operations on entities_vec (L5 · R5) --------------------
+
+    def vec_search_entities(
+        self,
+        query_embedding: list[float],
+        persona_id: str,
+        user_id: str,
+        top_k: int,
+    ) -> list[tuple[int, float]]:
+        """Return the top-K nearest (entity_id, distance) pairs.
+
+        Powers Level-2 embedding dedup in
+        :func:`echovessel.memory.entities.resolve_entity`.
+        Implementations MUST filter by persona/user, exclude soft-deleted
+        rows, and order ascending by distance. Returned distance uses the
+        same metric as :func:`vector_search` so callers share the
+        ``1 - distance/2`` cosine conversion.
+        """
+        ...
+
+    def insert_entity_vector(
+        self,
+        entity_id: int,
+        embedding: list[float],
+        *,
+        conn: Any | None = None,
+    ) -> None:
+        """Insert or upsert the canonical-name embedding for an entity.
+
+        ``conn`` has the same semantics as :func:`insert_vector`: when
+        provided, the write joins the caller's active transaction so
+        consolidate can build entity + vector atomically.
+        """
+        ...
+
+    def delete_entity_vector(
+        self,
+        entity_id: int,
+        *,
+        conn: Any | None = None,
+    ) -> None:
+        """Remove an entity's vector. Called during physical cleanup
+        after the entity's soft-delete retention expires.
+        """
+        ...
+
     # --- full-text operations on recall_messages_fts --------------------
 
     def fts_search(

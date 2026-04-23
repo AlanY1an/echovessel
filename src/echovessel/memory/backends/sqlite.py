@@ -137,6 +137,95 @@ class SQLiteBackend(StorageBackend):
                 {"id": concept_node_id},
             )
 
+    # --- Entity vector operations (L5 · R5) ----------------------------
+
+    def vec_search_entities(
+        self,
+        query_embedding: list[float],
+        persona_id: str,
+        user_id: str,
+        top_k: int,
+    ) -> list[tuple[int, float]]:
+        candidates_k = max(top_k * 4, 20)
+        sql = text(
+            """
+            SELECT v.id, v.distance
+            FROM entities_vec v
+            JOIN entities e ON e.id = v.id
+            WHERE v.embedding MATCH :query_vec
+              AND k = :candidates_k
+              AND e.persona_id = :persona_id
+              AND e.user_id = :user_id
+              AND e.deleted_at IS NULL
+            ORDER BY v.distance
+            LIMIT :top_k
+            """
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                sql,
+                {
+                    "query_vec": _pack_vector(query_embedding),
+                    "candidates_k": candidates_k,
+                    "persona_id": persona_id,
+                    "user_id": user_id,
+                    "top_k": top_k,
+                },
+            ).all()
+        return [(int(r[0]), float(r[1])) for r in rows]
+
+    def insert_entity_vector(
+        self,
+        entity_id: int,
+        embedding: list[float],
+        *,
+        conn: Any | None = None,
+    ) -> None:
+        if conn is not None:
+            conn.execute(
+                text("DELETE FROM entities_vec WHERE id = :id"),
+                {"id": entity_id},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO entities_vec (id, embedding) "
+                    "VALUES (:id, :vec)"
+                ),
+                {"id": entity_id, "vec": _pack_vector(embedding)},
+            )
+            return
+
+        with self._engine.begin() as c:
+            c.execute(
+                text("DELETE FROM entities_vec WHERE id = :id"),
+                {"id": entity_id},
+            )
+            c.execute(
+                text(
+                    "INSERT INTO entities_vec (id, embedding) "
+                    "VALUES (:id, :vec)"
+                ),
+                {"id": entity_id, "vec": _pack_vector(embedding)},
+            )
+
+    def delete_entity_vector(
+        self,
+        entity_id: int,
+        *,
+        conn: Any | None = None,
+    ) -> None:
+        if conn is not None:
+            conn.execute(
+                text("DELETE FROM entities_vec WHERE id = :id"),
+                {"id": entity_id},
+            )
+            return
+        with self._engine.begin() as c:
+            c.execute(
+                text("DELETE FROM entities_vec WHERE id = :id"),
+                {"id": entity_id},
+            )
+
     # --- Full-text operations ------------------------------------------
 
     @staticmethod
