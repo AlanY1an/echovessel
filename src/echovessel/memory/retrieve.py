@@ -35,6 +35,7 @@ reject it and refer to docs/DISCUSSION.md 2026-04-14 D4.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -46,7 +47,10 @@ from echovessel.core.types import NodeType
 from echovessel.memory.backend import StorageBackend
 from echovessel.memory.models import (
     ConceptNode,
+    ConceptNodeEntity,
     CoreBlock,
+    Entity,
+    EntityAlias,
     RecallMessage,
 )
 
@@ -56,6 +60,23 @@ WEIGHT_RELEVANCE = 3.0
 WEIGHT_IMPACT = 2.0
 WEIGHT_RELATIONAL_BONUS = 1.0
 RELATIONAL_BONUS_VALUE = 0.5
+
+# L5 · entity_anchor bonus (plan §6.3). If the query string contains a
+# known entity alias, concept nodes linked to that entity through the
+# L3↔L5 junction get an extra score bump — the Scott/黄逸扬 case (plan
+# Case 8) exists specifically because vector-only search misses cross-
+# language alias hits. Weight is applied against a fixed bonus value so
+# the extra score is either on (+WEIGHT_ENTITY_ANCHOR) or off (0).
+WEIGHT_ENTITY_ANCHOR = 1.5
+ENTITY_ANCHOR_BONUS_VALUE = 1.0
+
+# Regex for splitting the query into candidate alias tokens. Alias
+# matching is case-sensitive exact (plan decision 4). We deliberately
+# split on non-word characters across Unicode so CJK runs stay intact
+# — ``re.split(r"\W+", "Scott黄逸扬")`` under ``re.UNICODE`` drops the
+# CJK chars; the simpler rule here keeps every contiguous run that is
+# NOT ASCII whitespace / common punctuation.
+_QUERY_TOKEN_SEPARATORS = re.compile(r"[\s,.?!;:()\[\]{}<>/\"'\\]+")
 
 # Recency half-life: how much weight a memory from N days ago retains.
 # Architecture uses positional decay 0.99^i; we use time-based for stability
@@ -104,6 +125,11 @@ class ScoredMemory:
     impact: float
     relational_bonus: float
     total: float
+    # L5 · non-zero when the node is linked to an entity whose alias
+    # appeared in the query text. ``ENTITY_ANCHOR_BONUS_VALUE`` when
+    # present, 0 otherwise — stored unweighted so logs / tests can
+    # inspect the raw signal separately from the rerank weight.
+    entity_anchor_bonus: float = 0.0
 
 
 @dataclass(slots=True)
@@ -136,15 +162,13 @@ def _type_str(node: ConceptNode) -> str:
 # ---------------------------------------------------------------------------
 
 
-def load_core_blocks(
-    db: DbSession, persona_id: str, user_id: str
-) -> list[CoreBlock]:
+def load_core_blocks(db: DbSession, persona_id: str, user_id: str) -> list[CoreBlock]:
     """Load every core block that belongs to (persona_id, user_id).
 
     Returns both shared blocks (user_id NULL) and per-user blocks for this user.
-    Ordered for prompt injection: persona -> self -> user -> relationship -> mood.
+    Ordered for prompt injection: persona -> self -> user -> relationship -> style.
     """
-    order = ["persona", "self", "user", "relationship", "mood"]
+    order = ["persona", "self", "user", "relationship", "style"]
 
     stmt = select(CoreBlock).where(
         CoreBlock.persona_id == persona_id,
@@ -161,9 +185,7 @@ def load_core_blocks(
         label = b.label
         return getattr(label, "value", label)
 
-    blocks.sort(
-        key=lambda b: order.index(_label_str(b)) if _label_str(b) in order else 99
-    )
+    blocks.sort(key=lambda b: order.index(_label_str(b)) if _label_str(b) in order else 99)
     return blocks
 
 
@@ -197,23 +219,88 @@ def _relational_bonus(node: ConceptNode) -> float:
     return RELATIONAL_BONUS_VALUE if node.relational_tags else 0.0
 
 
+def find_query_entities(
+    db: DbSession,
+    query_text: str,
+    *,
+    persona_id: str,
+    user_id: str,
+) -> list[int]:
+    """Return entity ids whose alias exactly matches a token in ``query_text``.
+
+    Alias matching is case-sensitive (plan decision 4 — normalisation
+    is a v2 concern). Tokens are split on ASCII whitespace + common
+    punctuation; the full ``query_text`` is also tried as a single
+    token so multi-character aliases that cross token boundaries
+    ("黄逸扬") still match a query like "Scott 最近怎么样" where the
+    alias sits inside a whitespace-delimited fragment.
+
+    Soft-deleted entities are skipped. An empty query or one whose
+    tokens match no aliases returns ``[]``.
+    """
+    if not query_text or not query_text.strip():
+        return []
+
+    candidates = {tok for tok in _QUERY_TOKEN_SEPARATORS.split(query_text) if tok}
+    # Also try every substring occurrence of stored aliases inside the
+    # raw query (case-sensitive). Scans every alias for this scope once
+    # — small on a personal deployment, and the alternative (trigram
+    # scan across all aliases) would need its own index. If alias count
+    # ever grows, the right move is a trigram index keyed on
+    # (persona_id, user_id), not more Python loops.
+    alias_rows = db.exec(
+        select(EntityAlias, Entity)
+        .join(Entity, Entity.id == EntityAlias.entity_id)
+        .where(
+            Entity.persona_id == persona_id,
+            Entity.user_id == user_id,
+            Entity.deleted_at.is_(None),  # type: ignore[union-attr]
+        )
+    ).all()
+
+    matched: set[int] = set()
+    for alias, ent in alias_rows:
+        if ent.id is None:
+            continue
+        if alias.alias in candidates or alias.alias in query_text:
+            matched.add(ent.id)
+    return list(matched)
+
+
+def get_nodes_linked_to_entities(db: DbSession, entity_ids: list[int]) -> set[int]:
+    """Return the set of ConceptNode ids junction-linked to any of
+    ``entity_ids``. Empty input → empty set.
+    """
+    if not entity_ids:
+        return set()
+    rows = db.exec(
+        select(ConceptNodeEntity.node_id).where(
+            ConceptNodeEntity.entity_id.in_(entity_ids)  # type: ignore[union-attr]
+        )
+    ).all()
+    return {int(r) for r in rows if r is not None}
+
+
 def _score_node(
     node: ConceptNode,
     distance: float,
     now: datetime,
     *,
     relational_bonus_weight: float = WEIGHT_RELATIONAL_BONUS,
+    entity_anchored: bool = False,
 ) -> ScoredMemory:
     recency = _recency_score(node.created_at, now)
     relevance = _relevance_score(distance)
     impact = _impact_score(node.emotional_impact)
     rel_bonus = _relational_bonus(node)
+    anchor_bonus = ENTITY_ANCHOR_BONUS_VALUE if entity_anchored else 0.0
 
     total = (
         WEIGHT_RECENCY * recency
         + WEIGHT_RELEVANCE * relevance
         + WEIGHT_IMPACT * impact
         + relational_bonus_weight * rel_bonus
+        + WEIGHT_ENTITY_ANCHOR * anchor_bonus
     )
     return ScoredMemory(
         node=node,
@@ -222,6 +309,7 @@ def _score_node(
         impact=impact,
         relational_bonus=rel_bonus,
         total=total,
+        entity_anchor_bonus=anchor_bonus,
     )
 
 
@@ -287,9 +375,23 @@ def retrieve(
         top_k=max(top_k * 4, 40),
     )
 
-    # Step 3: Load the full nodes and rerank
-    if hits:
-        node_ids = [h.concept_node_id for h in hits]
+    # L5 · Entity anchor pre-compute. Resolve every alias that appears
+    # in the query to its entity id, then collect the set of concept
+    # nodes junction-linked to any of those entities. Used below to
+    # bump rerank score for those nodes.
+    query_entity_ids = find_query_entities(db, query_text, persona_id=persona_id, user_id=user_id)
+    entity_anchored_node_ids = get_nodes_linked_to_entities(db, query_entity_ids)
+
+    # Step 3: Load the full nodes and rerank. We UNION the vector hits
+    # with any entity-anchored node ids so the Scott/黄逸扬 case still
+    # surfaces nodes whose description does not contain the query
+    # string (plan case 8). Vector distance for an entity-anchored node
+    # that did NOT come from vector search is left at the orthogonal
+    # default so the anchor bonus is the only thing driving it above
+    # the relevance floor.
+    anchored_only_ids = entity_anchored_node_ids - {h.concept_node_id for h in hits}
+    if hits or anchored_only_ids:
+        node_ids = [h.concept_node_id for h in hits] + list(anchored_only_ids)
         distance_by_id = {h.concept_node_id: h.distance for h in hits}
 
         nodes = list(
@@ -303,19 +405,23 @@ def retrieve(
         scored = [
             _score_node(
                 n,
-                distance_by_id[n.id],
+                # Anchored-only nodes use the orthogonal distance
+                # sentinel so they clear the min_relevance floor only
+                # via the anchor bonus path below.
+                distance_by_id.get(n.id, 2.0),
                 now,
                 relational_bonus_weight=relational_bonus_weight,
+                entity_anchored=(n.id in entity_anchored_node_ids),
             )
             for n in nodes
         ]
-        # Drop candidates whose relevance is below the floor. This is the
-        # Over-recall mitigation: strictly-orthogonal matches collapse to
-        # relevance 0.5 and, without this filter, the rerank tie-breakers
-        # (impact + relational_bonus) always pick high-impact peak events
-        # and surface them for unrelated queries. See the docstring on
-        # `min_relevance` and the 2026-04-16 EVAL-overrecall diagnosis.
-        scored = [sm for sm in scored if sm.relevance >= min_relevance]
+        # Drop candidates whose relevance is below the floor UNLESS the
+        # entity anchor is active for them. The anchor is exactly the
+        # escape hatch for cross-language alias recall where the
+        # embedder sees zero overlap.
+        scored = [
+            sm for sm in scored if sm.relevance >= min_relevance or sm.entity_anchor_bonus > 0
+        ]
         scored.sort(key=lambda s: -s.total)
         top_memories = scored[:top_k]
     else:
@@ -499,9 +605,7 @@ def search_concept_nodes(
     tokens = [t for t in stripped.replace('"', " ").split() if t]
     use_like_fallback = any(len(t) < 3 for t in tokens) or not tokens
 
-    type_values: tuple[str, ...] = (
-        tuple(t.value for t in node_types) if node_types else ()
-    )
+    type_values: tuple[str, ...] = tuple(t.value for t in node_types) if node_types else ()
 
     type_clause = ""
     if type_values:
@@ -516,10 +620,7 @@ def search_concept_nodes(
         # emotion_tags OR relational_tags containing the literal tag.
         # We wrap the search in quotes so partial overlaps don't match
         # (e.g. searching for "joy" won't match "joyful").
-        tag_clause = (
-            "AND (cn.emotion_tags LIKE :tag_pat "
-            "OR cn.relational_tags LIKE :tag_pat)"
-        )
+        tag_clause = "AND (cn.emotion_tags LIKE :tag_pat OR cn.relational_tags LIKE :tag_pat)"
 
     if use_like_fallback:
         # LIKE path — stable across CJK / short queries, no FTS5 trigram
@@ -628,16 +729,12 @@ def search_concept_nodes(
         if node is None or node.deleted_at is not None:
             continue
         if use_like_fallback:
-            snippet = _build_like_snippet(
-                str(row[1] or ""), tokens[0] if tokens else ""
-            )
+            snippet = _build_like_snippet(str(row[1] or ""), tokens[0] if tokens else "")
             rank = 0.0
         else:
             snippet = str(row[1] or "")
             rank = float(row[2])
-        hits.append(
-            ConceptSearchHit(node=node, snippet=snippet, rank=rank)
-        )
+        hits.append(ConceptSearchHit(node=node, snippet=snippet, rank=rank))
 
     # Suppress unused symbol warning — keep the helper around for future
     # consumers that want raw counts.
@@ -736,14 +833,87 @@ def list_concept_nodes(
 
     from sqlmodel import func as _func
 
-    total_stmt = (
-        select(_func.count())
-        .select_from(ConceptNode)
-        .where(*base_filters)
-    )
+    total_stmt = select(_func.count()).select_from(ConceptNode).where(*base_filters)
     total = int(db.exec(total_stmt).one() or 0)
 
     return rows, total
+
+
+# ---------------------------------------------------------------------------
+# Event time anchor (R4 · plan §6.3 status derivation)
+# ---------------------------------------------------------------------------
+
+
+def derive_event_status(node: ConceptNode, now: datetime) -> str:
+    """Status of an L3 event with respect to a reference moment.
+
+    Output is one of: ``'past'``, ``'active'``, ``'planned'``,
+    ``'atemporal'``. Atemporal applies when the node has no time bounds
+    at all — a fact like "user likes cats" has no status delta. When
+    only one of start/end is set, the missing bound is treated as the
+    other (instant event).
+    """
+    start = node.event_time_start
+    end = node.event_time_end
+    if start is None and end is None:
+        return "atemporal"
+    if start is None:
+        start = end
+    if end is None:
+        end = start
+    if end < now:
+        return "past"
+    if start > now:
+        return "planned"
+    return "active"
+
+
+def render_event_delta_phrase(node: ConceptNode, now: datetime) -> str:
+    """Human-readable delta clause for ``# Things you remember`` rendering.
+
+    Day-precision intentionally — hour-precision reads as a database
+    cursor, not a friend remembering. Returns the empty string for
+    atemporal events so the caller can append it unconditionally.
+
+    Format: ``" · event YYYY-MM-DD~YYYY-MM-DD · status=X (N days …)"``.
+    Single-day events render the date once.
+    """
+    status = derive_event_status(node, now)
+    if status == "atemporal":
+        return ""
+
+    start = node.event_time_start or node.event_time_end
+    end = node.event_time_end or node.event_time_start
+    if start is None or end is None:
+        return ""
+
+    start_d = start.date()
+    end_d = end.date()
+    today = now.date()
+    when = start_d.isoformat() if start_d == end_d else f"{start_d.isoformat()}~{end_d.isoformat()}"
+
+    if status == "past":
+        days_ago = (today - end_d).days
+        suffix = (
+            "today" if days_ago == 0 else "1 day ago" if days_ago == 1 else f"{days_ago} days ago"
+        )
+        return f" · event {when} · status=past ({suffix})"
+    if status == "planned":
+        days_until = (start_d - today).days
+        suffix = (
+            "today"
+            if days_until == 0
+            else "in 1 day"
+            if days_until == 1
+            else f"in {days_until} days"
+        )
+        return f" · event {when} · status=planned ({suffix})"
+    # active
+    days_in = max((today - start_d).days, 0)
+    suffix = (
+        "just started" if days_in == 0 else "1 day in" if days_in == 1 else f"{days_in} days in"
+    )
+    return f" · event {when} · status=active ({suffix})"
 
 
 def _expand_session_context(
@@ -761,8 +931,7 @@ def _expand_session_context(
     session_ids = {
         sm.node.source_session_id
         for sm in memories
-        if _type_str(sm.node) == NodeType.EVENT.value
-        and sm.node.source_session_id is not None
+        if _type_str(sm.node) == NodeType.EVENT.value and sm.node.source_session_id is not None
     }
     if not session_ids:
         return []

@@ -30,9 +30,13 @@ from dataclasses import asdict
 from typing import Any
 
 from echovessel.memory.consolidate import (
+    ExtractedEntity,
+    ExtractedEntityClarification,
     ExtractedEvent,
+    ExtractedSessionMoodSignal,
     ExtractedThought,
     ExtractFn,
+    ExtractionResult,
     ReflectFn,
 )
 from echovessel.memory.models import ConceptNode, RecallMessage
@@ -87,9 +91,9 @@ def make_extract_fn(llm: LLMProvider) -> ExtractFn:
 
     from echovessel.runtime.cost_logger import feature_context
 
-    async def _extract(messages: list[RecallMessage]) -> list[ExtractedEvent]:
+    async def _extract(messages: list[RecallMessage]) -> ExtractionResult:
         if not messages:
-            return []
+            return ExtractionResult()
 
         formatted_messages: list[tuple[str, str, str]] = [
             (
@@ -100,16 +104,19 @@ def make_extract_fn(llm: LLMProvider) -> ExtractFn:
             for m in messages
         ]
 
+        # R4 anchor: <<NOW>> is the session start, NOT wall-clock now.
+        # Sessions can be replayed from the consolidate_worker queue
+        # days after they happened (idle, retry, restart); resolving
+        # "下周" against today instead of when the user actually said
+        # it would silently shift every event by the queue lag.
+        started_at_iso = messages[0].created_at.isoformat() if messages[0].created_at else ""
         user_prompt = format_extraction_user_prompt(
             session_id=messages[0].session_id or "",
-            started_at_iso=(
-                messages[0].created_at.isoformat() if messages[0].created_at else ""
-            ),
-            closed_at_iso=(
-                messages[-1].created_at.isoformat() if messages[-1].created_at else ""
-            ),
+            started_at_iso=started_at_iso,
+            closed_at_iso=(messages[-1].created_at.isoformat() if messages[-1].created_at else ""),
             message_count=len(messages),
             messages=formatted_messages,
+            now_iso=started_at_iso,
         )
 
         with feature_context("consolidate"):
@@ -129,10 +136,56 @@ def make_extract_fn(llm: LLMProvider) -> ExtractFn:
                 messages[0].session_id,
                 e,
             )
-            return []
+            return ExtractionResult()
 
-        # prompts-layer dataclass → memory-layer dataclass (same fields).
-        return [ExtractedEvent(**asdict(re)) for re in parsed.events]
+        # prompts-layer → memory-layer. We explicitly map each field
+        # rather than `**asdict(re)` because `asdict` recursively dict-
+        # ifies the nested EventTime, which would land as a dict on
+        # ExtractedEvent.event_time and break downstream consumers that
+        # expect the dataclass.
+        events = [
+            ExtractedEvent(
+                description=re.description,
+                emotional_impact=re.emotional_impact,
+                emotion_tags=list(re.emotion_tags),
+                relational_tags=list(re.relational_tags),
+                event_time=re.event_time,
+            )
+            for re in parsed.events
+        ]
+        mentioned_entities = [
+            ExtractedEntity(
+                canonical_name=ent.canonical_name,
+                aliases=list(ent.aliases),
+                kind=ent.kind,
+                in_events=list(ent.in_events),
+            )
+            for ent in parsed.mentioned_entities
+        ]
+        entity_clarification = (
+            ExtractedEntityClarification(
+                canonical_a=parsed.entity_clarification.canonical_a,
+                canonical_b=parsed.entity_clarification.canonical_b,
+                same=parsed.entity_clarification.same,
+            )
+            if parsed.entity_clarification is not None
+            else None
+        )
+        session_mood_signal = (
+            ExtractedSessionMoodSignal(
+                mood=parsed.session_mood_signal.mood,
+                energy=parsed.session_mood_signal.energy,
+                last_user_signal=parsed.session_mood_signal.last_user_signal,
+            )
+            if parsed.session_mood_signal is not None
+            else None
+        )
+        return ExtractionResult(
+            events=events,
+            mentioned_entities=mentioned_entities,
+            entity_clarification=entity_clarification,
+            session_mood_signal=session_mood_signal,
+        )
 
     return _extract
 
@@ -146,9 +199,7 @@ def make_reflect_fn(llm: LLMProvider) -> ReflectFn:
 
     from echovessel.runtime.cost_logger import feature_context
 
-    async def _reflect(
-        nodes: list[ConceptNode], reason: str
-    ) -> list[ExtractedThought]:
+    async def _reflect(nodes: list[ConceptNode], reason: str) -> list[ExtractedThought]:
         if not nodes:
             return []
 
@@ -160,9 +211,7 @@ def make_reflect_fn(llm: LLMProvider) -> ReflectFn:
                 "emotional_impact": n.emotional_impact,
                 "emotion_tags": list(n.emotion_tags or []),
                 "relational_tags": list(n.relational_tags or []),
-                "created_at_iso": (
-                    n.created_at.isoformat() if n.created_at else ""
-                ),
+                "created_at_iso": (n.created_at.isoformat() if n.created_at else ""),
             }
             for n in nodes
         ]
@@ -326,14 +375,14 @@ def _core_block_snippet(block: Any) -> dict[str, str]:
     label_str = getattr(label, "value", None) or (str(label) if label else "?")
     content = str(getattr(block, "content", "") or "")
     if len(content) > _PROACTIVE_MAX_CORE_CONTENT_CHARS:
-        content = content[: _PROACTIVE_MAX_CORE_CONTENT_CHARS] + "…"
+        content = content[:_PROACTIVE_MAX_CORE_CONTENT_CHARS] + "…"
     return {"label": label_str, "content": content}
 
 
 def _event_snippet(event: Any) -> dict[str, Any]:
     description = str(getattr(event, "description", "") or "")
     if len(description) > _PROACTIVE_MAX_EVENT_DESC_CHARS:
-        description = description[: _PROACTIVE_MAX_EVENT_DESC_CHARS] + "…"
+        description = description[:_PROACTIVE_MAX_EVENT_DESC_CHARS] + "…"
     return {
         "description": description,
         "emotional_impact": getattr(event, "emotional_impact", 0),
@@ -347,7 +396,7 @@ def _recall_snippet(msg: Any) -> dict[str, Any]:
     role_str = getattr(role, "value", None) or (str(role) if role else "?")
     content = str(getattr(msg, "content", "") or "")
     if len(content) > _PROACTIVE_MAX_RECALL_CONTENT_CHARS:
-        content = content[: _PROACTIVE_MAX_RECALL_CONTENT_CHARS] + "…"
+        content = content[:_PROACTIVE_MAX_RECALL_CONTENT_CHARS] + "…"
     # We deliberately OMIT `channel_id` from the serialised snippet.
     # The F10 guard on proactive's side strips channel leaks from the
     # snapshot before we're called; omitting it here too means even if
@@ -363,16 +412,13 @@ def _format_proactive_user_prompt(snapshot: MemorySnapshot) -> str:
     channel_id explicitly.
     """
     core_snips = [
-        _core_block_snippet(b)
-        for b in list(snapshot.core_blocks)[:_PROACTIVE_MAX_CORE_BLOCKS]
+        _core_block_snippet(b) for b in list(snapshot.core_blocks)[:_PROACTIVE_MAX_CORE_BLOCKS]
     ]
     event_snips = [
-        _event_snippet(e)
-        for e in list(snapshot.recent_l3_events)[:_PROACTIVE_MAX_RECENT_EVENTS]
+        _event_snippet(e) for e in list(snapshot.recent_l3_events)[:_PROACTIVE_MAX_RECENT_EVENTS]
     ]
     recall_snips = [
-        _recall_snippet(m)
-        for m in list(snapshot.recent_l2_window)[:_PROACTIVE_MAX_RECENT_L2]
+        _recall_snippet(m) for m in list(snapshot.recent_l2_window)[:_PROACTIVE_MAX_RECENT_L2]
     ]
 
     payload = {
@@ -417,9 +463,7 @@ def _parse_proactive_response(raw: str) -> ProactiveMessage:
         raise ValueError(f"proactive response is not valid JSON: {e}") from e
 
     if not isinstance(data, dict):
-        raise ValueError(
-            f"proactive response must be a JSON object, got {type(data).__name__}"
-        )
+        raise ValueError(f"proactive response must be a JSON object, got {type(data).__name__}")
 
     msg_text = data.get("text")
     if not isinstance(msg_text, str):

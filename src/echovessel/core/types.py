@@ -5,6 +5,8 @@ L3 event uses NodeType, a channel produces a MessageRole, etc.). Nothing else
 lives in core/ unless it's similarly foundational and dependency-free.
 """
 
+from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 
 
@@ -53,19 +55,12 @@ class NodeType(StrEnum):
 class BlockLabel(StrEnum):
     """Identifies which core block a row represents.
 
-    Shared blocks (persona/self/mood/style) have user_id = NULL.
+    Shared blocks (persona/self/style) have user_id = NULL.
     Per-user blocks (user/relationship) must have a non-null user_id.
-
-    v0.4 adds STYLE (owner-directed voice/style preferences). MOOD is
-    slated for physical removal in the Phase 2 episodic-state migration
-    (plan §13) once `mood.py` is renamed to `episodic.py`; until then
-    MOOD stays in the enum so the existing `update_mood_block` path
-    keeps parsing.
     """
 
     PERSONA = "persona"
     SELF = "self"
-    MOOD = "mood"
     USER = "user"
     RELATIONSHIP = "relationship"
     STYLE = "style"
@@ -73,8 +68,26 @@ class BlockLabel(StrEnum):
 
 # Blocks that are shared across users for a given persona.
 SHARED_BLOCK_LABELS: frozenset[BlockLabel] = frozenset(
-    {BlockLabel.PERSONA, BlockLabel.SELF, BlockLabel.MOOD, BlockLabel.STYLE}
+    {BlockLabel.PERSONA, BlockLabel.SELF, BlockLabel.STYLE}
 )
 
 # Blocks that are per-user for a given persona.
 PER_USER_BLOCK_LABELS: frozenset[BlockLabel] = frozenset({BlockLabel.USER, BlockLabel.RELATIONSHIP})
+
+
+@dataclass(frozen=True, slots=True)
+class EventTime:
+    """Resolved absolute time window for an L3 event (R4).
+
+    Both bounds carry their original timezone offset — extraction MUST
+    NOT shift to UTC because the renderer downstream uses the user's
+    local wall clock. ``end is None`` means "instant event": the
+    consumer treats start and end as the same moment.
+
+    Lives in core because both ``prompts`` (parses LLM output) and
+    ``memory`` (persists into ``concept_nodes``) handle this shape, and
+    neither layer is allowed to import the other.
+    """
+
+    start: datetime
+    end: datetime | None = None

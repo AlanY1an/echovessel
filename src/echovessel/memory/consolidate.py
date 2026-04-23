@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from sqlmodel import Session as DbSession
 from sqlmodel import select
 
-from echovessel.core.types import NodeType, SessionStatus
+from echovessel.core.types import EventTime, NodeType, SessionStatus
 from echovessel.memory.backend import StorageBackend
 from echovessel.memory.models import (
     ConceptNode,
@@ -58,14 +58,31 @@ TRIVIAL_TOKEN_COUNT = 200
 # lightweight classifier.
 STRONG_EMOTION_KEYWORDS: tuple[str, ...] = (
     # Bereavement / loss
-    "走了", "去世", "死了", "离世", "葬礼", "没了",
-    "died", "passed away", "funeral",
+    "走了",
+    "去世",
+    "死了",
+    "离世",
+    "葬礼",
+    "没了",
+    "died",
+    "passed away",
+    "funeral",
     # Crisis
-    "撑不住", "不想活", "活不下去", "自杀", "崩溃",
-    "can't go on", "suicide", "breakdown",
+    "撑不住",
+    "不想活",
+    "活不下去",
+    "自杀",
+    "崩溃",
+    "can't go on",
+    "suicide",
+    "breakdown",
     # Major milestones
-    "分手", "离婚", "被裁",
-    "breakup", "divorce", "fired",
+    "分手",
+    "离婚",
+    "被裁",
+    "breakup",
+    "divorce",
+    "fired",
 )
 
 # SHOCK reflection threshold (single event |impact| >= this)
@@ -96,6 +113,74 @@ class ExtractedEvent:
     # user turn within the session. Per review R2 this is purely a
     # tracking field — extraction remains per-session, not per-turn.
     source_turn_id: str | None = None
+    # v0.4 · R4 time-binding. Resolved absolute window for the event,
+    # carried from the prompt-layer ExtractedEvent. None means the
+    # event is atemporal ("user likes cats") or the LLM declined to
+    # resolve. consolidate writes start/end into ConceptNode columns.
+    event_time: EventTime | None = None
+
+
+@dataclass(slots=True)
+class ExtractedEntity:
+    """Third-party entity the user mentioned in the session (L5 · R5).
+
+    Mirrors the prompts-layer ``RawExtractedEntity`` with memory-layer
+    typing. ``in_events`` holds indices into the sibling ``events`` list;
+    consolidate uses these to build the L3↔L5 junction rows.
+    """
+
+    canonical_name: str
+    aliases: list[str] = field(default_factory=list)
+    kind: str = "person"
+    in_events: list[int] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ExtractedEntityClarification:
+    """User-stated resolution of an entity ambiguity (plan §6.3.1).
+
+    Consolidate uses this to flip ``entities.merge_status`` from
+    'uncertain' to 'confirmed' (``same=True`` → merge) or 'disambiguated'
+    (``same=False`` → split and clear the candidate merge target).
+    """
+
+    canonical_a: str
+    canonical_b: str
+    same: bool
+
+
+@dataclass(slots=True)
+class ExtractedSessionMoodSignal:
+    """L6 · persona-side mood snapshot (plan §5.3).
+
+    Wraps the ``session_mood_signal`` the extraction LLM emits
+    alongside events. Consolidate feeds this to
+    :func:`echovessel.memory.episodic.update_episodic_state` before
+    marking the session CLOSED — same single LLM call, no extra
+    round-trip.
+    """
+
+    mood: str
+    energy: int
+    last_user_signal: str | None = None
+
+
+@dataclass(slots=True)
+class ExtractionResult:
+    """Full output of one extraction LLM call.
+
+    Wraps the event list together with L5 outputs (``mentioned_entities``,
+    ``entity_clarification``) and the L6 mood snapshot
+    (``session_mood_signal``) so extraction can emit everything in a
+    single round trip. Callers that only care about events can ignore
+    the other fields; tests can build an ``ExtractionResult(events=[...])``
+    with defaults for everything else.
+    """
+
+    events: list[ExtractedEvent] = field(default_factory=list)
+    mentioned_entities: list[ExtractedEntity] = field(default_factory=list)
+    entity_clarification: ExtractedEntityClarification | None = None
+    session_mood_signal: ExtractedSessionMoodSignal | None = None
 
 
 @dataclass(slots=True)
@@ -119,8 +204,12 @@ class ExtractedThought:
 # (docs/runtime/01-spec-v0.1.md §6.4 + §14 decision #1). Runtime constructs
 # these closures and passes them into consolidate_session().
 #
-# Extraction reads a batch of raw messages, returns zero or more events.
-ExtractFn = Callable[[list[RecallMessage]], Awaitable[list[ExtractedEvent]]]
+# Extraction reads a batch of raw messages, returns a structured result
+# that bundles events with L5 side-outputs (mentioned_entities, optional
+# entity_clarification). Keeping everything in one return value lets the
+# prompt-layer emit all five sections in a single LLM round trip —
+# prompts_wiring translates that into this shape.
+ExtractFn = Callable[[list[RecallMessage]], Awaitable["ExtractionResult"]]
 
 # Reflection reads recent ConceptNodes (events + prior thoughts) plus a
 # reason string ('timer' or 'shock'), returns zero or more thoughts.
@@ -219,7 +308,11 @@ async def consolidate_session(
 
     if session.status == SessionStatus.CLOSED:
         return ConsolidateResult(
-            session=session, skipped=True, events_created=[], thoughts_created=[], reflection_reason=None
+            session=session,
+            skipped=True,
+            events_created=[],
+            thoughts_created=[],
+            reflection_reason=None,
         )
 
     # Resume-point guard: if a prior attempt already committed the
@@ -262,11 +355,16 @@ async def consolidate_session(
         track_pending_session_closed(session)
         drain_and_fire_pending_lifecycle_events()
         return ConsolidateResult(
-            session=session, skipped=True, events_created=[], thoughts_created=[], reflection_reason=None
+            session=session,
+            skipped=True,
+            events_created=[],
+            thoughts_created=[],
+            reflection_reason=None,
         )
 
     # --- B. Extraction --------------------------------------------------
     created_events: list[ConceptNode] = []
+    extraction_output: ExtractionResult | None = None
     if skip_extraction:
         # Load already-committed events from the prior attempt. No LLM
         # call, no new rows, no new vectors — just rehydrate what B
@@ -283,17 +381,64 @@ async def consolidate_session(
             )
         )
     else:
-        extracted_events = await extract_fn(messages) if messages else []
-        for ev in extracted_events:
+        if messages:
+            extraction_output = await extract_fn(messages)
+        else:
+            extraction_output = ExtractionResult()
+        extracted_events = extraction_output.events
+
+        # L5 · mention dedup: match each new event description against
+        # recent (<=30d) existing events; matches bump mention_count
+        # instead of inserting a duplicate node (plan §6.2 step 3).
+        from echovessel.memory.entities import detect_mention_dedup
+
+        dedup_matches = detect_mention_dedup(
+            db,
+            backend,
+            embed_fn,
+            persona_id=session.persona_id,
+            user_id=session.user_id,
+            new_event_descriptions=[e.description for e in extracted_events],
+            now=now,
+        )
+
+        # For entity-junction wiring we need the ConceptNode behind each
+        # extracted-event index, whether it was freshly inserted or
+        # matched a prior mention.
+        event_by_ext_idx: dict[int, ConceptNode] = {}
+
+        for ev_idx, ev in enumerate(extracted_events):
             # Review R2: per-session extraction is preserved. `source_turn_id`
             # is an OPTIONAL soft hint from the LLM — if missing, fall back
             # to the last user turn in the session that has a turn_id, so
             # downstream audit ("what turn did this come from?") still has
             # something to point at. If no message in the session has a
             # turn_id (e.g. legacy data), leave it None.
-            effective_source_turn_id = ev.source_turn_id or _fallback_source_turn_id(
-                messages
-            )
+            effective_source_turn_id = ev.source_turn_id or _fallback_source_turn_id(messages)
+
+            matched_node_id = dedup_matches.get(ev_idx)
+            if matched_node_id is not None:
+                existing = db.exec(
+                    select(ConceptNode).where(ConceptNode.id == matched_node_id)
+                ).one()
+                existing.mention_count = (existing.mention_count or 0) + 1
+                existing.last_accessed_at = now
+                if effective_source_turn_id and effective_source_turn_id not in (
+                    existing.source_turn_ids or []
+                ):
+                    existing.source_turn_ids = list(existing.source_turn_ids or []) + [
+                        effective_source_turn_id
+                    ]
+                db.add(existing)
+                event_by_ext_idx[ev_idx] = existing
+                continue
+
+            # R4 · resolved absolute window if the LLM produced one;
+            # both bounds nullable independently. The `event_time_start
+            # <= event_time_end` invariant is enforced by the parser
+            # AND by a DB CHECK constraint on concept_nodes.
+            event_time_start = ev.event_time.start if ev.event_time else None
+            event_time_end = ev.event_time.end if ev.event_time else None
             node = ConceptNode(
                 persona_id=session.persona_id,
                 user_id=session.user_id,
@@ -304,10 +449,14 @@ async def consolidate_session(
                 relational_tags=ev.relational_tags,
                 source_session_id=session.id,
                 source_turn_id=effective_source_turn_id,
+                source_turn_ids=([effective_source_turn_id] if effective_source_turn_id else []),
+                event_time_start=event_time_start,
+                event_time_end=event_time_end,
             )
             db.add(node)
             db.flush()
             created_events.append(node)
+            event_by_ext_idx[ev_idx] = node
 
             # Embed + index into the vector table, joining the current
             # transaction so we don't deadlock against our own flushed
@@ -339,6 +488,23 @@ async def consolidate_session(
                         e,
                     )
 
+        # L5 · write_entities + junction (plan §6.2 step 1 · decision 4).
+        # Happens post-event-commit so every ConceptNode.id we reference
+        # in the junction is already persisted. A commit failure in the
+        # entity branch leaves events intact — junction is rebuildable
+        # from extraction output on the next run.
+        if extraction_output.mentioned_entities or (
+            extraction_output.entity_clarification is not None
+        ):
+            _consolidate_entities(
+                db,
+                backend,
+                embed_fn,
+                session=session,
+                extraction_output=extraction_output,
+                event_by_ext_idx=event_by_ext_idx,
+            )
+
     # --- C. SHOCK trigger ----------------------------------------------
     shock_event: ConceptNode | None = None
     for n in created_events:
@@ -355,9 +521,7 @@ async def consolidate_session(
     # --- E. Reflection execution (hard gate) ---------------------------
     should_reflect = shock_event is not None or timer_due
     if should_reflect:
-        recent_count_24h = _count_reflections_24h(
-            db, session.persona_id, session.user_id, now
-        )
+        recent_count_24h = _count_reflections_24h(db, session.persona_id, session.user_id, now)
         if recent_count_24h >= reflection_hard_limit_24h:
             # Hard gate hit; skip reflection but still mark session closed.
             pass
@@ -397,9 +561,7 @@ async def consolidate_session(
 
                     # Filling links
                     for child_id in th.filling:
-                        link = ConceptNodeFilling(
-                            parent_id=thought.id, child_id=child_id
-                        )
+                        link = ConceptNodeFilling(parent_id=thought.id, child_id=child_id)
                         db.add(link)
                 db.commit()
                 for t in created_thoughts:
@@ -412,11 +574,36 @@ async def consolidate_session(
                             observer.on_thought_created(t)
                         except Exception as e:  # noqa: BLE001
                             log.warning(
-                                "observer.on_thought_created raised "
-                                "(thought id=%s): %s",
+                                "observer.on_thought_created raised (thought id=%s): %s",
                                 t.id,
                                 e,
                             )
+
+    # --- F-pre. L6 episodic_state update (plan §6.2 step 6) -------------
+    # Reuse the extraction LLM's ``session_mood_signal`` output — zero
+    # extra round-trips. Best-effort: a write failure here is logged
+    # but must not block the session-close transition.
+    if extraction_output is not None and extraction_output.session_mood_signal is not None:
+        from echovessel.memory.episodic import update_episodic_state
+
+        signal = extraction_output.session_mood_signal
+        try:
+            update_episodic_state(
+                db,
+                persona_id=session.persona_id,
+                signal={
+                    "mood": signal.mood,
+                    "energy": signal.energy,
+                    "last_user_signal": signal.last_user_signal,
+                },
+                now=now,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "update_episodic_state failed (session %s): %s",
+                session.id,
+                e,
+            )
 
     # --- F. Mark session closed ----------------------------------------
     session.status = SessionStatus.CLOSED
@@ -446,9 +633,7 @@ async def consolidate_session(
 # ---------------------------------------------------------------------------
 
 
-def _count_reflections_24h(
-    db: DbSession, persona_id: str, user_id: str, now: datetime
-) -> int:
+def _count_reflections_24h(db: DbSession, persona_id: str, user_id: str, now: datetime) -> int:
     cutoff = now - timedelta(hours=24)
     rows = list(
         db.exec(
@@ -464,9 +649,7 @@ def _count_reflections_24h(
     return len(rows)
 
 
-def _is_timer_due(
-    db: DbSession, persona_id: str, user_id: str, now: datetime
-) -> bool:
+def _is_timer_due(db: DbSession, persona_id: str, user_id: str, now: datetime) -> bool:
     cutoff = now - timedelta(hours=TIMER_REFLECTION_HOURS)
     last = db.exec(
         select(ConceptNode)
@@ -500,6 +683,7 @@ def _fallback_source_turn_id(messages: list[RecallMessage]) -> str | None:
     RecallMessages without one), return None — that's fine because
     `source_turn_id` is nullable.
     """
+
     def _role_str(msg: RecallMessage) -> str:
         r = msg.role
         return getattr(r, "value", r)
@@ -537,3 +721,85 @@ def _load_reflection_inputs(
         .limit(10)
     )
     return list(db.exec(stmt))
+
+
+def _consolidate_entities(
+    db: DbSession,
+    backend: StorageBackend,
+    embed_fn: EmbedFn,
+    *,
+    session: Session,
+    extraction_output: ExtractionResult,
+    event_by_ext_idx: dict[int, ConceptNode],
+) -> None:
+    """Resolve every mentioned entity + wire L3↔L5 junctions + apply
+    any user-stated entity clarification. Kept as a helper so the B
+    phase stays readable and so merge conflicts with other specs touching
+    consolidate stay local to this function.
+    """
+    from echovessel.memory.entities import (
+        add_concept_entity_link,
+        apply_entity_clarification,
+        resolve_entity,
+    )
+
+    entity_id_by_ext_idx: dict[int, int] = {}
+    for ent_idx, ext_ent in enumerate(extraction_output.mentioned_entities):
+        try:
+            entity_id, _path = resolve_entity(
+                db,
+                backend,
+                embed_fn,
+                persona_id=session.persona_id,
+                user_id=session.user_id,
+                canonical_name=ext_ent.canonical_name,
+                aliases=ext_ent.aliases,
+                kind=ext_ent.kind,
+            )
+        except Exception as e:  # noqa: BLE001
+            # Resolution failures (embedding NaN, bad schema data) must
+            # not abort the whole consolidate run — events have already
+            # committed. Log and drop this entity from junction wiring.
+            log.warning(
+                "resolve_entity failed for %r (session %s): %s",
+                ext_ent.canonical_name,
+                session.id,
+                e,
+            )
+            continue
+        entity_id_by_ext_idx[ent_idx] = entity_id
+
+    # Junction rows: one per (event_id, entity_id) pair.
+    for ent_idx, ext_ent in enumerate(extraction_output.mentioned_entities):
+        entity_id = entity_id_by_ext_idx.get(ent_idx)
+        if entity_id is None:
+            continue
+        for ev_idx in ext_ent.in_events:
+            node = event_by_ext_idx.get(ev_idx)
+            if node is None or node.id is None:
+                continue
+            add_concept_entity_link(db, node_id=node.id, entity_id=entity_id)
+    db.commit()
+
+    # User-stated clarification from this session (plan §6.3.1). Safe to
+    # run after junction writes — merge/disambiguate only re-points
+    # existing junction rows.
+    clarification = extraction_output.entity_clarification
+    if clarification is not None:
+        try:
+            apply_entity_clarification(
+                db,
+                persona_id=session.persona_id,
+                user_id=session.user_id,
+                canonical_a=clarification.canonical_a,
+                canonical_b=clarification.canonical_b,
+                same=clarification.same,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "apply_entity_clarification failed (session %s, %r vs %r): %s",
+                session.id,
+                clarification.canonical_a,
+                clarification.canonical_b,
+                e,
+            )
