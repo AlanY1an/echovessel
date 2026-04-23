@@ -41,13 +41,26 @@ class NodeType(StrEnum):
     EVENT = "event"  # Extracted from L2 by the consolidate pipeline
     THOUGHT = "thought"  # Produced by reflection from other ConceptNodes
     CHAT = "chat"  # Reserved; unused in MVP
+    # v0.4 · L3 sub-type · persona-side commitment ("I promised I'd remind
+    # you at 9"). Extraction writes under PART C strict commitment guard.
+    INTENTION = "intention"
+    # v0.4 · L4 sub-type · forward-looking expectation produced by the
+    # slow_tick reflection phase ("she'll probably update grad school
+    # progress next week").
+    EXPECTATION = "expectation"
 
 
 class BlockLabel(StrEnum):
     """Identifies which core block a row represents.
 
-    Shared blocks (persona/self/mood) have user_id = NULL.
+    Shared blocks (persona/self/mood/style) have user_id = NULL.
     Per-user blocks (user/relationship) must have a non-null user_id.
+
+    v0.4 adds STYLE (owner-directed voice/style preferences). MOOD is
+    slated for physical removal in the Phase 2 episodic-state migration
+    (plan §13) once `mood.py` is renamed to `episodic.py`; until then
+    MOOD stays in the enum so the existing `update_mood_block` path
+    keeps parsing.
     """
 
     PERSONA = "persona"
@@ -55,14 +68,13 @@ class BlockLabel(StrEnum):
     MOOD = "mood"
     USER = "user"
     RELATIONSHIP = "relationship"
+    STYLE = "style"
 
 
 # Blocks that are shared across users for a given persona.
 SHARED_BLOCK_LABELS: frozenset[BlockLabel] = frozenset(
-    {BlockLabel.PERSONA, BlockLabel.SELF, BlockLabel.MOOD}
+    {BlockLabel.PERSONA, BlockLabel.SELF, BlockLabel.MOOD, BlockLabel.STYLE}
 )
 
 # Blocks that are per-user for a given persona.
-PER_USER_BLOCK_LABELS: frozenset[BlockLabel] = frozenset(
-    {BlockLabel.USER, BlockLabel.RELATIONSHIP}
-)
+PER_USER_BLOCK_LABELS: frozenset[BlockLabel] = frozenset({BlockLabel.USER, BlockLabel.RELATIONSHIP})

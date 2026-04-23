@@ -159,6 +159,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS concept_nodes_vec USING vec0(
 )
 """
 
+# v0.4 · entities_vec carries the canonical-name embedding used by the
+# extraction-time dedup pass (plan §6.2 Level 2 cosine match). Same
+# dimension as concept_nodes_vec so the same embed function feeds both.
+_ENTITIES_VEC_CREATE = f"""
+CREATE VIRTUAL TABLE IF NOT EXISTS entities_vec USING vec0(
+    id INTEGER PRIMARY KEY,
+    embedding FLOAT[{VECTOR_DIM}]
+)
+"""
+
 # Worker θ · Memory search FTS5 index over ConceptNode.description.
 # We use the same trigram tokenizer as recall_messages_fts so CJK
 # substring search works. ``description`` is the ONLY indexed column —
@@ -241,6 +251,8 @@ def create_all_tables(engine: Engine) -> None:
         conn.execute(text(_FTS_TRIGGER_DELETE))
         conn.execute(text(_FTS_TRIGGER_UPDATE))
         conn.execute(text(_VEC_CREATE))
+        # v0.4 · entities_vec virtual table for L5 canonical-name dedup.
+        conn.execute(text(_ENTITIES_VEC_CREATE))
         # Worker θ · concept_nodes FTS5 index for the admin search bar.
         conn.execute(text(_CONCEPT_FTS_CREATE))
         conn.execute(text(_CONCEPT_FTS_TRIGGER_INSERT))

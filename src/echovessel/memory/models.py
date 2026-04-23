@@ -38,6 +38,13 @@ from sqlmodel import Field, SQLModel
 
 from echovessel.core.types import BlockLabel, MessageRole, NodeType, SessionStatus
 
+# v0.4 · baseline JSON string for `personas.episodic_state`. Used as
+# both the Python default_factory shape and the SQL server_default so
+# raw INSERTs that omit the column still satisfy the NOT NULL bound.
+EPISODIC_STATE_SQL_DEFAULT: str = (
+    '{"mood":"neutral","energy":5,"last_user_signal":null,"updated_at":null}'
+)
+
 
 def _str_enum_column() -> Column:
     """SQLModel stores Python enums by NAME by default, not VALUE.
@@ -112,6 +119,29 @@ class Persona(SQLModel, table=True):
     )
     deleted_at: datetime | None = None
 
+    # v0.4 · L6 episodic state snapshot (plan §4.4). Single row of JSON
+    # that carries current mood / energy / last user signal. Written by
+    # extraction via `update_episodic_state`; decays to neutral after 12h.
+    # server_default mirrors ``EPISODIC_STATE_SQL_DEFAULT`` so raw SQL
+    # INSERTs that omit the column still satisfy NOT NULL.
+    episodic_state: dict = Field(
+        default_factory=lambda: {
+            "mood": "neutral",
+            "energy": 5,
+            "last_user_signal": None,
+            "updated_at": None,
+        },
+        sa_column=Column(
+            JSON,
+            nullable=False,
+            server_default=text(f"'{EPISODIC_STATE_SQL_DEFAULT}'"),
+        ),
+    )
+    # v0.4 · slow_tick throttle anchor (plan §7.1). Replaces any
+    # in-memory scheduler state; last time the consolidate worker ran a
+    # slow-cycle phase for this persona.
+    last_slow_tick_at: datetime | None = Field(default=None)
+
 
 class User(SQLModel, table=True):
     """A human the persona interacts with. MVP: only one row with id='self'."""
@@ -124,6 +154,11 @@ class User(SQLModel, table=True):
         sa_column=Column(DateTime, nullable=False, server_default=func.now())
     )
     deleted_at: datetime | None = None
+
+    # v0.4 · IANA timezone string (e.g. 'America/New_York'). Populated by
+    # the web channel on first connect via `Intl.DateTimeFormat` and
+    # overridable by the owner from the admin UI (plan decision 5).
+    timezone: str | None = Field(default=None)
 
 
 class ExternalIdentity(SQLModel, table=True):
@@ -165,9 +200,7 @@ class CoreBlock(SQLModel, table=True):
 
     __tablename__ = "core_blocks"
     __table_args__ = (
-        UniqueConstraint(
-            "persona_id", "user_id", "label", name="uq_core_block_persona_user_label"
-        ),
+        UniqueConstraint("persona_id", "user_id", "label", name="uq_core_block_persona_user_label"),
         Index("idx_core_blocks_persona_user", "persona_id", "user_id"),
     )
 
@@ -241,9 +274,7 @@ class Session(SQLModel, table=True):
     persona_id: str = Field(foreign_key="personas.id")
     user_id: str = Field(foreign_key="users.id")
     channel_id: str  # NOT NULL · opaque string ('web', 'discord:g123', etc.)
-    status: SessionStatus = Field(
-        default=SessionStatus.OPEN, sa_column=_str_enum_column()
-    )
+    status: SessionStatus = Field(default=SessionStatus.OPEN, sa_column=_str_enum_column())
 
     started_at: datetime = Field(
         sa_column=Column(DateTime, nullable=False, server_default=func.now())
@@ -359,6 +390,16 @@ class ConceptNode(SQLModel, table=True):
             "imported_from IS NULL OR source_session_id IS NULL",
             name="ck_concept_nodes_source_mutex",
         ),
+        # v0.4 · event_time monotonic (invariant #2). Applied on fresh DB
+        # via CREATE TABLE; legacy upgrade path is a no-op (no existing
+        # rows have either bound set). SQLite doesn't support ALTER TABLE
+        # ADD CHECK, so legacy rows go unchecked until next table rebuild.
+        CheckConstraint(
+            "event_time_start IS NULL "
+            "OR event_time_end IS NULL "
+            "OR event_time_start <= event_time_end",
+            name="ck_concept_nodes_event_time_monotonic",
+        ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -392,6 +433,31 @@ class ConceptNode(SQLModel, table=True):
     # Mutually exclusive with `source_session_id` (CHECK constraint above).
     imported_from: str | None = None
 
+    # v0.4 · time-binding (R4). Resolved absolute event window; both
+    # bounds nullable and independent. precision is derived from
+    # (end - start) at read time rather than stored.
+    event_time_start: datetime | None = Field(default=None)
+    event_time_end: datetime | None = Field(default=None)
+
+    # v0.4 · first-person attribution (R3). 'user' | 'persona' | 'shared'.
+    # Existing rows backfill to 'user' via SQL DEFAULT in migration.
+    subject: str = Field(default="user")
+
+    # v0.4 · contradiction handling. Self-FK; a new node that corrects an
+    # older one points back at the older's id via a pair-swap: the OLDER
+    # node gets its superseded_by_id set to the NEW node.
+    superseded_by_id: int | None = Field(default=None, foreign_key="concept_nodes.id")
+
+    # v0.4 · mention aggregation. Same event cited across multiple turns
+    # increments this rather than creating dup nodes.
+    mention_count: int = Field(default=1)
+
+    # v0.4 · widened source_turn_id. Legacy single-value `source_turn_id`
+    # stays for backward compatibility (readers that care about the
+    # canonical first turn_id); new writers append into this JSON list.
+    # Migration backfills: source_turn_ids = [source_turn_id] if not null.
+    source_turn_ids: list[str] = Field(default_factory=list, sa_type=JSON)
+
     created_at: datetime = Field(
         sa_column=Column(DateTime, nullable=False, server_default=func.now())
     )
@@ -413,9 +479,7 @@ class ConceptNodeFilling(SQLModel, table=True):
 
     __tablename__ = "concept_node_filling"
     __table_args__ = (
-        UniqueConstraint(
-            "parent_id", "child_id", name="uq_filling_parent_child"
-        ),
+        UniqueConstraint("parent_id", "child_id", name="uq_filling_parent_child"),
         Index("idx_filling_parent", "parent_id"),
         Index("idx_filling_child_active", "child_id", "orphaned"),
     )
@@ -494,3 +558,92 @@ class CoreBlockAppend(SQLModel, table=True):
     created_at: datetime = Field(
         sa_column=Column(DateTime, nullable=False, server_default=func.now())
     )
+
+
+# ---------------------------------------------------------------------------
+# L5 · Entities (v0.4)
+# ---------------------------------------------------------------------------
+#
+# Canonical identity of the third parties the user and persona talk about —
+# people, places, organisations, pets. One row per canonical entity per
+# (persona, user). Aliases live on a sibling table so alias → entity is a
+# direct lookup. L3 ConceptNode ↔ L5 Entity is many-to-many via the
+# `concept_node_entities` junction (replaces the older
+# `ConceptNode.related_entity_ids` JSON column idea).
+#
+# Deduplication is a three-tier fallback driven by the extraction LLM:
+# Level 1 alias exact match, Level 2 canonical-embedding cosine
+# similarity, Level 3 surface the ambiguity to the user via a system
+# prompt hint (plan §6.3.1). The `merge_status` / `merge_target_id` pair
+# encodes where a given entity sits in that three-tier flow.
+
+
+class Entity(SQLModel, table=True):
+    """L5 third-party identity row.
+
+    See plan §4.3 · §6.2 · decision 4 for the full lifecycle.
+    `merge_target_id` points at a candidate merge target when
+    `merge_status='uncertain'`; extraction resolves to 'confirmed' or
+    'disambiguated' after the user clarifies in conversation.
+    """
+
+    __tablename__ = "entities"
+    __table_args__ = (
+        UniqueConstraint(
+            "persona_id",
+            "user_id",
+            "canonical_name",
+            name="uq_entities_canonical",
+        ),
+        Index("idx_entities_persona_user", "persona_id", "user_id"),
+        Index("idx_entities_merge_status", "merge_status"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    persona_id: str = Field(foreign_key="personas.id")
+    user_id: str = Field(foreign_key="users.id")
+    canonical_name: str
+    kind: str = Field(default="person")  # 'person'|'place'|'org'|'pet'|'other'
+    description: str | None = Field(default=None)
+
+    # Three-tier dedup state (plan decision 4).
+    merge_status: str = Field(default="confirmed")  # confirmed|uncertain|disambiguated
+    merge_target_id: int | None = Field(default=None, foreign_key="entities.id")
+
+    created_at: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(
+            DateTime,
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        )
+    )
+    deleted_at: datetime | None = None
+
+
+class EntityAlias(SQLModel, table=True):
+    """Reverse index: alias string → canonical entity id.
+
+    Composite PK of (alias, entity_id) lets the same alias point at
+    more than one entity during an ambiguous period (resolved by the
+    Level 3 ask-user flow). Hot path for extraction: every new surface
+    form is looked up here first (plan §6.2 Level 1).
+    """
+
+    __tablename__ = "entity_aliases"
+
+    alias: str = Field(primary_key=True)
+    entity_id: int = Field(primary_key=True, foreign_key="entities.id")
+
+
+class ConceptNodeEntity(SQLModel, table=True):
+    """L3 ConceptNode ↔ L5 Entity junction (many-to-many)."""
+
+    __tablename__ = "concept_node_entities"
+    __table_args__ = (Index("idx_cne_entity", "entity_id"),)
+
+    node_id: int = Field(primary_key=True, foreign_key="concept_nodes.id")
+    entity_id: int = Field(primary_key=True, foreign_key="entities.id")
