@@ -47,6 +47,10 @@ from dataclasses import dataclass
 
 from sqlalchemy import Engine, text
 
+from echovessel.memory.models import (
+    EPISODIC_STATE_SQL_DEFAULT as _EPISODIC_STATE_SQL_DEFAULT_FOR_MIGRATION,
+)
+
 log = logging.getLogger(__name__)
 
 
@@ -80,9 +84,7 @@ _V0_3_COLUMNS: tuple[_ColumnSpec, ...] = (
         column="extracted_events",
         sql_type="BOOLEAN NOT NULL DEFAULT 0",
     ),
-    _ColumnSpec(
-        table="sessions", column="extracted_events_at", sql_type="DATETIME"
-    ),
+    _ColumnSpec(table="sessions", column="extracted_events_at", sql_type="DATETIME"),
 )
 
 
@@ -122,6 +124,117 @@ _PERSONA_FACTS_COLUMNS: tuple[_ColumnSpec, ...] = (
     _ColumnSpec(table="personas", column="relationship_status", sql_type="TEXT"),
     _ColumnSpec(table="personas", column="life_stage", sql_type="TEXT"),
     _ColumnSpec(table="personas", column="health_status", sql_type="TEXT"),
+)
+
+
+# ---------------------------------------------------------------------------
+# v0.4 · 6-layer memory schema baseline (plan 2026-04-persona-6-layer-memory)
+# ---------------------------------------------------------------------------
+#
+# Additive only — new columns on concept_nodes / personas / users, plus
+# three new tables for the L5 entity family. MOOD core_blocks rows are
+# physically deleted as a one-shot data fix (plan §4.7); the Python enum
+# value stays for now because `mood.py` / `interaction.py` / `admin.py`
+# still reference it. The enum removal happens in Phase 2 together with
+# the mood.py → episodic.py rename (plan §13).
+
+_V0_4_CONCEPT_NODE_COLUMNS: tuple[_ColumnSpec, ...] = (
+    # Time binding (R4).
+    _ColumnSpec(table="concept_nodes", column="event_time_start", sql_type="DATETIME"),
+    _ColumnSpec(table="concept_nodes", column="event_time_end", sql_type="DATETIME"),
+    # First-person attribution (R3).
+    _ColumnSpec(
+        table="concept_nodes",
+        column="subject",
+        sql_type="TEXT NOT NULL DEFAULT 'user'",
+    ),
+    # Contradiction handling — self-FK (not declared at ALTER level because
+    # SQLite can't add a FK via ALTER; the ORM-created table carries the
+    # FK via models.py and that's enough for fresh DBs. Legacy DBs treat
+    # this column as a plain integer, which is fine — FK enforcement is
+    # not turned on in this project).
+    _ColumnSpec(table="concept_nodes", column="superseded_by_id", sql_type="INTEGER"),
+    # Mention aggregation.
+    _ColumnSpec(
+        table="concept_nodes",
+        column="mention_count",
+        sql_type="INTEGER NOT NULL DEFAULT 1",
+    ),
+    # Widened turn-id list (JSON). Default '[]' so legacy rows parse.
+    _ColumnSpec(
+        table="concept_nodes",
+        column="source_turn_ids",
+        sql_type="TEXT NOT NULL DEFAULT '[]'",
+    ),
+)
+
+_V0_4_PERSONA_COLUMNS: tuple[_ColumnSpec, ...] = (
+    _ColumnSpec(
+        table="personas",
+        column="episodic_state",
+        # Single-quoted JSON embedded in the DEFAULT. Shared with the
+        # models.py server_default so fresh-DB rows and legacy-upgrade
+        # rows land on the same neutral baseline.
+        sql_type=(f"TEXT NOT NULL DEFAULT '{_EPISODIC_STATE_SQL_DEFAULT_FOR_MIGRATION}'"),
+    ),
+    _ColumnSpec(table="personas", column="last_slow_tick_at", sql_type="DATETIME"),
+)
+
+_V0_4_USER_COLUMNS: tuple[_ColumnSpec, ...] = (
+    _ColumnSpec(table="users", column="timezone", sql_type="TEXT"),
+)
+
+
+# Three new tables for the L5 entity family. `entities_vec` is a
+# virtual table created from `db.py::create_all_tables` (same pattern
+# as `concept_nodes_vec`), not listed here.
+_V0_4_NEW_TABLES: tuple[tuple[str, str], ...] = (
+    (
+        "entities",
+        """
+        CREATE TABLE IF NOT EXISTS entities (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            persona_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            canonical_name TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'person',
+            description TEXT,
+            merge_status TEXT NOT NULL DEFAULT 'confirmed',
+            merge_target_id INTEGER,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            deleted_at DATETIME,
+            FOREIGN KEY(persona_id) REFERENCES personas (id),
+            FOREIGN KEY(user_id) REFERENCES users (id),
+            FOREIGN KEY(merge_target_id) REFERENCES entities (id),
+            CONSTRAINT uq_entities_canonical
+                UNIQUE (persona_id, user_id, canonical_name)
+        )
+        """,
+    ),
+    (
+        "entity_aliases",
+        """
+        CREATE TABLE IF NOT EXISTS entity_aliases (
+            alias TEXT NOT NULL,
+            entity_id INTEGER NOT NULL,
+            PRIMARY KEY (alias, entity_id),
+            FOREIGN KEY(entity_id) REFERENCES entities (id)
+        )
+        """,
+    ),
+    (
+        "concept_node_entities",
+        """
+        CREATE TABLE IF NOT EXISTS concept_node_entities (
+            node_id INTEGER NOT NULL,
+            entity_id INTEGER NOT NULL,
+            PRIMARY KEY (node_id, entity_id),
+            FOREIGN KEY(node_id) REFERENCES concept_nodes (id),
+            FOREIGN KEY(entity_id) REFERENCES entities (id)
+        )
+        """,
+    ),
 )
 
 
@@ -185,12 +298,19 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
     on the next insert.
     """
     with engine.begin() as conn:
-        for table_name, ddl in _V0_3_NEW_TABLES:
+        for table_name, ddl in (*_V0_3_NEW_TABLES, *_V0_4_NEW_TABLES):
             if not _table_exists(conn, table_name):
                 conn.execute(text(ddl))
                 log.info("schema migration: created table %s", table_name)
 
-        for spec in (*_V0_3_COLUMNS, *_PERSONA_FACTS_COLUMNS, *_LLM_CALLS_COLUMNS):
+        for spec in (
+            *_V0_3_COLUMNS,
+            *_PERSONA_FACTS_COLUMNS,
+            *_LLM_CALLS_COLUMNS,
+            *_V0_4_CONCEPT_NODE_COLUMNS,
+            *_V0_4_PERSONA_COLUMNS,
+            *_V0_4_USER_COLUMNS,
+        ):
             if not _table_exists(conn, spec.table):
                 # Legacy DB that predates the parent table entirely.
                 # Skip; create_all_tables will build it later with the
@@ -198,10 +318,12 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
                 continue
             if _column_exists(conn, spec.table, spec.column):
                 continue
-            conn.execute(
-                text(
-                    f"ALTER TABLE {spec.table} ADD COLUMN {spec.column} {spec.sql_type}"
-                )
+            # ``exec_driver_sql`` bypasses ``text()``'s ``:name`` bind-param
+            # parsing — needed because some DEFAULT clauses we emit here
+            # carry JSON literals that contain colons (e.g. the v0.4
+            # ``personas.episodic_state`` default).
+            conn.exec_driver_sql(
+                f"ALTER TABLE {spec.table} ADD COLUMN {spec.column} {spec.sql_type}"
             )
             log.info(
                 "schema migration: added %s.%s %s",
@@ -232,10 +354,7 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
                         "WHERE status = 'open' AND deleted_at IS NULL"
                     )
                 )
-                log.info(
-                    "schema migration: added unique index "
-                    "uq_sessions_one_open_per_channel"
-                )
+                log.info("schema migration: added unique index uq_sessions_one_open_per_channel")
             except Exception as e:  # noqa: BLE001
                 log.warning(
                     "schema migration: could not create "
@@ -243,6 +362,54 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
                     "(likely a pre-existing duplicate OPEN pair): %s",
                     e,
                 )
+
+        # v0.4 · single-self partial unique index on entities (plan §11.1
+        # invariant #3). Enforced via partial index because SQLite can
+        # express it that way even though ALTER TABLE ADD CONSTRAINT is
+        # unavailable.
+        if _table_exists(conn, "entities") and not _index_exists(conn, "uq_entities_single_self"):
+            try:
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS "
+                        "uq_entities_single_self "
+                        "ON entities (persona_id, user_id) "
+                        "WHERE kind = 'self'"
+                    )
+                )
+                log.info("schema migration: added unique index uq_entities_single_self")
+            except Exception as e:  # noqa: BLE001
+                log.warning(
+                    "schema migration: could not create uq_entities_single_self: %s",
+                    e,
+                )
+
+        # v0.4 · backfill concept_nodes.source_turn_ids from the legacy
+        # singular source_turn_id column. Idempotent: targets only rows
+        # that still carry the default '[]' payload, so a second run is
+        # a no-op. Only runs if both columns exist on the table.
+        if (
+            _table_exists(conn, "concept_nodes")
+            and _column_exists(conn, "concept_nodes", "source_turn_ids")
+            and _column_exists(conn, "concept_nodes", "source_turn_id")
+        ):
+            conn.execute(
+                text(
+                    "UPDATE concept_nodes "
+                    "SET source_turn_ids = json_array(source_turn_id) "
+                    "WHERE source_turn_id IS NOT NULL "
+                    "AND source_turn_ids = '[]'"
+                )
+            )
+
+        # v0.4 · physical delete of MOOD rows (plan decision 1 · §4.7).
+        # L6 episodic_state takes over the "how does the persona feel
+        # right now" job. The BlockLabel.MOOD enum value stays around
+        # until Phase 2 so `mood.py` still parses; any row it creates
+        # after this run will also be swept by the next daemon start,
+        # which is fine — the rename in Phase 2 removes the write path.
+        if _table_exists(conn, "core_blocks"):
+            conn.execute(text("DELETE FROM core_blocks WHERE label = 'mood'"))
 
 
 # ---------------------------------------------------------------------------
@@ -253,9 +420,7 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
 def _table_exists(conn, table_name: str) -> bool:
     """Check `sqlite_master` for a table by name."""
     row = conn.execute(
-        text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=:name"
-        ),
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name"),
         {"name": table_name},
     ).first()
     return row is not None
@@ -275,10 +440,7 @@ def _column_exists(conn, table_name: str, column_name: str) -> bool:
 def _index_exists(conn, index_name: str) -> bool:
     """Check `sqlite_master` for an index by name."""
     row = conn.execute(
-        text(
-            "SELECT name FROM sqlite_master "
-            "WHERE type='index' AND name=:name"
-        ),
+        text("SELECT name FROM sqlite_master WHERE type='index' AND name=:name"),
         {"name": index_name},
     ).first()
     return row is not None
