@@ -24,6 +24,7 @@ from echovessel.memory import (
 from echovessel.memory.backends.sqlite import SQLiteBackend
 from echovessel.memory.consolidate import (
     ExtractedEvent,
+    ExtractionResult,
     consolidate_session,
 )
 from echovessel.memory.ingest import ingest_message
@@ -96,13 +97,15 @@ async def test_source_turn_id_explicit_from_prompt():
         db.refresh(session)
 
         async def extract_fn(_messages):  # noqa: F811
-            return [
+            return ExtractionResult(
+                events=[
                 ExtractedEvent(
                     description="event anchored in explicit turn",
                     emotional_impact=3,
                     source_turn_id="turn-explicit-from-prompt",
                 )
-            ]
+            ],
+            )
 
         result = await consolidate_session(
             db, backend, session, extract_fn, _noop_reflect, _zero_embed
@@ -164,13 +167,15 @@ async def test_source_turn_id_falls_back_to_latest_user_turn():
         db.refresh(session)
 
         async def extract_fn(_messages):
-            return [
+            return ExtractionResult(
+                events=[
                 ExtractedEvent(
                     description="event without explicit source_turn_id",
                     emotional_impact=2,
                     # note: source_turn_id left unset → falls back
                 )
-            ]
+            ],
+            )
 
         result = await consolidate_session(
             db, backend, session, extract_fn, _noop_reflect, _zero_embed
@@ -193,7 +198,7 @@ async def test_per_session_extraction_not_per_turn():
 
     async def spy_extract(messages):
         calls.append(len(messages))
-        return [ExtractedEvent(description="grouped event", emotional_impact=1)]
+        return ExtractionResult(events=[ExtractedEvent(description="grouped event", emotional_impact=1)])
 
     with DbSession(engine) as db:
         _seed(db)

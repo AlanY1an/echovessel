@@ -17,7 +17,7 @@ from echovessel.memory import (
     create_engine,
 )
 from echovessel.memory.backends.sqlite import SQLiteBackend
-from echovessel.memory.consolidate import ExtractedEvent
+from echovessel.memory.consolidate import ExtractedEvent, ExtractionResult
 from echovessel.memory.models import ConceptNode
 from echovessel.runtime.consolidate_worker import ConsolidateWorker
 from echovessel.runtime.llm.errors import LLMPermanentError, LLMTransientError
@@ -88,13 +88,15 @@ async def test_worker_processes_closing_session_and_marks_closed():
     )
 
     async def extractor(msgs):
-        return [
-            ExtractedEvent(
-                description="用户的狗短暂走失后被邻居找回",
-                emotional_impact=3,
-                emotion_tags=["relief"],
-            )
-        ]
+        return ExtractionResult(
+            events=[
+                ExtractedEvent(
+                    description="用户的狗短暂走失后被邻居找回",
+                    emotional_impact=3,
+                    emotion_tags=["relief"],
+                )
+            ]
+        )
 
     def db_factory():
         return DbSession(engine)
@@ -137,7 +139,7 @@ async def test_worker_idempotent_on_already_extracted():
 
     async def extractor(msgs):
         extract_calls.append(len(msgs))
-        return []
+        return ExtractionResult()
 
     def db_factory():
         return DbSession(engine)
@@ -260,13 +262,15 @@ async def test_worker_retries_on_sqlite_database_locked():
             raise sqlalchemy.exc.OperationalError(
                 "SELECT 1", {}, sqlite3.OperationalError("database is locked")
             )
-        return [
-            ExtractedEvent(
-                description="finally extracted after lock contention",
-                emotional_impact=2,
-                emotion_tags=["relief"],
-            )
-        ]
+        return ExtractionResult(
+            events=[
+                ExtractedEvent(
+                    description="finally extracted after lock contention",
+                    emotional_impact=2,
+                    emotion_tags=["relief"],
+                )
+            ]
+        )
 
     def db_factory():
         return DbSession(engine)
@@ -373,14 +377,16 @@ async def test_worker_does_not_duplicate_events_on_transient_reflect_failure():
 
     async def extractor(_msgs):
         extract_calls.append(1)
-        return [
-            ExtractedEvent(
-                description="user lost father suddenly",
-                # impact >= SHOCK_IMPACT_THRESHOLD (=8) forces reflection
-                emotional_impact=9,
-                emotion_tags=["grief"],
-            )
-        ]
+        return ExtractionResult(
+            events=[
+                ExtractedEvent(
+                    description="user lost father suddenly",
+                    # impact >= SHOCK_IMPACT_THRESHOLD (=8) forces reflection
+                    emotional_impact=9,
+                    emotion_tags=["grief"],
+                )
+            ]
+        )
 
     reflect_attempts: list[int] = []
 
@@ -454,7 +460,7 @@ async def test_worker_initial_session_ids_are_processed_first():
 
     async def extractor(msgs):
         called.append(msgs[0].session_id)
-        return []
+        return ExtractionResult()
 
     def db_factory():
         return DbSession(engine)

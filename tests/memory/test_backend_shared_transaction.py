@@ -47,7 +47,11 @@ from echovessel.memory import (
     create_engine,
 )
 from echovessel.memory.backends.sqlite import SQLiteBackend
-from echovessel.memory.consolidate import ExtractedEvent, ExtractedThought
+from echovessel.memory.consolidate import (
+    ExtractedEvent,
+    ExtractedThought,
+    ExtractionResult,
+)
 from echovessel.memory.models import ConceptNode
 from echovessel.memory.sessions import _mark_closing
 from echovessel.runtime.consolidate_worker import ConsolidateWorker
@@ -141,11 +145,13 @@ async def test_extraction_multi_event_no_self_deadlock():
 
     async def extractor(msgs):
         # Emit three separate events so the vec insert loop runs 3 times.
-        return [
+        return ExtractionResult(
+            events=[
             ExtractedEvent(description="用户和母亲发生了争吵", emotional_impact=-4),
             ExtractedEvent(description="用户去公园散步调节情绪", emotional_impact=+2),
             ExtractedEvent(description="晚上情绪仍有起伏但已缓解", emotional_impact=-1),
-        ]
+        ],
+        )
 
     def _db():
         return DbSession(engine)
@@ -221,13 +227,15 @@ async def test_reflection_shock_thought_writes_no_deadlock():
     )
 
     async def extractor(msgs):
-        return [
+        return ExtractionResult(
+            events=[
             ExtractedEvent(
                 description="用户的母亲去世",
                 emotional_impact=-10,  # triggers SHOCK
                 emotion_tags=["grief"],
             ),
-        ]
+        ],
+        )
 
     async def reflect(nodes, reason):
         # Return 2 thoughts — both must write vec rows cleanly.
@@ -360,12 +368,14 @@ async def test_fresh_close_via_official_api_end_to_end():
         assert sess.closed_at is not None  # _mark_closing sets this
 
     async def extractor(msgs):
-        return [
+        return ExtractionResult(
+            events=[
             ExtractedEvent(
                 description="用户完成了一次爬山活动",
                 emotional_impact=+3,
             )
-        ]
+        ],
+        )
 
     def _db():
         return DbSession(engine)

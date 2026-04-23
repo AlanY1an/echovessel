@@ -37,7 +37,10 @@ from echovessel.memory import (
     create_engine,
 )
 from echovessel.memory.backends.sqlite import SQLiteBackend
-from echovessel.memory.consolidate import ExtractedEvent
+from echovessel.memory.consolidate import (
+    ExtractedEvent,
+    ExtractionResult,
+)
 from echovessel.memory.ingest import ingest_message
 from echovessel.memory.models import ConceptNode
 from echovessel.runtime.consolidate_worker import ConsolidateWorker
@@ -171,7 +174,7 @@ async def test_worker_drains_orphan_closing_session_left_by_previous_run() -> No
     )
 
     async def _extract(_msgs):
-        return [extracted_event]
+        return ExtractionResult(events=[extracted_event])
 
     async def _reflect(_nodes, _reason):
         return []

@@ -31,6 +31,7 @@ from echovessel.memory.backends.sqlite import SQLiteBackend
 from echovessel.memory.consolidate import (
     ExtractedEvent,
     ExtractedThought,
+    ExtractionResult,
     consolidate_session,
     is_trivial,
 )
@@ -252,14 +253,16 @@ def test_is_trivial_lower_token_count_flips_verdict() -> None:
 
 
 async def _extract_one_shock(messages):
-    return [
+    return ExtractionResult(
+        events=[
         ExtractedEvent(
             description="shock event",
             emotional_impact=9,  # triggers SHOCK reflection
             emotion_tags=[],
             relational_tags=[],
         )
-    ]
+    ],
+    )
 
 
 async def _reflect_one(events, reason):

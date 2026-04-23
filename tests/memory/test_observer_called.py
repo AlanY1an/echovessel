@@ -41,6 +41,7 @@ from echovessel.memory import (
 from echovessel.memory.backends.sqlite import SQLiteBackend
 from echovessel.memory.consolidate import (
     ExtractedEvent,
+    ExtractionResult,
     consolidate_session,
 )
 from echovessel.memory.ingest import ingest_message
@@ -211,10 +212,12 @@ async def test_spy_observer_on_consolidate_event():
     observer = SpyObserver()
 
     async def extract_fn(_messages):
-        return [
+        return ExtractionResult(
+            events=[
             ExtractedEvent(description="ev1", emotional_impact=2),
             ExtractedEvent(description="ev2", emotional_impact=3),
-        ]
+        ],
+        )
 
     async def reflect_fn(_nodes, _reason):
         return []

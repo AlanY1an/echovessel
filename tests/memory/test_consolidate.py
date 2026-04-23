@@ -29,6 +29,7 @@ from echovessel.memory.consolidate import (
     SHOCK_IMPACT_THRESHOLD,
     ExtractedEvent,
     ExtractedThought,
+    ExtractionResult,
     consolidate_session,
     is_trivial,
 )
@@ -89,7 +90,7 @@ def _make_async_extractor(events: list[ExtractedEvent], *, track: list | None = 
     async def _extract(msgs):
         if track is not None:
             track.append(len(msgs))
-        return list(events)
+        return ExtractionResult(events=list(events))
 
     return _extract
 
@@ -119,7 +120,7 @@ def _make_async_reflector(thoughts: list[ExtractedThought], *, track: list | Non
 
 
 async def _empty_extract(_msgs):
-    return []
+    return ExtractionResult()
 
 
 async def _empty_reflect(_nodes, _reason):
@@ -674,14 +675,16 @@ async def test_consolidate_sets_extracted_events_flag_before_reflection():
         )
 
         async def extractor(_msgs):
-            return [
-                ExtractedEvent(
-                    description="user lost father suddenly",
-                    # Forces SHOCK trigger → reflection runs
-                    emotional_impact=9,
-                    emotion_tags=["grief"],
-                )
-            ]
+            return ExtractionResult(
+                events=[
+                    ExtractedEvent(
+                        description="user lost father suddenly",
+                        # Forces SHOCK trigger → reflection runs
+                        emotional_impact=9,
+                        emotion_tags=["grief"],
+                    )
+                ]
+            )
 
         async def exploding_reflect(_nodes, _reason):
             raise RuntimeError("reflection blew up mid-flight")

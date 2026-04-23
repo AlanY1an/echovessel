@@ -38,7 +38,11 @@ from echovessel.memory import (
     create_engine,
 )
 from echovessel.memory.backends.sqlite import SQLiteBackend
-from echovessel.memory.consolidate import ExtractedEvent, consolidate_session
+from echovessel.memory.consolidate import (
+    ExtractedEvent,
+    ExtractionResult,
+    consolidate_session,
+)
 from echovessel.memory.models import ConceptNode
 from echovessel.runtime.consolidate_worker import ConsolidateWorker
 from echovessel.runtime.llm import StubProvider
@@ -120,9 +124,9 @@ async def test_make_extract_fn_returns_empty_list_on_malformed_llm_output() -> N
     llm = StubProvider(fallback="this is definitely not JSON")
     extract_fn = make_extract_fn(llm)
 
-    events = await extract_fn([_make_msg()])
+    result = await extract_fn([_make_msg()])
 
-    assert events == []
+    assert result.events == []
 
 
 async def test_make_extract_fn_returns_empty_on_top_level_array() -> None:
@@ -132,8 +136,8 @@ async def test_make_extract_fn_returns_empty_on_top_level_array() -> None:
     llm = StubProvider(fallback=json.dumps([{"description": "x"}]))
     extract_fn = make_extract_fn(llm)
 
-    events = await extract_fn([_make_msg()])
-    assert events == []
+    result = await extract_fn([_make_msg()])
+    assert result.events == []
 
 
 # ---------------------------------------------------------------------------
@@ -161,11 +165,11 @@ async def test_make_extract_fn_drops_invalid_relational_tags_in_round_trip() -> 
     llm = StubProvider(fallback=json.dumps(payload))
     extract_fn = make_extract_fn(llm)
 
-    events = await extract_fn([_make_msg()])
+    result = await extract_fn([_make_msg()])
 
-    assert len(events) == 1
-    assert events[0].relational_tags == ["identity-bearing"]
-    assert events[0].emotional_impact == -3
+    assert len(result.events) == 1
+    assert result.events[0].relational_tags == ["identity-bearing"]
+    assert result.events[0].emotional_impact == -3
 
 
 # ---------------------------------------------------------------------------
@@ -222,10 +226,12 @@ async def test_consolidate_atomic_when_vector_insert_raises_mid_event() -> None:
         _add_messages(db, sess.id, 4)
 
         async def _extract(_msgs):
-            return [
+            return ExtractionResult(
+                events=[
                 ExtractedEvent(description="event A", emotional_impact=-2),
                 ExtractedEvent(description="event B", emotional_impact=2),
-            ]
+            ],
+            )
 
         async def _reflect(_nodes, _reason):
             return []
@@ -319,7 +325,7 @@ async def test_failed_session_can_be_retried_after_status_flip() -> None:
         db.commit()
 
     async def _extract(_msgs):
-        return [ExtractedEvent(description="unwedged event", emotional_impact=2)]
+        return ExtractionResult(events=[ExtractedEvent(description="unwedged event", emotional_impact=2)])
 
     async def _reflect(_nodes, _reason):
         return []

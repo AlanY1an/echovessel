@@ -24,7 +24,11 @@ from echovessel.memory import (
     unregister_observer,
 )
 from echovessel.memory.backends.sqlite import SQLiteBackend
-from echovessel.memory.consolidate import ExtractedEvent, consolidate_session
+from echovessel.memory.consolidate import (
+    ExtractedEvent,
+    ExtractionResult,
+    consolidate_session,
+)
 from echovessel.memory.ingest import ingest_message
 from echovessel.memory.models import Session as SessionRow
 from echovessel.memory.sessions import mark_session_closing
@@ -98,7 +102,7 @@ async def test_trivial_skip_fires_session_closed(spy):
         db.refresh(session)
 
         async def extract_fn(_messages):
-            return []
+            return ExtractionResult()
 
         closed_before = len(spy.closed_sessions)
         await consolidate_session(
@@ -141,9 +145,11 @@ async def test_non_trivial_consolidate_fires_session_closed(spy):
         db.refresh(session)
 
         async def extract_fn(_messages):
-            return [
+            return ExtractionResult(
+                events=[
                 ExtractedEvent(description="extracted", emotional_impact=2)
-            ]
+            ],
+            )
 
         closed_before = len(spy.closed_sessions)
         await consolidate_session(
@@ -178,7 +184,7 @@ async def test_already_closed_session_does_not_fire(spy):
         db.refresh(session)
 
         async def extract_fn(_messages):
-            return []
+            return ExtractionResult()
 
         # First consolidate: trivial skip → fires once
         await consolidate_session(

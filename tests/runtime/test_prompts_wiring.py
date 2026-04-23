@@ -116,7 +116,8 @@ def _make_nodes() -> list[ConceptNode]:
 async def test_make_extract_fn_happy_path():
     stub = StubProvider(fallback=_EXTRACTION_RESPONSE)
     extract = make_extract_fn(stub)
-    events = await extract(_make_messages())
+    result = await extract(_make_messages())
+    events = result.events
     assert len(events) == 1
     ev = events[0]
     assert isinstance(ev, ExtractedEvent)
@@ -136,7 +137,7 @@ async def test_make_extract_fn_empty_messages_returns_empty_without_calling_llm(
     stub = StubProvider(responder=responder)
     extract = make_extract_fn(stub)
     out = await extract([])
-    assert out == []
+    assert out.events == []
     assert called == []
 
 
@@ -144,7 +145,7 @@ async def test_make_extract_fn_drops_on_parse_error():
     stub = StubProvider(fallback="not json")
     extract = make_extract_fn(stub)
     out = await extract(_make_messages())
-    assert out == []
+    assert out.events == []
 
 
 async def test_make_reflect_fn_happy_path():

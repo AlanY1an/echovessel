@@ -34,7 +34,7 @@ from echovessel.memory import (
     create_engine,
 )
 from echovessel.memory.backends.sqlite import SQLiteBackend
-from echovessel.memory.consolidate import ExtractedEvent
+from echovessel.memory.consolidate import ExtractedEvent, ExtractionResult
 from echovessel.runtime.consolidate_worker import ConsolidateWorker
 
 
@@ -111,12 +111,14 @@ async def test_flipping_extracted_false_triggers_retry_same_worker():
 
     async def extractor(msgs):
         extract_calls.append(len(msgs))
-        return [
-            ExtractedEvent(
-                description=f"run {len(extract_calls)}",
-                emotional_impact=3,
-            )
-        ]
+        return ExtractionResult(
+            events=[
+                ExtractedEvent(
+                    description=f"run {len(extract_calls)}",
+                    emotional_impact=3,
+                )
+            ]
+        )
 
     def _db():
         return DbSession(engine)
@@ -193,7 +195,7 @@ async def test_extracted_session_in_queue_short_circuits():
 
     async def extractor(msgs):
         extract_calls.append(len(msgs))
-        return []
+        return ExtractionResult()
 
     def _db():
         return DbSession(engine)
@@ -244,7 +246,7 @@ async def test_failed_session_not_auto_retried():
 
     async def extractor(msgs):
         extract_calls.append(len(msgs))
-        return []
+        return ExtractionResult()
 
     def _db():
         return DbSession(engine)
