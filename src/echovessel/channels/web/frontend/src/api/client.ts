@@ -55,7 +55,11 @@ import type {
   PersonaStateApi,
   PersonaUpdatePayload,
   PreviewDeleteResponse,
+  StyleUpdatePayload,
+  StyleUpdateResponse,
   ThoughtTraceResponse,
+  UsersTimezonePayload,
+  UsersTimezoneResponse,
   VoiceActivateResponse,
   VoiceCloneResponse,
   VoiceSampleListResponse,
@@ -232,6 +236,35 @@ export async function postVoiceToggle(
   return fetchJson<VoiceToggleResponse>('/api/admin/persona/voice-toggle', {
     method: 'POST',
     body: JSON.stringify({ enabled }),
+  })
+}
+
+/**
+ * POST /api/admin/persona/style — owner-directed voice / style
+ * preference write path (plan §6.6). Three actions: set (replace),
+ * append (join with newline), clear (soft-delete the row).
+ */
+export async function postPersonaStyle(
+  payload: StyleUpdatePayload,
+): Promise<StyleUpdateResponse> {
+  return fetchJson<StyleUpdateResponse>('/api/admin/persona/style', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/**
+ * POST /api/admin/users/timezone — store the local owner's IANA
+ * timezone string. Default behaviour writes only when currently null;
+ * set ``override: true`` to overwrite (Admin UI manual edit path).
+ * Backend 400s on non-IANA strings.
+ */
+export async function postUsersTimezone(
+  payload: UsersTimezonePayload,
+): Promise<UsersTimezoneResponse> {
+  return fetchJson<UsersTimezoneResponse>('/api/admin/users/timezone', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 

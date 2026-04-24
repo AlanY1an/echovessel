@@ -10,11 +10,9 @@
   },
   "topbar": {
     "admin": "管理",
-    "back_to_chat": "返回对话",
-    "mood_unset": "—"
+    "back_to_chat": "返回对话"
   },
   "chat": {
-    "mood_default": "平静、愿意倾听",
     "placeholder": "想说点什么⋯",
     "send": "发送",
     "empty": "还没有消息。随便说点什么开始吧。",
@@ -34,8 +32,7 @@
     "typing": "正在输入",
     "persona_name": "Anya",
     "persona_initial": "A",
-    "persona_sub": "在线 · {{mood}}",
-    "chip_mood": "情绪 · {{mood}}",
+    "persona_sub_plain": "在线",
     "chip_session": "会话 · 当前",
     "day_today": "今天",
     "day_yesterday": "昨天",
@@ -184,10 +181,10 @@
       "self_block_help": "第一人称 · 她怎么看自己",
       "user_block_label": "User block",
       "user_block_help": "第三人称 · 她对你的了解",
-      "mood_block_label": "Mood block",
-      "mood_block_help": "当前情绪 · 会随时间演化",
       "relationship_block_label": "Relationship block",
       "relationship_block_help": "关系描述",
+      "style_block_label": "Style block",
+      "style_block_help": "你希望 persona 说话的风格偏好(例如 '避免开头说哈哈')",
       "import_prompt": "有历史材料想让 persona 记住?",
       "import_cta": "使用 LLM 导入",
       "save_persona": "保存人格"
@@ -360,9 +357,8 @@
       "user_hint": "改这里 = 改 persona 对你的身份级认知(职业、家庭、长期爱好)。",
       "relationship_label": "persona 知道的你身边的人",
       "relationship_hint": "改这里 = 改 persona 对你身边人的理解。按人物分组。",
-      "mood_label": "persona 此刻的情绪",
-      "mood_hint": "改这里 = 临时调整 persona 的当前情绪。",
-      "mood_warning": "下次对话结束后 runtime 会自动刷新覆盖。",
+      "style_label": "说话风格偏好",
+      "style_hint": "改这里 = 给 persona 一条持久的风格指令(例如 '避免用哈哈开头'、'只用 Alan 不用昵称')。留空 = 没有显式偏好。",
       "placeholder_small": "(留空会随对话自动演变)",
       "placeholder_default": "还没写。",
       "char_count": "{{count}} 字",
@@ -393,7 +389,6 @@
     }
   },
   "onboarding": {
-    "topbar_mood": "等你开始",
     "welcome_title": "一个会记住你的人",
     "welcome_punct": "。",
     "welcome_subtitle": "在我们开始之前,先告诉我——这个 persona 是谁?",
@@ -442,8 +437,6 @@
     "review_block_self_hint": "通常在 onboarding 时留空 · 之后由反思自动积累",
     "review_block_user": "persona 知道的你",
     "review_block_relationship": "persona 知道的你身边的人",
-    "review_block_mood": "persona 此刻的情绪",
-    "review_block_mood_hint": "下次对话结束后 runtime 会自动刷新覆盖",
     "writing_persona": "正在写入 persona⋯",
     "review_ready": "审核后点完成",
     "commit_cta": "完成 · 开始对话 →",

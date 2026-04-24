@@ -29,9 +29,9 @@ export interface CrossNav {
   navigateTo(kind: 'event' | 'thought', id: number): void
 }
 
-/** The 5 core-block keys on a persona. Ordered here intentionally —
- *  the Persona tab renders in this order. */
-export type BlockKey = 'persona' | 'self' | 'user' | 'mood' | 'relationship'
+/** The 5 core-block keys on a persona (v0.4 · mood → style). Ordered
+ *  here intentionally — the Persona tab renders in this order. */
+export type BlockKey = 'persona' | 'self' | 'user' | 'relationship' | 'style'
 
 /** Visual metadata bound to each core-block key. Drives the left-
  *  border accent colour and the i18n key for label/hint text. */

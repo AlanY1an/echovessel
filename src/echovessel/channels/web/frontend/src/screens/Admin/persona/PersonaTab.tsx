@@ -35,17 +35,16 @@ const BLOCK_META: BlockMeta[] = [
     hintKey: 'admin.persona_blocks.user_hint',
   },
   {
-    key: 'mood',
-    color: 'oklch(68% 0.13 330)',
-    labelKey: 'admin.persona_blocks.mood_label',
-    hintKey: 'admin.persona_blocks.mood_hint',
-    warningKey: 'admin.persona_blocks.mood_warning',
-  },
-  {
     key: 'relationship',
     color: 'oklch(62% 0.12 80)',
     labelKey: 'admin.persona_blocks.relationship_label',
     hintKey: 'admin.persona_blocks.relationship_hint',
+  },
+  {
+    key: 'style',
+    color: 'oklch(68% 0.13 330)',
+    labelKey: 'admin.persona_blocks.style_label',
+    hintKey: 'admin.persona_blocks.style_hint',
   },
 ]
 

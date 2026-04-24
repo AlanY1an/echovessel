@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   BrowserRouter,
@@ -6,6 +7,7 @@ import {
   Routes,
   useNavigate,
 } from 'react-router-dom'
+import { postUsersTimezone } from './api/client'
 import { Chat } from './screens/Chat'
 import { Onboarding } from './screens/Onboarding'
 import { Admin } from './screens/Admin'
@@ -18,6 +20,24 @@ import type {
   PersonaStateApi,
   PersonaUpdatePayload,
 } from './api/types'
+
+// Best-effort browser IANA timezone detection. Plan decision 5: the
+// web channel posts this on first connect so the daemon can render a
+// dual-timezone ``# Right now`` section. Runs once per mount and
+// silently ignores failures — daemon falls back to single-tz rendering.
+function useTimezoneAutoDetect(): void {
+  useEffect(() => {
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+      if (!tz) return
+      void postUsersTimezone({ timezone: tz, override: false }).catch(() => {
+        /* non-fatal */
+      })
+    } catch {
+      /* non-fatal — older browsers without Intl.DateTimeFormat */
+    }
+  }, [])
+}
 
 export function App() {
   return (
@@ -41,6 +61,8 @@ function AppShell() {
     toggleVoice,
     completeOnboarding,
   } = usePersona()
+
+  useTimezoneAutoDetect()
 
   if (loading && daemonState === null) {
     return <BootScreen />
@@ -78,7 +100,6 @@ function AppShell() {
         element={
           persona !== null ? (
             <ChatRoute
-              moodBlock={persona.core_blocks.mood}
               displayName={persona.display_name}
               voiceEnabled={persona.voice_enabled}
               voiceId={persona.voice_id}
@@ -115,13 +136,11 @@ function AppShell() {
 // ─── Route wrappers (inject useNavigate) ───
 
 function ChatRoute({
-  moodBlock,
   displayName,
   voiceEnabled,
   voiceId,
   hasAvatar,
 }: {
-  moodBlock: string
   displayName: string
   voiceEnabled: boolean
   voiceId: string | null
@@ -130,7 +149,6 @@ function ChatRoute({
   const navigate = useNavigate()
   return (
     <Chat
-      moodBlock={moodBlock}
       displayName={displayName}
       voiceEnabled={voiceEnabled}
       voiceId={voiceId}
