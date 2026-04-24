@@ -468,6 +468,75 @@ export interface ChatMoodUpdateData {
   mood_summary: string
 }
 
+// ─── Spec 3 · Memory Timeline (per-write SSE) ────────────────────────────
+
+/**
+ * Emitted by ``RuntimeMemoryObserver.on_event_created`` right after a
+ * new L3 event row commits (both consolidate and import paths fire).
+ * Drives the Memory Timeline sidebar's "记住了…" row.
+ */
+export interface MemoryEventCreatedData {
+  event_id: number
+  persona_id: string
+  user_id: string
+  description: string
+  emotional_impact: number
+  session_id: string | null
+  created_at: string | null
+}
+
+/**
+ * Emitted by ``RuntimeMemoryObserver.on_thought_created`` right after a
+ * new L4 thought / intention / expectation row commits. ``source`` is
+ * ``'reflection'`` | ``'slow_tick'`` | ``'import'`` and lets the UI
+ * pick the icon (🧠 for slow_tick parallel-existing, 💭 for
+ * reflection/summary).
+ */
+export interface MemoryThoughtCreatedData {
+  thought_id: number
+  persona_id: string
+  user_id: string
+  type: 'thought' | 'intention' | 'expectation'
+  subject: string
+  description: string
+  source: 'reflection' | 'slow_tick' | 'import'
+  session_id: string | null
+  filling_event_ids: number[]
+  created_at: string | null
+}
+
+/**
+ * Emitted by ``RuntimeMemoryObserver.on_entity_confirmed`` when a new
+ * L5 entity is resolved or an existing one alias-merges. Uncertain
+ * entities (``merge_status='uncertain'``) are filtered server-side and
+ * never reach this event.
+ */
+export interface MemoryEntityConfirmedData {
+  entity_id: number
+  persona_id: string
+  user_id: string
+  canonical_name: string
+  kind: string // 'person' | 'place' | 'org' | 'pet' | 'other'
+  merge_status: 'confirmed' | 'disambiguated'
+  created_at: string | null
+}
+
+/**
+ * Emitted by ``RuntimeMemoryObserver.on_entity_description_updated``
+ * when slow_tick synthesizes a description for an entity, or when the
+ * admin owner-overrides one. ``source`` distinguishes the two paths.
+ */
+export interface MemoryEntityDescriptionUpdatedData {
+  entity_id: number
+  persona_id: string
+  user_id: string
+  canonical_name: string
+  kind: string
+  description: string
+  source: 'slow_tick' | 'owner'
+  updated_at: string | null
+}
+
 /**
  * Emitted when the voice TTS pipeline finishes generating audio for a
  * message. Not yet emitted by the backend in Stage 2 — the hook branch
@@ -510,6 +579,13 @@ export type ChatEvent =
   | { event: 'chat.mood.update'; data: ChatMoodUpdateData }
   | { event: 'chat.message.voice_ready'; data: ChatMessageVoiceReadyData }
   | { event: 'chat.message.error'; data: ChatMessageErrorData }
+  | { event: 'memory.event.created'; data: MemoryEventCreatedData }
+  | { event: 'memory.thought.created'; data: MemoryThoughtCreatedData }
+  | { event: 'memory.entity.confirmed'; data: MemoryEntityConfirmedData }
+  | {
+      event: 'memory.entity.description_updated'
+      data: MemoryEntityDescriptionUpdatedData
+    }
 
 /**
  * List of SSE event names the useSSE hook must register listeners for.
@@ -527,6 +603,10 @@ export const KNOWN_CHAT_EVENT_NAMES: readonly ChatEvent['event'][] = [
   'chat.mood.update',
   'chat.message.voice_ready',
   'chat.message.error',
+  'memory.event.created',
+  'memory.thought.created',
+  'memory.entity.confirmed',
+  'memory.entity.description_updated',
 ] as const
 
 // ─── HTTP · GET /api/admin/memory/{events,thoughts} ─────────────────────
@@ -636,6 +716,38 @@ export interface DeleteResponse {
   deleted: true
   node_id: number
   choice: DeleteChoice
+}
+
+// ─── HTTP · GET /api/admin/memory/timeline (Spec 3) ─────────────────────
+
+/**
+ * One row in the backfill response. ``kind`` is the discriminator that
+ * the Chat Memory Timeline sidebar switches on to pick which sub-component
+ * renders (event vs. thought vs. entity vs. mood vs. session_close).
+ *
+ * ``timestamp`` is ISO-8601 (the canonical created_at / updated_at /
+ * extracted_at for that kind, picked server-side). Items are always
+ * sorted newest-first on the wire; the client re-sorts after merging
+ * with live SSE events.
+ */
+export type MemoryTimelineItemKind =
+  | 'event'
+  | 'thought'
+  | 'entity'
+  | 'entity_description'
+  | 'mood'
+  | 'session_close'
+
+export interface MemoryTimelineItem {
+  kind: MemoryTimelineItemKind
+  timestamp: string
+  data: Record<string, unknown>
+}
+
+export interface MemoryTimelineResponse {
+  items: MemoryTimelineItem[]
+  oldest_timestamp: string | null
+  limit: number
 }
 
 // ─── HTTP · GET /api/admin/memory/search ────────────────────────────────
