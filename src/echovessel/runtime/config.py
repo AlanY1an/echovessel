@@ -239,6 +239,50 @@ class IdleScannerSection(BaseModel):
     interval_seconds: float = Field(default=60.0, ge=1.0, le=3600.0)
 
 
+class SlowTickSection(BaseModel):
+    """Slow-tick reflection phase configuration (plan §7 · Spec 6).
+
+    Slow tick runs at the tail of `consolidate_worker._process_one`
+    (phase G) when session close produces enough new events and the
+    cool-down has elapsed. It aggregates across recent sessions and
+    writes typed thoughts + expectations + (rarely) a single
+    self-narrative append line.
+
+    ``enabled=false`` is the kill switch — when flipped off, the G
+    phase is a no-op, period. No cleanup, no residual state.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+
+    # Main-path trigger: minimum minutes between cycles for the same
+    # persona. SHOCK / correction bypass this (plan §7.2).
+    cool_down_minutes: int = Field(default=30, ge=0, le=1440)
+
+    # Daily budget (plan §7.4). Touch any wall → raise
+    # SlowCycleBudgetExceeded and log a warning; the session is
+    # already CLOSED so nothing unwinds.
+    daily_cap: int = Field(default=36, ge=1, le=1000)
+    daily_input_token_budget: int = Field(default=150_000, ge=1_000, le=10_000_000)
+    daily_output_token_budget: int = Field(default=30_000, ge=1_000, le=10_000_000)
+
+    # Per-cycle token walls. Input over → truncate recent_events head-first
+    # (keeping the most recent). Output over → accept the truncated JSON,
+    # no retry.
+    input_token_limit: int = Field(default=8_000, ge=500, le=100_000)
+    output_token_limit: int = Field(default=1_000, ge=200, le=10_000)
+
+    # Transcript retention (dev aid). MVP: filesystem under
+    # ``<data_dir>/slow_tick_transcripts``.
+    transcript_retention_days: int = Field(default=14, ge=0, le=365)
+
+    # Slow cycle LLM role from the main llm table. Reuses the
+    # consolidate fast role by default to avoid another tier; can be
+    # overridden per deployment.
+    llm_model_role: str = "fast"
+
+
 class ProactiveSection(BaseModel):
     """Proactive scheduler configuration.
 
@@ -487,6 +531,7 @@ class Config(BaseModel):
     llm: LLMSection
     consolidate: ConsolidateSection = Field(default_factory=ConsolidateSection)
     idle_scanner: IdleScannerSection = Field(default_factory=IdleScannerSection)
+    slow_tick: SlowTickSection = Field(default_factory=SlowTickSection)
     proactive: ProactiveSection = Field(default_factory=ProactiveSection)
     voice: VoiceSection = Field(default_factory=VoiceSection)
     channels: ChannelsSection = Field(default_factory=ChannelsSection)
@@ -541,6 +586,7 @@ __all__ = [
     "LLMSection",
     "ConsolidateSection",
     "IdleScannerSection",
+    "SlowTickSection",
     "ProactiveSection",
     "VoiceSection",
     "ChannelsSection",

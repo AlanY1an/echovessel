@@ -647,3 +647,48 @@ class ConceptNodeEntity(SQLModel, table=True):
 
     node_id: int = Field(primary_key=True, foreign_key="concept_nodes.id")
     entity_id: int = Field(primary_key=True, foreign_key="entities.id")
+
+
+# ---------------------------------------------------------------------------
+# Slow tick · daily stats (Spec 6)
+# ---------------------------------------------------------------------------
+
+
+class SlowCycleStats(SQLModel, table=True):
+    """Daily aggregate of slow-cycle runs per persona (plan §7.4).
+
+    One row per (date, persona_id) that a slow cycle has ever run for.
+    ``memory.slow_cycle.run_slow_cycle`` reads the row to gate the
+    daily cap + token budgets, then UPSERTs the updated counters at
+    the end of the cycle (successful or otherwise). A missing row
+    means "zero cycles today" — callers use ``get_daily_slow_cycle_stats``
+    which materialises an in-memory default rather than inserting an
+    empty row.
+
+    Lives on the memory layer because the daily budget is a persistent
+    invariant of the system, not a runtime-only preference — if the
+    daemon restarts mid-day, the budget must survive.
+    """
+
+    __tablename__ = "slow_cycle_stats"
+    __table_args__ = (
+        Index("idx_slow_cycle_stats_persona_date", "persona_id", "date"),
+    )
+
+    date: str = Field(primary_key=True)  # YYYY-MM-DD in persona local date
+    persona_id: str = Field(primary_key=True, foreign_key="personas.id")
+    cycle_count: int = Field(default=0)
+    input_tokens: int = Field(default=0)
+    output_tokens: int = Field(default=0)
+    last_cycle_at: datetime | None = Field(default=None)
+    created_at: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(
+            DateTime,
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        )
+    )

@@ -224,6 +224,23 @@ _V0_4_NEW_TABLES: tuple[tuple[str, str], ...] = (
         """,
     ),
     (
+        "slow_cycle_stats",
+        """
+        CREATE TABLE IF NOT EXISTS slow_cycle_stats (
+            date TEXT NOT NULL,
+            persona_id TEXT NOT NULL,
+            cycle_count INTEGER NOT NULL DEFAULT 0,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            last_cycle_at DATETIME,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (date, persona_id),
+            FOREIGN KEY(persona_id) REFERENCES personas (id)
+        )
+        """,
+    ),
+    (
         "concept_node_entities",
         """
         CREATE TABLE IF NOT EXISTS concept_node_entities (
