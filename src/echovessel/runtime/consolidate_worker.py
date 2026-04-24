@@ -348,12 +348,11 @@ class ConsolidateWorker:
                 observer=self.observer,
             )
             log.info(
-                "slow cycle for session %s: ran=%s thoughts=%d expectations=%d self_appended=%s",
+                "slow cycle for session %s: ran=%s thoughts=%d expectations=%d",
                 session.id,
                 result.ran,
                 len(result.thought_ids),
                 len(result.expectation_ids),
-                result.self_appended,
             )
         except SlowCycleBudgetExceeded as e:
             log.warning(

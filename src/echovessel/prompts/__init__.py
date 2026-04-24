@@ -35,8 +35,6 @@ from echovessel.prompts.judge import (
 )
 from echovessel.prompts.persona_bootstrap import (
     MAX_PERSONA_BLOCK_CHARS,
-    MAX_RELATIONSHIP_BLOCK_CHARS,
-    MAX_SELF_BLOCK_CHARS,
     MAX_USER_BLOCK_CHARS,
     PERSONA_BOOTSTRAP_SYSTEM_PROMPT,
     BootstrappedBlocks,
@@ -72,7 +70,6 @@ from echovessel.prompts.slow_cycle import (
     MAX_NEW_EXPECTATIONS,
     MAX_NEW_THOUGHTS,
     MAX_SALIENT_QUESTIONS,
-    SELF_NARRATIVE_APPEND_CHAR_CAP,
     SLOW_CYCLE_SYSTEM_PROMPT,
     RawSlowExpectation,
     RawSlowThought,
@@ -114,9 +111,7 @@ __all__ = [
     # persona bootstrap
     "PERSONA_BOOTSTRAP_SYSTEM_PROMPT",
     "MAX_PERSONA_BLOCK_CHARS",
-    "MAX_SELF_BLOCK_CHARS",
     "MAX_USER_BLOCK_CHARS",
-    "MAX_RELATIONSHIP_BLOCK_CHARS",
     "BootstrappedBlocks",
     "PersonaBootstrapParseError",
     "format_persona_bootstrap_user_prompt",
@@ -139,7 +134,6 @@ __all__ = [
     "MAX_SALIENT_QUESTIONS",
     "MAX_NEW_THOUGHTS",
     "MAX_NEW_EXPECTATIONS",
-    "SELF_NARRATIVE_APPEND_CHAR_CAP",
     "RawSlowThought",
     "RawSlowExpectation",
     "SlowCycleParseError",

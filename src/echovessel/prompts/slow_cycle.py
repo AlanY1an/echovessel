@@ -13,8 +13,6 @@ produces:
   - ``new_thoughts``: cross-event observations (L4 thought, subject=persona)
   - ``new_expectations``: forward-looking predictions the persona thinks
     the user will bring up (L4 expectation, subject=persona, optional due_at)
-  - ``self_narrative_append``: at most one short line appended to
-    core_blocks.self (hard-bounded edit distance ≤ 20% upstream)
 
 The prompt is deliberately narrow — it cannot propose "new goals", new
 external actions, or schedule future work. Those negative constraints
@@ -67,9 +65,6 @@ You MAY ONLY output the typed JSON fields below. You may NOT:
     conversation (no "I should text Alan tomorrow", no scheduling).
   - Invent new event ids that were not in the input list.
   - Write free-form narrative outside the typed fields.
-  - Fabricate a `self_narrative_append` that is not grounded in the
-    supplied events — leave it null if events did not genuinely shift
-    self-view.
   - Produce more than 3 thoughts or 2 expectations per cycle.
   - Echo the user's most recent message verbatim; this runs between
     turns, not during a turn.
@@ -90,7 +85,6 @@ Runtime packs a JSON object into the user message with these keys:
 
   recent_events: list of {id, description, emotional_impact,
                            emotion_tags, created_at_iso}
-  self_block_text: current contents of the persona's self block
   recent_thoughts: list of descriptions from the last few thoughts
   elapsed_hours: how long since the last slow cycle ran
   now_iso: the current wall-clock time in ISO 8601
@@ -119,8 +113,7 @@ no code fences, no prose before or after the JSON:
       "reasoning_event_ids": [int, ...],
       "emotional_impact": int
     }
-  ],
-  "self_narrative_append": "<=200 char single line" | null
+  ]
 }
 
 Constraints (enforced by the parser; violations drop the cycle):
@@ -136,8 +129,6 @@ Constraints (enforced by the parser; violations drop the cycle):
         in `recent_events`
       · due_at is ISO 8601 (date or datetime) or null
       · emotional_impact in [-10, +10]
-  - self_narrative_append: null OR a single line ≤ 200 chars. The
-    upstream writer enforces an edit-distance bound on top of this.
 
 Typical cycle: zero new thoughts and zero expectations is a valid
 output — "nothing moved this week" is a real answer. The parser will
@@ -155,7 +146,6 @@ accept an empty shell as long as the shape is correct.
 MAX_SALIENT_QUESTIONS: int = 3
 MAX_NEW_THOUGHTS: int = 3
 MAX_NEW_EXPECTATIONS: int = 2
-SELF_NARRATIVE_APPEND_CHAR_CAP: int = 200
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,7 +171,6 @@ class SlowCycleParseResult:
     salient_questions: list[str] = field(default_factory=list)
     new_thoughts: list[RawSlowThought] = field(default_factory=list)
     new_expectations: list[RawSlowExpectation] = field(default_factory=list)
-    self_narrative_append: str | None = None
 
 
 class SlowCycleParseError(ValueError):
@@ -196,7 +185,6 @@ class SlowCycleParseError(ValueError):
 def format_slow_cycle_user_prompt(
     *,
     recent_events: list[dict[str, Any]],
-    self_block_text: str,
     recent_thoughts: list[str],
     elapsed_hours: float,
     now_iso: str,
@@ -209,16 +197,15 @@ def format_slow_cycle_user_prompt(
     """
     payload = {
         "recent_events": recent_events,
-        "self_block_text": self_block_text,
         "recent_thoughts": recent_thoughts,
         "elapsed_hours": round(elapsed_hours, 2),
         "now_iso": now_iso,
     }
     return (
-        "Below is a compact snapshot of the user's recent stream and your\n"
-        "current self-narrative. Reflect on it and produce the typed JSON\n"
-        "described in the system prompt. If nothing meaningful has shifted,\n"
-        "return empty arrays and null fields — do not fabricate.\n\n"
+        "Below is a compact snapshot of the user's recent stream and the\n"
+        "persona's recent private reflections. Reflect on it and produce\n"
+        "the typed JSON described in the system prompt. If nothing\n"
+        "meaningful has shifted, return empty arrays — do not fabricate.\n\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2, default=str)}\n\n"
         "Produce the JSON output now."
     )
@@ -264,15 +251,11 @@ def parse_slow_cycle_response(
     new_expectations = _parse_new_expectations(
         data.get("new_expectations", []), input_event_ids=input_event_ids
     )
-    self_narrative_append = _parse_self_narrative_append(
-        data.get("self_narrative_append")
-    )
 
     return SlowCycleParseResult(
         salient_questions=salient_questions,
         new_thoughts=new_thoughts,
         new_expectations=new_expectations,
-        self_narrative_append=self_narrative_append,
     )
 
 
@@ -403,29 +386,6 @@ def _parse_new_expectations(
     return out
 
 
-def _parse_self_narrative_append(value: Any) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise SlowCycleParseError(
-            f"'self_narrative_append' must be string or null, got {type(value).__name__}"
-        )
-    stripped = value.strip()
-    if not stripped:
-        return None
-    if "\n" in stripped:
-        # Collapse to a single line per spec — we keep the first line.
-        stripped = stripped.splitlines()[0].strip()
-    if len(stripped) > SELF_NARRATIVE_APPEND_CHAR_CAP:
-        logger.warning(
-            "self_narrative_append %d chars > cap %d, truncating",
-            len(stripped),
-            SELF_NARRATIVE_APPEND_CHAR_CAP,
-        )
-        stripped = stripped[:SELF_NARRATIVE_APPEND_CHAR_CAP]
-    return stripped
-
-
 def _coerce_id_list(
     value: Any,
     *,
@@ -501,7 +461,6 @@ __all__ = [
     "MAX_SALIENT_QUESTIONS",
     "RawSlowExpectation",
     "RawSlowThought",
-    "SELF_NARRATIVE_APPEND_CHAR_CAP",
     "SLOW_CYCLE_SYSTEM_PROMPT",
     "SlowCycleParseError",
     "SlowCycleParseResult",

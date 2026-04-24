@@ -292,7 +292,6 @@ def make_slow_cycle_fn(
         }
         user_prompt = format_slow_cycle_user_prompt(
             recent_events=list(events),
-            self_block_text=input_dict.get("self_block_text", "") or "",
             recent_thoughts=list(input_dict.get("recent_thoughts") or []),
             elapsed_hours=float(input_dict.get("elapsed_hours") or 0.0),
             now_iso=input_dict.get("now_iso", ""),
@@ -342,7 +341,6 @@ def make_slow_cycle_fn(
             salient_questions=list(parsed.salient_questions),
             new_thoughts=thoughts,
             new_expectations=expectations,
-            self_narrative_append=parsed.self_narrative_append,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
