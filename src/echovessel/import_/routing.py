@@ -2,36 +2,25 @@
 
 Two responsibilities:
 
-1. :func:`translate_llm_write` — collapse the 6-target LLM union
-   (``L1.persona_block`` / ``L1.self_block`` / ``L1.user_block`` /
-   ``L1.relationship_block`` / ``L3.event`` / ``L4.thought``) into the
-   5-content-type memory whitelist. Validates fields and returns a
-   :class:`ContentItem` ready for dispatch — or ``None`` when the
-   write must be dropped (e.g. confidence below 0.5, missing required
-   fields, etc.).
+1. :func:`translate_llm_write` — collapse the 4-target LLM union
+   (``L1.persona_block`` / ``L1.user_block`` / ``L3.event`` /
+   ``L4.thought``) into the four-content-type memory whitelist.
+   Validates fields and returns a :class:`ContentItem` ready for
+   dispatch — or ``None`` when the write must be dropped (e.g.
+   confidence below 0.5, missing required fields, etc.).
 
-2. :func:`dispatch_item` — actually call ``memory.import_content`` (or
-   ``memory.append_to_core_block`` for the self_block side path) in
+2. :func:`dispatch_item` — actually call ``memory.import_content`` in
    the caller's DB session. Returns the fresh row IDs.
 
-Hard-coded behavior decisions (tracker §2.1 mapping divergence):
+v0.5 cleanup: ``L1.self_block`` and ``L1.relationship_block`` were
+removed (plan §1). Persona-side reflection routes to L4.thought with
+``subject='persona'`` via slow_cycle; third-party people / places /
+orgs route to the L5 entities table via the extraction pipeline.
+Importer LLMs that still emit those legacy targets see a
+``ValueError`` here — no silent compatibility shim (CLAUDE.md
+``no backcompat shims`` rule).
 
-* ``L1.self_block`` has **no** direct memory import_content bucket in
-  M-round3. We side-path it through ``append_to_core_block`` with
-  ``label="self"`` because:
-  - the authoritative prompt ships 6 targets and self_block is the
-    persona's first-person self-concept — it's semantically distinct
-    from persona_block;
-  - ``memory.append_to_core_block`` already accepts every
-    :class:`BlockLabel` including ``SELF``;
-  - collapsing self_block into persona_block would erase information
-    the LLM deliberately separates.
-  The side-path is logged as a ``RoutingError`` flavour when it fails,
-  and the resulting rows show up under a synthetic
-  ``content_type="persona_self_traits"`` counter in the report for
-  audit — but this label is NEVER passed to ``import_content``
-  (which would raise ValueError). See the README note for the
-  spec divergence.
+Hard-coded behavior decisions (tracker §2.1 mapping divergence):
 
 * Confidence gate: L1.* writes with ``confidence < 0.5`` are silently
   dropped (mirrors import spec §5.4).
@@ -47,7 +36,6 @@ from typing import Any
 
 from sqlmodel import Session as DbSession
 
-from echovessel.core.types import BlockLabel
 from echovessel.import_.errors import RoutingError
 from echovessel.import_.models import (
     ALLOWED_CONTENT_TYPES,
@@ -56,26 +44,16 @@ from echovessel.import_.models import (
 )
 from echovessel.memory.imports import (
     ImportResult,
-    append_to_core_block,
     import_content,
 )
 
 log = logging.getLogger(__name__)
 
 
-#: Internal synthetic content type for self_block writes so the
-#: PipelineReport can distinguish them from persona_traits.
-#: Never passed to ``memory.import_content``.
-_SELF_BLOCK_MARKER: str = "persona_self_traits"
-
-
-#: Target → memory content_type mapping table. Present for the five
-#: content_types the memory API accepts directly; ``L1.self_block``
-#: is handled separately (see module docstring).
+#: Target → memory content_type mapping table. v0.5 · 4 targets only.
 _TARGET_TO_CONTENT_TYPE: dict[str, str] = {
     "L1.persona_block": "persona_traits",
     "L1.user_block": "user_identity_facts",
-    "L1.relationship_block": "relationship_facts",
     "L3.event": "user_events",
     "L4.thought": "user_reflections",
 }
@@ -127,35 +105,6 @@ def translate_llm_write(
             raw_target=target,
         )
 
-    # ----- L1.self_block → self_block append side path -----------
-    if target == "L1.self_block":
-        content = _require_short_content(raw_write)
-        if _confidence(raw_write) < _MIN_CONFIDENCE:
-            return None
-        # We still wrap it in a ContentItem so pipeline can dispatch
-        # uniformly — but the dispatcher notices the marker and takes
-        # the ``append_to_core_block(label="self")`` path instead of
-        # calling ``import_content`` (which would ValueError on the
-        # marker string — that's still tested separately for the
-        # strict-whitelist invariant).
-        return ContentItem(
-            # Map to persona_traits so the content_type passes the
-            # dataclass whitelist check; dispatcher will inspect
-            # ``raw_target`` and re-route to the self_block writer.
-            content_type="persona_traits",
-            payload={
-                "persona_id": persona_id,
-                "user_id": user_id,
-                "content": content,
-                "source_label": chunk.source_label,
-                "chunk_index": chunk.chunk_index,
-                "_self_block": True,
-            },
-            chunk_index=chunk.chunk_index,
-            evidence_quote=evidence,
-            raw_target=target,
-        )
-
     # ----- L1.user_block → user_identity_facts -------------------
     if target == "L1.user_block":
         content = _require_short_content(raw_write)
@@ -169,29 +118,6 @@ def translate_llm_write(
                 "user_id": user_id,
                 "content": content,
                 "category": category,
-                "source_label": chunk.source_label,
-                "chunk_index": chunk.chunk_index,
-            },
-            chunk_index=chunk.chunk_index,
-            evidence_quote=evidence,
-            raw_target=target,
-        )
-
-    # ----- L1.relationship_block → relationship_facts ------------
-    if target == "L1.relationship_block":
-        content = _require_short_content(raw_write)
-        person_label = str(raw_write.get("person_label", "")).strip()
-        if not person_label:
-            raise ValueError("relationship_block missing person_label")
-        if _confidence(raw_write) < _MIN_CONFIDENCE:
-            return None
-        return ContentItem(
-            content_type="relationship_facts",
-            payload={
-                "persona_id": persona_id,
-                "user_id": user_id,
-                "content": content,
-                "person_label": person_label,
                 "source_label": chunk.source_label,
                 "chunk_index": chunk.chunk_index,
             },
@@ -295,32 +221,7 @@ def dispatch_item(
             f"Allowed: {sorted(ALLOWED_CONTENT_TYPES)}"
         )
 
-    # Handle the self_block side path: the routing table collapsed
-    # self_block into the persona_traits content_type to pass the
-    # whitelist, but flagged the payload with ``_self_block=True`` so
-    # we take the ``append_to_core_block(label="self")`` path.
     payload = dict(item.payload)
-    if payload.pop("_self_block", False):
-        append = append_to_core_block(
-            db,
-            persona_id=payload["persona_id"],
-            user_id=None,  # self_block is shared (user_id NULL)
-            label=BlockLabel.SELF.value,
-            content=payload["content"],
-            provenance={
-                "imported_from": source,
-                "source_label": payload.get("source_label", ""),
-                "chunk_index": payload.get("chunk_index"),
-                "raw_target": "L1.self_block",
-            },
-        )
-        return (
-            ImportResult(
-                content_type=_SELF_BLOCK_MARKER,
-                core_block_append_ids=(append.id,) if append.id is not None else (),
-            ),
-            [],
-        )
 
     if item.content_type == "user_events":
         result = import_content(
@@ -340,7 +241,7 @@ def dispatch_item(
         )
         return result, list(result.thought_ids)
 
-    # persona_traits / user_identity_facts / relationship_facts
+    # persona_traits / user_identity_facts
     result = import_content(
         db,
         source=source,

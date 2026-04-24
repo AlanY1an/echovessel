@@ -50,14 +50,15 @@ RELATIONAL_TAG_VOCAB: frozenset[str] = frozenset(
 )
 
 
-#: The six legal LLM-side targets. Routing collapses these to the five
-#: memory-side content_types in ``routing.py``.
+#: The four legal LLM-side targets (v0.5 · plan §1). ``L1.self_block``
+#: and ``L1.relationship_block`` were removed alongside the deletion of
+#: their core_block labels — persona-side reflection now writes
+#: L4.thought with ``subject='persona'``; third-party people / places
+#: route to the L5 entities table via the consolidate extraction path.
 LEGAL_LLM_TARGETS: frozenset[str] = frozenset(
     {
         "L1.persona_block",
-        "L1.self_block",
         "L1.user_block",
-        "L1.relationship_block",
         "L3.event",
         "L4.thought",
     }
@@ -70,15 +71,13 @@ system. Your input is a CHUNK of external text that the user is importing
 into the persona's memory.
 
 Your job: read the chunk and output a list of atomic MEMORY WRITES that
-this chunk justifies. Each write targets ONE of six legal memory
+this chunk justifies. Each write targets ONE of four legal memory
 locations, and each write carries a verbatim EVIDENCE QUOTE from the
 chunk text.
 
-# Six legal targets (no others)
+# Four legal targets (no others)
 - L1.persona_block        identity-level fact about the persona
-- L1.self_block           persona's own self-concept, first person
 - L1.user_block           fact about the user, requires `category`
-- L1.relationship_block   fact about a named third person, requires `person_label`
 - L3.event                discrete episode, requires emotional_impact/emotion_tags
 - L4.thought              persona first-person reflection, NOT user-authored
 
