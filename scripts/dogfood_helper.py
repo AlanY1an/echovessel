@@ -28,7 +28,7 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 DB = Path.home() / ".echovessel" / "memory.db"
@@ -44,7 +44,7 @@ def _conn() -> sqlite3.Connection:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.utcnow().isoformat()
 
 
 def close_current() -> None:
@@ -92,7 +92,7 @@ def force_reextract(session_id: str) -> None:
 def seed_case_7(persona_id: str = "default", user_id: str = "self") -> None:
     """Insert an event dated a week ago with an explicit event_time window."""
     conn = _conn()
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()
     one_week_ago = now - timedelta(days=7)
     event_day = now - timedelta(days=2)
 
@@ -132,7 +132,7 @@ def seed_case_7(persona_id: str = "default", user_id: str = "self") -> None:
 def seed_case_8(persona_id: str = "default", user_id: str = "self") -> None:
     """Two events, one per alias ('Scott' and '黄逸扬'), + the entity + 2 alias rows."""
     conn = _conn()
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()
 
     # Insert entity
     cur = conn.execute(
@@ -181,7 +181,7 @@ def seed_case_8(persona_id: str = "default", user_id: str = "self") -> None:
 def seed_case_9(persona_id: str = "default", user_id: str = "self") -> None:
     """Inject a slow_cycle-style L4 thought so case 9 has something retrievable."""
     conn = _conn()
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()
     cur = conn.execute(
         """INSERT INTO concept_nodes (
             persona_id, user_id, type, subject, description,
