@@ -129,21 +129,21 @@ The persona reply is written to memory **before** the channel is told to send. I
 
 `on_turn_done` is always called exactly once, from a `finally` block at the bottom of `assemble_turn`. On a successful turn, on a transient LLM error that kept partial tokens, on a permanent LLM error that produced nothing, on a memory ingest failure — the channel is always notified. Without this invariant a channel's debounce state machine could hang permanently waiting for a turn that already ended.
 
-### Prompt section order (v0.4)
+### Prompt section order
 
-`assemble_turn` step 5 builds the system and user prompts in a fixed order. The order itself is part of the prompt engineering — LLMs anchor strongest on the last block they read, so "what the user is saying right now" must be at the end and "who the persona is" must be at the start. Any mid-section reordering should land via a plan §6.4 update, not a casual edit.
+`assemble_turn` step 5 builds the system and user prompts in a fixed order. The order itself is part of the prompt engineering — LLMs anchor strongest on the last block they read, so "what the user is saying right now" must be at the end and "who the persona is" must be at the start. Any mid-section reordering is a deliberate change to a stable contract, not a casual edit.
 
 **System prompt (`build_system_prompt`)**:
 
 1. `You are {persona_display_name}, a long-term companion who talks with this user as a real friend, not an assistant.` — opener, single line.
-2. `# Right now` — dual-timezone. Line one is the user's local wall-clock (`IncomingMessage.received_at`, with tz). When `personas.timezone` carries an IANA zone, line two appends the persona's "conceptually based" time. This is plan case 1 ("台湾不是下午吗") solved.
+2. `# Right now` — dual-timezone. Line one is the user's local wall-clock (`IncomingMessage.received_at`, with tz). When `personas.timezone` carries an IANA zone, line two appends the persona's "conceptually based" time. Both lines render so the persona can answer "isn't it afternoon for you?" in user-local terms while still tracking its own implied location.
 3. `# Who you are` — seven biographic facts from `PersonaFactsView`: `Name / Gender / Born / Nationality / Based in / Occupation / Native language`. Each `None` field skips its bullet; an all-`None` view skips the whole section. `timezone` is on the view but only feeds the dual-tz renderer in `# Right now`, never a bullet.
 4. `# How you feel right now` — L6 episodic state. Skipped entirely while mood is the default `neutral` (keeps the prompt terse). Otherwise renders `mood`, `energy /10`, and (when present) a `last sense from them` line.
 5. L1 core blocks in this order: `# Persona` / `# About yourself (private self-narrative)` / `# About the user` / `# Relationship` / `# Style preferences`. Missing blocks are silently skipped.
 6. `# Entity disambiguation pending` — injected by retrieve only when the current query alias-matches an entity with `merge_status='uncertain'`. Describes the ambiguity and asks the LLM to clarify with the user mid-flow.
 7. `STYLE_INSTRUCTIONS` — hardcoded · always last. Carries the F10 transport-name ban, the competence-boundary lines ("我刚才说错了" / "I got that wrong" · do not retrofit · do not invent), and the negative few-shot block lifted from `prompts/judge.py` anti-patterns (formulaic opener / generic affect label / empty reassurance / strategy lock, etc).
 
-**User prompt (`build_user_prompt`)** — Spec 5 §6.4 section order, walking older context first:
+**User prompt (`build_user_prompt`)** — section order, walking older context first:
 
 1. `# Recent sessions` — up to five most-recent `session_summary` L4 thoughts (each session-close yields one as a side-effect of the extraction LLM). Each line carries a day-bucket prefix (`[Older] / [Earlier this week] / [Yesterday] / [Earlier today] / [Just now]`). Skipped when empty.
 2. `# Recent thoughts you've had about this person` — descriptions of `type='thought'` rows from the retrieve rerank top_k. Skipped when empty.

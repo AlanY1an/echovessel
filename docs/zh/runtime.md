@@ -129,21 +129,21 @@ Persona 的回复**先写进 memory,再让 channel 发出去**。如果写入失
 
 `on_turn_done` 永远恰好被调一次,位置是 `assemble_turn` 底部的 `finally` 块。Turn 成功时、LLM 瞬时错误只留下部分 token 时、LLM 永久错误一个 token 都没出来时、memory ingest 失败时——channel 永远被通知。没有这条不变式,一个 channel 的 debounce 状态机会永远挂在那里等一个早就结束的 turn。
 
-### Prompt 段顺序（v0.4）
+### Prompt 段顺序
 
-`assemble_turn` 的 step 5 把 system prompt 和 user prompt 按固定顺序组起来。顺序本身是 prompt 工程的一部分——LLM 对最后读到的段最敏感,所以"现在用户要说什么"必须在最末,"persona 是谁"必须在最前。任何中段的重排都要走 plan §6.4 而不是随手改。
+`assemble_turn` 的 step 5 把 system prompt 和 user prompt 按固定顺序组起来。顺序本身是 prompt 工程的一部分——LLM 对最后读到的段最敏感,所以"现在用户要说什么"必须在最末,"persona 是谁"必须在最前。任何中段的重排都不该是顺手改——契约是稳定的。
 
 **System prompt（`build_system_prompt`）**:
 
 1. `You are {persona_display_name}, a long-term companion who talks with this user as a real friend, not an assistant.` — opener,只一行。
-2. `# Right now` — 双时区。第一行是 user 的本地时间（`IncomingMessage.received_at`,带 tz）。如果 `personas.timezone` 设了一个 IANA zone,第二行附 persona 的"概念上所在地"时间。这是 plan case 1（"台湾不是下午吗"）的解。
+2. `# Right now` — 双时区。第一行是 user 的本地时间（`IncomingMessage.received_at`,带 tz）。如果 `personas.timezone` 设了一个 IANA zone,第二行附 persona 的"概念上所在地"时间。两行同时渲染,这样 persona 在以 user-local 时间回应（"你那边不是下午吗"）的同时仍能保持自己的所在地一致性。
 3. `# Who you are` — `PersonaFactsView` 里的 7 项 biographic facts:`Name / Gender / Born / Nationality / Based in / Occupation / Native language`。每一项 None 时跳过该 bullet,全 None 时整段跳过。`timezone` 在 facts 里,但只喂给 `# Right now` 的双时区渲染,不作为 bullet 显示。
 4. `# How you feel right now` — L6 episodic state。当 mood 仍是默认 `neutral` 时整段跳过(prompt 保持简短)。否则渲染 `mood`、`energy /10`,以及如果有的话,`last sense from them` 行。
 5. L1 core blocks(按这个顺序): `# Persona` / `# About yourself (private self-narrative)` / `# About the user` / `# Relationship` / `# Style preferences`。任何缺失的 block 静默跳过。
 6. `# Entity disambiguation pending` — 仅当当前 query 命中了 `merge_status='uncertain'` 的 entity 时由 retrieve 注入;描述模糊性并请 LLM 在自然对话节奏里向 user 问一句。
 7. `STYLE_INSTRUCTIONS` — 硬编码 · 永远在最末。包含 F10 transport-name 禁令、competence boundary("我刚才说错了" / "I got that wrong" · 不 retrofit · 不 invent),以及从 `prompts/judge.py` 反模式抽出的 negative few-shot 段(formulaic opener / generic affect label / empty reassurance / strategy lock 等)。
 
-**User prompt（`build_user_prompt`）** — Spec 5 §6.4 落地的段顺序,从老到新走:
+**User prompt（`build_user_prompt`）** — 段顺序从老到新走:
 
 1. `# Recent sessions` — 最多 5 条最近的 session_summary L4 thoughts(每个 session close 时由 extraction LLM 顺便产出)。每行带一个 day-bucket 前缀(`[Older] / [Earlier this week] / [Yesterday] / [Earlier today] / [Just now]`)。空时整段跳过。
 2. `# Recent thoughts you've had about this person` — retrieve rerank top_k 里 `type='thought'` 的描述。空时跳过。

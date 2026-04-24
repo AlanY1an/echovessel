@@ -18,7 +18,7 @@
 
 ## Core Concepts
 
-**L1 core blocks** — 短小、稳定的文本段，无条件注入每次 prompt。`core_blocks` 表里住着五个 label：`persona`、`self`、`user`、`relationship`、`style`。`persona` / `self` / `style` 跨用户共享（persona 是一个角色，它的自我形象和 owner 钦定的风格指令不因用户不同而 fork）。`user` / `relationship` 按用户分份，key 是 `(persona_id, user_id)`。每个 block 上限 5000 字符，并且在 `core_block_appends` 里有一份 append-only 审计日志。v0.4 物理删除了原来的 `mood` block —— 当下情绪状态归 L6 episodic state 管，不再走 L1。
+**L1 core blocks** — 短小、稳定的文本段，无条件注入每次 prompt。`core_blocks` 表里住着五个 label：`persona`、`self`、`user`、`relationship`、`style`。`persona` / `self` / `style` 跨用户共享（persona 是一个角色，它的自我形象和 owner 钦定的风格指令不因用户不同而 fork）。`user` / `relationship` 按用户分份，key 是 `(persona_id, user_id)`。每个 block 上限 5000 字符，并且在 `core_block_appends` 里有一份 append-only 审计日志。情绪状态不在 L1——当下心境归 L6 episodic state 管。
 
 **生平事实**(Biographic facts)— 跟 core blocks 并排住在 `personas` 行本身的十五个结构化身份列(`full_name`、`gender`、`birth_date`、`nationality`、`native_language`、`timezone`、`occupation`、`relationship_status`、…)。这些字段之所以跟散文 block 分开放,是因为代码想知道"她是什么时区"或"她是哪年生的"时可以直接查列,不用重新解析 persona block 里那段散文。十五个全部可空 — onboarding 时 LLM 抽取能填什么就填什么,用户在 review 页面校对剩下的。其中五个(姓名 / 性别 / 出生年 / 职业 / 母语)会在每个 turn 渲进系统 prompt 的 "# Who you are" 段;另外十个只供系统代码使用。
 
@@ -26,7 +26,7 @@
 
 **L3 events** — 从一个关闭的 session 里抽取出的事实。以 `type='event'` 的 `ConceptNode` 行存储：一段自然语言描述、一个 `-10..+10` 的 `emotional_impact`、emotion 和 relational 标签、一份存在 sqlite-vec 伴随表里的 embedding，以及一个指回 `source_session_id` 的溯源指针。Events 是 episodic 记忆的主要单位——"那次用户告诉我 Mochi 做了手术的对话"。
 
-**L4 thoughts** — 从很多 events 里蒸馏出来的更长程的观察。和 L3 同一张表，用 `type='thought'` 区分。每条 thought 带一条 `filling` 证据链（通过 `concept_node_filling`），记录它是从哪些 events 生成的，这样当用户删掉源头 events 时可以选择把 thought 保留为孤儿。Thoughts 由两条路径写入：consolidate 内部的 SHOCK / TIMER reflection（fast loop），以及 session 之间跑的 slow_tick reflection phase（slow loop · v0.4 引入的 forward-looking 推理）。slow_tick 还会在合适时机产 `type='expectation'` 子类节点（"她下周可能会更新 grad school 进度"），这些 expectation 在 fast loop 里被 embedding 相似度匹配 user 的下一条消息，命中标 `fulfilled`，超期标 `expired`。
+**L4 thoughts** — 从很多 events 里蒸馏出来的更长程的观察。和 L3 同一张表，用 `type='thought'` 区分。每条 thought 带一条 `filling` 证据链（通过 `concept_node_filling`），记录它是从哪些 events 生成的，这样当用户删掉源头 events 时可以选择把 thought 保留为孤儿。Thoughts 由两条路径写入：consolidate 内部的 SHOCK / TIMER reflection（fast loop），以及 session 之间跑的 slow_tick reflection phase（slow loop · forward-looking 推理）。slow_tick 还会在合适时机产 `type='expectation'` 子类节点（"她下周可能会更新 grad school 进度"），这些 expectation 在 fast loop 里被 embedding 相似度匹配 user 的下一条消息，命中标 `fulfilled`，超期标 `expired`。
 
 **L5 entities** — 第三方人物 / 地点 / 组织 / 宠物的 canonical 身份。三张表：`entities`（canonical name + kind + 三态 merge_status）· `entity_aliases`（多对一 alias → entity）· `concept_node_entities`（L3 event ↔ L5 entity 的多对多 junction）。Extraction 抽到新人名时建 entity，已知 entity 出现新别名时只 append 别名行。检索时 query 文本里的任何 alias 命中都会让该 entity 关联的所有 ConceptNode 一并进候选并加分，这是跨语种 / 跨别名召回的工程基础——光靠向量距离没法把 "Scott" 和 "黄逸扬" 拉到一起。三层 dedup（alias 精确匹配 → embedding 0.65/0.85 阈值 → uncertain 时 persona 自然问 user）写在 `memory/entities.py`。
 
@@ -141,13 +141,13 @@ drop rows where relevance < min_relevance (默认 0.4)
 
 ### Entity-anchored retrieval（L5 旁路）
 
-主向量打分之外有一条便宜的 alias 旁路：每次 retrieve 调用时，query 文本被 tokenize 后扔给 `find_query_entities()` 做精确匹配（case-sensitive，CJK 不切分），命中的 entity 通过 `concept_node_entities` junction 反查所有关联的 ConceptNode。这一批 node 直接进候选池，无视向量距离，并在 rerank 时获得 `WEIGHT_ENTITY_ANCHOR * ENTITY_ANCHOR_BONUS_VALUE`（默认 1.5 × 1.0）的加分。这条路径专门解 plan case 8 那种跨语种 alias 召回——sentence-transformers 把 "Scott" 和 "黄逸扬" 拉不到一起，alias 精确匹配能。当一个 entity 的 `merge_status` 是 `'uncertain'` 时（embedding 在 0.65 ~ 0.85 中段，没办法自动 merge），retrieve 还会顺便给 system prompt 注入一段 `# Entity disambiguation pending` hint，让 persona 在自然对话节奏里向 user 主动问一句"Scott 是不是你之前说的黄逸扬啊"，由 user 的回答决定下次 consolidate 是 confirm 还是 disambiguate。
+主向量打分之外有一条便宜的 alias 旁路：每次 retrieve 调用时，query 文本被 tokenize 后扔给 `find_query_entities()` 做精确匹配（case-sensitive，CJK 不切分），命中的 entity 通过 `concept_node_entities` junction 反查所有关联的 ConceptNode。这一批 node 直接进候选池，无视向量距离，并在 rerank 时获得 `WEIGHT_ENTITY_ANCHOR * ENTITY_ANCHOR_BONUS_VALUE`（默认 1.5 × 1.0）的加分。这条路径专门解跨语种 alias 召回——sentence-transformers 把 "Scott" 和 "黄逸扬" 拉不到一起，alias 精确匹配能。当一个 entity 的 `merge_status` 是 `'uncertain'` 时（embedding 在 0.65 ~ 0.85 中段，没办法自动 merge），retrieve 还会顺便给 system prompt 注入一段 `# Entity disambiguation pending` hint，让 persona 在自然对话节奏里向 user 主动问一句"Scott 是不是你之前说的黄逸扬啊"，由 user 的回答决定下次 consolidate 是 confirm 还是 disambiguate。
 
 ### Force-loaded pinned thoughts（绕过 query similarity）
 
 `retrieve(force_load_user_thoughts=N)` 是给 `# About {speaker}` 段用的旁路：直接按 `recency × importance` 取当前 speaker 的 top-N L4 thoughts，**完全不查 query embedding**。理由是：当用户消息是 "?" / "嗯" / 一句单字时，query 几乎没有可索引的 topic，但 persona 仍然应该知道自己在跟谁说话。runtime 默认在 `assemble_turn` 里传 `force_load_user_thoughts=10`，并把已经在 rerank top_k 里出现的 node id 排除掉，避免渲染重复。返回值挂在 `RetrievalResult.pinned_thoughts` 上。
 
-### 7 类 stimulus reactivity（plan §12）
+### 7 类 stimulus reactivity
 
 记忆模块对 7 种 stimulus 的反应路径都已经实装，没有任何一个走"轮询 + cron"——全部 event-driven：
 
@@ -161,9 +161,9 @@ drop rows where relevance < min_relevance (默认 0.4)
 | 6 | 安静期（无 user 消息）| `idle_scanner` 关 stale session（既有）· `assemble_turn` 入口的 12h decay 把 episodic_state mood 拍回 neutral · 没新 inbox material 时 slow_tick 不 fire |
 | 7 | 主动回想（slow_tick 自发）| consolidate_worker `_process_one` 末尾的 G phase 在合适条件下跑 slow_cycle LLM · 产 `type='thought'` + `type='expectation'` 节点 · 下次 fast loop retrieve 大概率召回（这是"persona 在你不说话时也想到你"的物理实现）|
 
-时间介入只在三处合法兜底：L6 episodic 12h decay · `consolidate_worker` 5s polling · L1.self TIMER reflection（超 N 天无 reflect 强制 1 次）。其它一切"每周二 X / 每月初 Y"类设计已在 plan §15 NOT-DO 里禁止。
+时间介入只在三处合法兜底：L6 episodic 12h decay · `consolidate_worker` 5s polling · L1.self TIMER reflection（超 N 天无 reflect 强制 1 次）。其它一切"每周二 X / 每月初 Y"类调度模式被明确禁止——记忆模块只接 event-driven 触发。
 
-### Slow_tick consolidate phase（L4 forward-looking · plan §7）
+### Slow_tick consolidate phase（L4 forward-looking）
 
 slow_tick **不是独立 worker**——它是 `consolidate_worker._process_one` 末尾追加的 G 阶段（A-F 之外）。每次 session CLOSING 处理完之后检查：
 
@@ -178,7 +178,7 @@ slow_tick **不是独立 worker**——它是 `consolidate_worker._process_one` 
 - 如果 `self_block_append` 非空 · `append_to_core_block(BlockLabel.SELF, ...)` · 受 ≤ 20% edit-distance invariant 守
 - `personas.last_slow_tick_at = now`
 
-护栏全部在 plan §7.4-7.5：单 cycle token wall（input ≤ 8k · output ≤ 1k）· 每天 36 cycles + 150k input + 30k output · `cfg.slow_tick.enabled = false` 全局 kill switch · 每个 event 被 reflect 次数 ≤ 3。slow_tick 不能：创建无原话证据的 intention · 自己 schedule 下次 · 改 in-place 已有节点 · 调外部 API · 创新的 NodeType / BlockLabel · 递归自触发 · 跳 token budget。封闭 tool 枚举 + schema 拒写守这些 invariant。Transcript 落盘到 `develop-docs/slow_tick_transcripts/<cycle_id>.json`，admin tab 有 `GET /api/admin/slow-tick/transcripts` 翻历史。
+护栏（不可越界 invariant）：单 cycle token wall（input ≤ 8k · output ≤ 1k）· 每天 36 cycles + 150k input + 30k output · `cfg.slow_tick.enabled = false` 全局 kill switch · 每个 event 被 reflect 次数 ≤ 3。slow_tick 不能：创建无原话证据的 intention · 自己 schedule 下次 · 改 in-place 已有节点 · 调外部 API · 创新的 NodeType / BlockLabel · 递归自触发 · 跳 token budget。封闭 tool 枚举 + schema 拒写守这些 invariant。Transcript 落盘到 `develop-docs/slow_tick_transcripts/<cycle_id>.json`，admin tab 有 `GET /api/admin/slow-tick/transcripts` 翻历史。
 
 ### 一个 persona 跨越所有 channel
 
@@ -259,26 +259,35 @@ t = 0s             用户在 Web 频道打 "hi"
 t ≈ 0.1s           runtime 准备回复
                    ↓
 ┌─ memory.load_core_blocks(persona, user)
-│    → 5 行(persona / self / mood [共享] + user / relationship [per-user])
+│    → 5 行(persona / self / style [共享] + user / relationship [per-user])
 │
-├─ memory.retrieve(persona, user, query=上一条用户消息, embed_fn, top_k=10)
+├─ assemble_turn 入口检查 L6 episodic_state · 12h 没更新就 decay 回 neutral
+│
+├─ memory.retrieve(persona, user, query=上一条用户消息, embed_fn, top_k=10,
+│                  user_now=msg.received_at)
 │    query_vec = embed_fn(query)
-│    backend.vector_search(query_vec, types=('event','thought'), top_k=40)
-│    读出 ConceptNode 行(未删除的)
-│    rerank: 0.5·recency + 3·relevance + 2·impact + relational_bonus
+│    L5 entity-anchor 预先 cheap match · 命中 entity 关联 ConceptNode 进候选
+│    backend.vector_search(query_vec, types=('event','thought','intention','expectation'), top_k=40)
+│    读出 ConceptNode 行(未删除的 · 未被 superseded_by_id 替代的)
+│    rerank: 0.5·recency + 3·relevance + 2·impact + relational_bonus + entity_anchor_bonus
 │    砍掉 relevance < min_relevance(默认 0.4)            ← over-recall 地板
 │    保留 top_k · UPDATE access_count++ · last_accessed_at
+│    derive_event_status(event_time_*, user_now) · render_event_delta_phrase
 │    可选:每条 event 命中 ±N 条 L2 邻居扩展
 │    向量原始命中 < fallback_threshold 时 · 启用 L2 FTS 回退
 │
+├─ force_load_user_thoughts(persona, user, top_n=10) · pinned thoughts 旁路 query
+│
 ├─ assemble_turn → LLM.stream(system_prompt, user_prompt)
-│    system_prompt = persona_display_name
-│                    + "# Who you are"(5 facts)
-│                    + 5 core blocks
+│    详见 docs/zh/runtime.md § Prompt 段顺序。
+│    system_prompt = opener + # Right now (双 TZ) + # Who you are (7 facts)
+│                    + # How you feel right now (L6 episodic) + L1 core blocks
+│                    + # Style preferences + # Entity disambiguation pending
 │                    + STYLE_INSTRUCTIONS
-│    user_prompt   = 检索出的 thoughts + events
-│                    + 最近 L2 窗口(最后 ~20 条消息)
-│                    + 当前用户消息
+│    user_prompt   = # Recent sessions (day-bucket) + retrieved thoughts/events
+│                    + # About {speaker} (pinned) + # Promises you've made
+│                    + # You've been expecting + # Our recent conversation
+│                    + # What they just said
 │
 └─ 流式 token → channel · 累积的 reply 再通过 ingest_message(PERSONA) 回写
 
@@ -337,12 +346,24 @@ t ≈ 30-60min + 5s  consolidate_worker 轮询(默认每 5s)
 │      session.extracted_at = now
 │      db.commit()
 │      触发 on_session_closed(session)                     ← 生命周期队列 drain
+│
+│  [G] slow_tick consolidate phase — 仅在 should_run_slow_cycle 判 OK 时跑
+│      (cool_down + non-trivial + daily-cap / token-wall 都没触顶):
+│        run_slow_cycle(persona, recent_events, recent_thoughts, ...)
+│          → typed ConceptNode 输出 · subject='persona' · type IN ('thought','expectation')
+│          → 每条带 filling_event_ids · expectation 强制非空 reasoning_event_ids
+│          → 可选 self_block append(edit distance ≤ 20%)
+│          → personas.last_slow_tick_at = now
+│      失败不回滚 session([F] 已 commit) · 只 log warning
+│
+│  · session_mood_signal(由 [B] 抽取 LLM 顺便输出)在 [B]/[F] 之间已 UPDATE
+│    personas.episodic_state JSON 列 · 不调额外 LLM
+│  · L5 entities:[B] 抽 event 时同步走三层 dedup(alias / embedding / ask-user)
+│    更新 entities + entity_aliases · 写 concept_node_entities junction
 └─
 
-(mood observer 如果注册了 · 读新 events 并可能 UPDATE core_blocks.mood)
-
-下一 turn · retrieve 能看到新写的 L3 events + L4 thoughts · mood block 也会
-反映这次 session 的情绪走向。
+下一 turn · retrieve 能看到新写的 L3 events + L4 thoughts · L6 episodic_state 也
+反映这次 session 的情绪走向 · slow_cycle 产的 expectation 进 # You've been expecting 段。
 ```
 
 最后 session 可能停留的三种状态:
