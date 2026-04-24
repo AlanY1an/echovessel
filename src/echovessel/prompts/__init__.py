@@ -34,7 +34,6 @@ from echovessel.prompts.judge import (
     parse_judge_response,
 )
 from echovessel.prompts.persona_bootstrap import (
-    MAX_MOOD_BLOCK_CHARS,
     MAX_PERSONA_BLOCK_CHARS,
     MAX_RELATIONSHIP_BLOCK_CHARS,
     MAX_SELF_BLOCK_CHARS,
@@ -104,7 +103,6 @@ __all__ = [
     "MAX_PERSONA_BLOCK_CHARS",
     "MAX_SELF_BLOCK_CHARS",
     "MAX_USER_BLOCK_CHARS",
-    "MAX_MOOD_BLOCK_CHARS",
     "MAX_RELATIONSHIP_BLOCK_CHARS",
     "BootstrappedBlocks",
     "PersonaBootstrapParseError",

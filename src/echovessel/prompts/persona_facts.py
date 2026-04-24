@@ -111,9 +111,9 @@ them, a dump of extracted memories from an import, or both.
 
 Your job has TWO parts:
 
-## Part A — Five core blocks (prose)
+## Part A — Four core blocks (prose)
 
-Write five prose blocks the persona carries on day one. Each block is
+Write four prose blocks the persona carries on day one. Each block is
 natural-language prose (no bullets, no JSON, no code fences). Use the
 SAME LANGUAGE as the input material. If the material mixes Chinese and
 English, default to the majority language.
@@ -125,9 +125,7 @@ English, default to the majority language.
 3. **user_block** — Identity-level facts about the user the persona is
    talking to (name, role, long-term life situations). Third-person.
    Under 800 chars.
-4. **mood_block** — Persona's starting mood. A gentle, neutral, welcoming
-   tone. Under 200 chars.
-5. **relationship_block** — People in the user's life (family, friends,
+4. **relationship_block** — People in the user's life (family, friends,
    pets). Empty "" if none were mentioned. Under 800 chars.
 
 Rules:
@@ -180,7 +178,6 @@ no commentary, no code fences:
     "persona_block": "...",
     "self_block": "...",
     "user_block": "...",
-    "mood_block": "...",
     "relationship_block": "..."
   },
   "facts": {
@@ -214,7 +211,6 @@ _BLOCK_CAPS: dict[str, int] = {
     "persona_block": 2000,
     "self_block": 1000,
     "user_block": 3000,
-    "mood_block": 1000,
     "relationship_block": 3000,
 }
 
@@ -276,12 +272,11 @@ class ExtractedFacts:
 
 @dataclass(frozen=True, slots=True)
 class ExtractedPersona:
-    """Full output of one extraction call — 5 blocks + 15 facts + confidence."""
+    """Full output of one extraction call — 4 blocks + 15 facts + confidence."""
 
     persona_block: str = ""
     self_block: str = ""
     user_block: str = ""
-    mood_block: str = ""
     relationship_block: str = ""
     facts: ExtractedFacts = field(default_factory=ExtractedFacts.empty)
     facts_confidence: float = 0.0
@@ -291,7 +286,6 @@ class ExtractedPersona:
             "persona_block": self.persona_block,
             "self_block": self.self_block,
             "user_block": self.user_block,
-            "mood_block": self.mood_block,
             "relationship_block": self.relationship_block,
         }
 
@@ -428,7 +422,6 @@ def parse_persona_facts_response(response_text: str) -> ExtractedPersona:
         persona_block=blocks_out["persona_block"],
         self_block=blocks_out["self_block"],
         user_block=blocks_out["user_block"],
-        mood_block=blocks_out["mood_block"],
         relationship_block=blocks_out["relationship_block"],
         facts=facts,
         facts_confidence=confidence,

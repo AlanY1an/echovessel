@@ -37,13 +37,13 @@ were extracted from a user's imported material — an autobiography, a
 diary, chat logs with a previous companion, or any text describing who
 the user is and what kind of persona they would like to live alongside.
 
-Your job: write FIVE initial core blocks the persona can carry on
+Your job: write FOUR initial core blocks the persona can carry on
 day one. Each block is natural-language prose (no bullets, no JSON,
 no code fences — just prose). Write each block in the SAME LANGUAGE
 as the input events. If the events mix Chinese and English, default
 to the majority language.
 
-# The five blocks
+# The four blocks
 
 ## 1. persona_block — "Who this persona is"
 The identity / tone / personality the user wants the persona to hold.
@@ -78,17 +78,7 @@ Do NOT invent facts the material does not support.
 
 Aim for 3–8 factual sentences. Keep it under 800 characters.
 
-## 4. mood_block — "Persona's current mood"
-A short one-to-two-sentence description of the persona's mood at the
-moment onboarding ends. A gentle, neutral, welcoming starting mood is
-usually right: something like "平静、愿意倾听,带一点想更了解你的好奇"
-/ "Calm, willing to listen, with a quiet curiosity about getting to
-know you". Do NOT mirror any crisis or grief present in the user's
-material — this is the persona's own mood, not the user's.
-
-Under 200 characters.
-
-## 5. relationship_block — "People in the user's life the persona should know"
+## 4. relationship_block — "People in the user's life the persona should know"
 Family, close friends, pets, roommates, ex-partners who appear in the
 material. Group by person. Include enough detail that the persona
 will recognise the name when the user mentions them later, but do not
@@ -118,7 +108,6 @@ No preamble, no commentary, no code fences:
   "persona_block": "...",
   "self_block": "...",
   "user_block": "...",
-  "mood_block": "...",
   "relationship_block": "..."
 }
 
@@ -137,7 +126,6 @@ keys).
 MAX_PERSONA_BLOCK_CHARS: int = 2000
 MAX_SELF_BLOCK_CHARS: int = 1000
 MAX_USER_BLOCK_CHARS: int = 3000
-MAX_MOOD_BLOCK_CHARS: int = 1000
 MAX_RELATIONSHIP_BLOCK_CHARS: int = 3000
 
 
@@ -145,7 +133,6 @@ _BLOCK_CAPS: dict[str, int] = {
     "persona_block": MAX_PERSONA_BLOCK_CHARS,
     "self_block": MAX_SELF_BLOCK_CHARS,
     "user_block": MAX_USER_BLOCK_CHARS,
-    "mood_block": MAX_MOOD_BLOCK_CHARS,
     "relationship_block": MAX_RELATIONSHIP_BLOCK_CHARS,
 }
 
@@ -157,7 +144,7 @@ _BLOCK_CAPS: dict[str, int] = {
 
 @dataclass(frozen=True, slots=True)
 class BootstrappedBlocks:
-    """Parsed five-block output from the bootstrap LLM call.
+    """Parsed four-block output from the bootstrap LLM call.
 
     Each field is a (possibly empty) prose string. No list structure —
     the input to `POST /api/admin/persona/onboarding` is flat text.
@@ -166,7 +153,6 @@ class BootstrappedBlocks:
     persona_block: str
     self_block: str
     user_block: str
-    mood_block: str
     relationship_block: str
 
     def as_dict(self) -> dict[str, str]:
@@ -174,7 +160,6 @@ class BootstrappedBlocks:
             "persona_block": self.persona_block,
             "self_block": self.self_block,
             "user_block": self.user_block,
-            "mood_block": self.mood_block,
             "relationship_block": self.relationship_block,
         }
 
@@ -320,6 +305,5 @@ __all__ = [
     "MAX_PERSONA_BLOCK_CHARS",
     "MAX_SELF_BLOCK_CHARS",
     "MAX_USER_BLOCK_CHARS",
-    "MAX_MOOD_BLOCK_CHARS",
     "MAX_RELATIONSHIP_BLOCK_CHARS",
 ]
