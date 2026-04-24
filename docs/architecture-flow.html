@@ -72,7 +72,7 @@
     font-size: 11px; color: #334155;
   }
 
-  /* ── Memory layer sidebar (colored L1–L4) ── */
+  /* ── Memory layer sidebar (colored L1–L6) ── */
   .mem-bar {
     display: flex; gap: 4px; margin: 12px 0 20px;
   }
@@ -85,6 +85,8 @@
   .mem-chip.l2 { background: #0ea5e9; }
   .mem-chip.l3 { background: #10b981; }
   .mem-chip.l4 { background: #f59e0b; }
+  .mem-chip.l5 { background: #14b8a6; }
+  .mem-chip.l6 { background: #ec4899; }
   .mem-chip .lv { font-size: 14px; font-weight: 800; letter-spacing: -0.5px; }
   .mem-chip .nm { font-size: 11px; opacity: 0.92; }
 
@@ -167,6 +169,8 @@
   .matrix td.mx-layer.l2 { background: #0ea5e9; }
   .matrix td.mx-layer.l3 { background: #10b981; }
   .matrix td.mx-layer.l4 { background: #f59e0b; }
+  .matrix td.mx-layer.l5 { background: #14b8a6; }
+  .matrix td.mx-layer.l6 { background: #ec4899; }
   .matrix code {
     font-family: 'JetBrains Mono', monospace;
     font-size: 10px;
@@ -284,7 +288,7 @@
   .tl-event.e-extract { background: #10b981; }
   .tl-event.e-reflect { background: #f59e0b; }
 
-  /* ── Feedback loop diagram (mood) ── */
+  /* ── Feedback loop diagram (episodic state) ── */
   .loop {
     display: grid;
     grid-template-columns: 1fr 60px 1fr 60px 1fr;
@@ -461,7 +465,9 @@
   <div class="mem-chip l1"><span class="lv">L1</span><span class="nm">core_blocks · persona frame</span></div>
   <div class="mem-chip l2"><span class="lv">L2</span><span class="nm">recall_messages · raw log</span></div>
   <div class="mem-chip l3"><span class="lv">L3</span><span class="nm">concept_nodes/EVENT · episodic</span></div>
-  <div class="mem-chip l4"><span class="lv">L4</span><span class="nm">concept_nodes/THOUGHT · reflected</span></div>
+  <div class="mem-chip l4"><span class="lv">L4</span><span class="nm">concept_nodes/THOUGHT,INTENTION,EXPECTATION · reflected</span></div>
+  <div class="mem-chip l5"><span class="lv">L5</span><span class="nm">entities + aliases · canonical names</span></div>
+  <div class="mem-chip l6"><span class="lv">L6</span><span class="nm">personas.episodic_state · current affect</span></div>
 </div>
 
 <!-- ═══════════ 0. MEMORY GENESIS ═══════════ -->
@@ -470,8 +476,8 @@
 <div class="panel" style="border-color:#6366f1;background:linear-gradient(180deg,#eef2ff 0%,#fff 30%);">
   <div class="panel-head">
     <div>
-      <div class="panel-title">Memory is the whole point · four layers, three transitions</div>
-      <div class="panel-sub">L1 is authored · L2 is captured · L3 is distilled · L4 is reflected</div>
+      <div class="panel-title">Memory is the whole point · six layers, three transitions</div>
+      <div class="panel-sub">L1 authored · L2 captured · L3 distilled · L4 reflected · L5 entities resolved · L6 episodic state tracked</div>
     </div>
     <div class="tag tag-purple">CORE</div>
   </div>
@@ -493,7 +499,7 @@
         <div class="act-step" style="background:#6366f1;">①</div>
         <div class="act-what">Onboarding</div>
         <div>First run · <code class="mono">/api/admin/persona/onboarding</code></div>
-        <div class="act-detail">persona / self / user / mood</div>
+        <div class="act-detail">persona / self / user</div>
         <div class="act-detail"><code>memory.onboarding.bootstrap_persona()</code> · one <code>CoreBlock</code> row per label</div>
 
         <div class="act-step" style="background:#6366f1;">②</div>
@@ -510,18 +516,12 @@
 
         <div class="act-step" style="background:#6366f1;">④</div>
         <div class="act-what">Append-to-block</div>
-        <div>Import pipeline or admin → append existing block</div>
-        <div class="act-detail">any block except mood</div>
+        <div>Import pipeline or admin → append existing block · slow_tick may also append to <code>self</code> within an edit-distance bound</div>
+        <div class="act-detail">any block</div>
         <div class="act-detail"><code>memory.append_to_core_block()</code> · atomic · writes audit row to <code>core_block_appends</code></div>
-
-        <div class="act-step" style="background:#94a3b8;">⑤</div>
-        <div class="act-what">Mood replace (manual)</div>
-        <div>Admin edit mood block OR v1.0 reflection-driven path (not yet)</div>
-        <div class="act-detail">mood only</div>
-        <div class="act-detail"><code>memory.update_mood_block()</code> · replace-in-place · fires <code>on_mood_updated</code> hook · SSE <code>chat.mood.update</code></div>
       </div>
       <div class="callout" style="margin-top:12px; border-left-color:#818cf8;">
-        <strong>MVP truth:</strong> L1 is NOT auto-updated per turn. The <code>mood_block</code> in particular is static unless someone edits it. v1.0 plans to have reflection update mood as a side-effect; today it's manual-only.
+        <strong>L1 is NOT auto-updated per turn.</strong> Per-turn affect lives in L6 (<code>personas.episodic_state</code>), which consolidate writes through automatically from extraction's <code>session_mood_signal</code>. L1 only changes when a human (or the gated slow_tick self-narrative append) writes to it.
       </div>
     </div>
 
@@ -745,7 +745,7 @@
 
       <div class="act-step">3</div>
       <div class="act-what"><span class="dot d-l1"></span> L1 read</div>
-      <div>Pull the 5 core blocks verbatim — persona / self / user / relationship / mood. Always first in the prompt.</div>
+      <div>Pull the 5 core blocks verbatim — persona / self / user / relationship / style. Always first in the prompt.</div>
       <div class="act-detail act-read">L1 · <code>core_blocks</code> (1 row per label)</div>
       <div class="act-detail act-write">—</div>
 
@@ -793,7 +793,7 @@
     </div>
 
     <div class="callout" style="margin-top:14px;">
-      <strong>Zoom-out:</strong> the <em>reply</em> to the user takes steps 1-8 (channel → memory → LLM → channel). Steps 9-10 are <strong>post-turn housekeeping</strong> — they happen while the user is reading the reply. This is why consolidation to L3/L4 is <em>not</em> here: it's asynchronous background work, covered in §3. <strong>Mood block is NOT auto-updated per turn in MVP</strong> — it only rewrites via admin edit or v1.0 reflection-driven path (see §6).
+      <strong>Zoom-out:</strong> the <em>reply</em> to the user takes steps 1-8 (channel → memory → LLM → channel). Steps 9-10 are <strong>post-turn housekeeping</strong> — they happen while the user is reading the reply. This is why consolidation to L3 / L4 / L5 / L6 is <em>not</em> here: it's asynchronous background work, covered in §3. L6 episodic_state lands at session-close as a side-effect of extraction emitting <code>session_mood_signal</code> (no extra LLM call); the per-turn read of L6 just decays the snapshot if it's older than 12 hours.
     </div>
   </div>
 </div>
@@ -844,7 +844,7 @@
       <div class="seq-cell">—</div>
       <div class="seq-cell">—</div>
       <div class="seq-cell">—</div>
-      <div class="seq-text">Step 3 · L1 reads — persona / self / user / relationship / mood. Always first.</div>
+      <div class="seq-text">Step 3 · L1 reads — persona / self / user / relationship / style. Always first. L6 read also runs here; if mood snapshot is &gt; 12h old it's decayed back to neutral on the way in.</div>
 
       <!-- step 4 -->
       <div class="seq-cell">—</div>
@@ -921,7 +921,7 @@
       <div class="seq-cell">—</div>
       <div class="seq-cell">—</div>
       <div class="seq-cell">—</div>
-      <div class="seq-text">Step 10 · Dispatcher releases the slot; <code>llm_calls</code> ledger records tokens + cost. Mood block write is <strong>NOT</strong> per-turn in MVP — it only runs via admin edit or v1.0 reflection path.</div>
+      <div class="seq-text">Step 10 · Dispatcher releases the slot; <code>llm_calls</code> ledger records tokens + cost. L6 episodic_state is <strong>NOT</strong> written per-turn — it lands once when the session closes (as a side-effect of extraction's <code>session_mood_signal</code>); see §3 / §7.</div>
     </div>
   </div>
 </div>
@@ -1048,7 +1048,7 @@
 </div>
 
 <!-- ═══════════ 4. STORY TRACE ═══════════ -->
-<h2>5. Story trace <span class="h-sub">one real sentence, all four layers lit up</span></h2>
+<h2>5. Story trace <span class="h-sub">one real sentence, all six layers lit up</span></h2>
 
 <div class="story">
   <h4>Scenario · user DMs the Discord bot</h4>
@@ -1073,7 +1073,7 @@
     <div class="story-step">
       <div class="ss-time">t+2.2s</div>
       <div class="ss-badge b-l1">L1</div>
-      <div class="ss-text"><strong>Read ↗</strong> 5 core_blocks loaded · persona="她的性格是…" · user="你是一个在旧金山的软件工程师…" · mood="此刻平静" · etc.</div>
+      <div class="ss-text"><strong>Read ↗</strong> 5 core_blocks loaded · persona="她的性格是…" · user="你是一个在旧金山的软件工程师…" · style="don't say 'haha'" · etc. L6 read also runs · <code>personas.episodic_state.mood</code>="neutral" so the <code># How you feel right now</code> section is skipped.</div>
     </div>
     <div class="story-step">
       <div class="ss-time">t+2.3s</div>
@@ -1100,12 +1100,6 @@
       <div class="ss-badge b-l2">L2</div>
       <div class="ss-text"><strong>Write ↘</strong> Persona reply written as second row · role=persona · same <code>turn_id</code>.</div>
     </div>
-    <div class="story-step">
-      <div class="ss-time">t+5.9s</div>
-      <div class="ss-badge b-l1">L1</div>
-      <div class="ss-text"><strong>Write ↘</strong> mood_block refreshes to "带点笑意 · 对你家小动物的好奇" · broadcast as <code>chat.mood.update</code>.</div>
-    </div>
-
     <!-- 30 minutes later -->
     <div class="story-step" style="background:#f0fdf4;border-color:#6ee7b7;">
       <div class="ss-time" style="color:#065f46;">t+31m</div>
@@ -1115,7 +1109,7 @@
     <div class="story-step" style="background:#f0fdf4;border-color:#6ee7b7;">
       <div class="ss-time" style="color:#065f46;">t+31m 5s</div>
       <div class="ss-badge b-l3">L3</div>
-      <div class="ss-text"><strong>Write ↘</strong> Extract LLM produces: <code>{description: "user has a white cat named 小黑 that's energetic and jumps on them at night", emotional_impact: +2, tags: [pet, night]}</code> · stored with 384-d embedding. <strong>This is the moment 'persona remembers'.</strong></div>
+      <div class="ss-text"><strong>Write ↘</strong> Extract LLM produces: <code>{description: "user has a white cat named 小黑 that's energetic and jumps on them at night", emotional_impact: +2, tags: [pet, night], session_mood_signal: {mood: "warm", energy: 6, last_user_signal: "shared a fond detail about pet"}}</code> · stored with 384-d embedding. <strong>This is the moment 'persona remembers'.</strong> Same call also writes an L5 entity for "小黑" (kind=pet) and an L6 episodic_state update from the <code>session_mood_signal</code> field — no extra LLM round-trip; SSE <code>chat.mood.update</code> fires from <code>on_mood_updated</code>.</div>
     </div>
     <div class="story-step" style="background:#fffbeb;border-color:#fde047;">
       <div class="ss-time" style="color:#92400e;">t+31m 20s</div>
@@ -1163,18 +1157,19 @@
             <code>get_core_blocks()</code> · every prompt · all 5 labels
           </td>
           <td class="op-write">
-            <code>mood_block</code> refresh · post-turn observer
+            —
           </td>
           <td class="op-read">
             extract_fn may read <code>self_block</code> for context
           </td>
           <td class="op-write">
-            reflect_fn may append to <code>self_block</code> via <code>append_to_core_block</code>
+            slow_tick may append to <code>self_block</code> within an edit-distance bound
           </td>
           <td>
             <ul>
               <li>GET <code>/api/admin/persona</code></li>
               <li>POST <code>/api/admin/persona</code></li>
+              <li>POST <code>/api/admin/persona/style</code> (style block)</li>
               <li>onboarding · bootstrap-from-material</li>
             </ul>
           </td>
@@ -1231,22 +1226,66 @@
         <tr>
           <td class="mx-layer l4">L4</td>
           <td class="op-read">
-            vector search · every turn
+            vector search + <code>force_load_user_thoughts</code> · every turn
           </td>
           <td class="op-write">
             —
           </td>
           <td class="op-read">
-            gate reads 24h count
+            gate reads 24h count · slow_tick reads recent events for forward-looking inference
           </td>
           <td class="op-write">
-            reflect_fn output · 0-2 thoughts per session
+            reflect_fn output (thoughts) · slow_tick output (thoughts + expectations + intentions)
           </td>
           <td>
             <ul>
               <li>GET <code>/api/admin/memory/thoughts</code></li>
               <li>GET <code>/api/admin/memory/thoughts/{id}/trace</code></li>
               <li>DEL <code>/api/admin/memory/thoughts/{id}</code></li>
+              <li>GET <code>/api/admin/slow-tick/transcripts</code></li>
+            </ul>
+          </td>
+        </tr>
+
+        <tr>
+          <td class="mx-layer l5" style="background:#14b8a6;color:#fff;font-weight:700;">L5</td>
+          <td class="op-read">
+            alias scan via <code>find_query_entities()</code> · every turn
+          </td>
+          <td class="op-write">
+            —
+          </td>
+          <td class="op-read">
+            extract_fn checks for known aliases during dedup
+          </td>
+          <td class="op-write">
+            extract_fn writes new entities + alias rows + junction edges
+          </td>
+          <td>
+            <ul>
+              <li>GET <code>/api/admin/memory/entities</code></li>
+              <li>POST <code>/api/admin/memory/entities/{id}/merge</code></li>
+            </ul>
+          </td>
+        </tr>
+
+        <tr>
+          <td class="mx-layer l6" style="background:#ec4899;color:#fff;font-weight:700;">L6</td>
+          <td class="op-read">
+            <code>personas.episodic_state</code> · 12h decay check on assemble_turn entry
+          </td>
+          <td class="op-write">
+            —
+          </td>
+          <td class="op-read">
+            —
+          </td>
+          <td class="op-write">
+            <code>update_episodic_state()</code> on session close from extraction's <code>session_mood_signal</code>
+          </td>
+          <td>
+            <ul>
+              <li>GET <code>/api/admin/persona</code> (returns episodic_state)</li>
             </ul>
           </td>
         </tr>
@@ -1254,52 +1293,52 @@
     </div>
 
     <div class="callout" style="margin-top:14px;">
-      <strong>Observation:</strong> hot path (per-turn) is mostly <em>L1+L2+L3+L4 <strong>reads</strong></em>, with L2 writes as the only hot-path write. Everything that creates new memory (L3/L4) is <strong>background</strong>. This is by design — it's what keeps turn latency low while still building up long-term knowledge.
+      <strong>Observation:</strong> hot path (per-turn) is dominated by <em>reads</em> from L1+L2+L3+L4+L5+L6, with L2 writes as the only hot-path write. Everything that creates new memory (L3 / L4 / L5 / L6) is <strong>background</strong>. This is by design — it's what keeps turn latency low while still building up long-term knowledge.
     </div>
   </div>
 </div>
 
-<!-- ═══════════ 6. MOOD FEEDBACK LOOP ═══════════ -->
-<h2>7. Mood feedback loop <span class="h-sub">how an admin edit or future reflection-driven update reaches the browser</span></h2>
+<!-- ═══════════ 6. L6 EPISODIC STATE LIFECYCLE ═══════════ -->
+<h2>7. L6 episodic state lifecycle <span class="h-sub">how persona affect updates and reaches the browser</span></h2>
 
-<div class="callout" style="margin-top:0; border-left-color:#f59e0b; background:#fffbeb;">
-  <strong>MVP note:</strong> the mood block is <em>not</em> auto-updated per turn today. It changes only when (a) admin UI edits it, (b) v1.0 reflection path writes it as a side-effect of L4 thought creation. The loop below describes the event-propagation path that <em>is</em> wired — it just isn't triggered per turn yet.
+<div class="callout" style="margin-top:0; border-left-color:#ec4899; background:#fdf2f8;">
+  <strong>How L6 actually updates:</strong> the extraction LLM that runs on session close is asked, in the same JSON output, for a <code>session_mood_signal</code> field. <code>update_episodic_state()</code> writes that signal into <code>personas.episodic_state</code> as a side effect — no extra LLM call, no separate observer pass over L2. The <code>on_mood_updated</code> hook is preserved (the SSE topic is still <code>chat.mood.update</code>), but its trigger has moved from "every turn" to "every consolidate-driven session close".
 </div>
 
 
-<div class="panel" style="border-color:#c4b5fd;background:linear-gradient(180deg,#f5f3ff 0%,#fff 30%);">
+<div class="panel" style="border-color:#f9a8d4;background:linear-gradient(180deg,#fdf2f8 0%,#fff 30%);">
   <div class="panel-head">
     <div>
-      <div class="panel-title">L1.mood_block → MoodObserver → SSE → Web UI header</div>
-      <div class="panel-sub">not a static field — a live signal · updated every turn</div>
+      <div class="panel-title">extraction.session_mood_signal → update_episodic_state → SSE → Web UI header</div>
+      <div class="panel-sub">single LLM call writes both L3 events and L6 affect</div>
     </div>
     <div class="tag tag-purple">LIVE</div>
   </div>
   <div class="panel-body">
     <div class="loop">
       <div class="loop-node trigger">
-        <div class="ln-name">1. Turn completes</div>
-        <div class="ln-desc">on_turn_done · step 10 of §1</div>
+        <div class="ln-name">1. Session closes</div>
+        <div class="ln-desc">consolidate_worker picks up <code>status='closing'</code></div>
       </div>
       <div class="loop-arr">→</div>
       <div class="loop-node observer">
-        <div class="ln-name">2. MoodObserver fires</div>
-        <div class="ln-desc">reads L2 recent window + previous L1.mood_block</div>
+        <div class="ln-name">2. Extraction LLM runs</div>
+        <div class="ln-desc">SMALL tier · returns L3 events + L5 entities + <code>session_mood_signal</code> in one JSON</div>
       </div>
       <div class="loop-arr">→</div>
       <div class="loop-node trigger">
-        <div class="ln-name">3. Optional SMALL LLM</div>
-        <div class="ln-desc">summarises current emotional tone</div>
+        <div class="ln-name">3. Consolidate writes through</div>
+        <div class="ln-desc">events + entities persisted; mood signal validated</div>
       </div>
 
       <div class="loop-arr down">↓</div>
       <div class="loop-node" style="grid-column: 3 / 6; display:flex; align-items:center; gap:8px; justify-content:center; text-align:left;">
-        <div style="font-size:11px;color:#64748b;">Result funnels through <code style="font-family:'JetBrains Mono',monospace;background:#eef2ff;padding:1px 4px;border-radius:3px;">memory.update_mood_block()</code>.</div>
+        <div style="font-size:11px;color:#64748b;">Validated signal funnels through <code style="font-family:'JetBrains Mono',monospace;background:#fdf2f8;padding:1px 4px;border-radius:3px;">memory.update_episodic_state()</code>.</div>
       </div>
 
       <div class="loop-node layer">
-        <div class="ln-name">4. L1 write</div>
-        <div class="ln-desc"><code style="font-family:'JetBrains Mono',monospace;font-size:10px;">core_blocks[mood].content</code> replaced + audit row appended to <code style="font-family:'JetBrains Mono',monospace;font-size:10px;">core_block_appends</code></div>
+        <div class="ln-name">4. L6 write</div>
+        <div class="ln-desc"><code style="font-family:'JetBrains Mono',monospace;font-size:10px;">personas.episodic_state</code> JSON replaced; <code style="font-family:'JetBrains Mono',monospace;font-size:10px;">on_mood_updated</code> hook fires on the lifecycle queue</div>
       </div>
       <div class="loop-arr">→</div>
       <div class="loop-node channel">
@@ -1309,12 +1348,12 @@
       <div class="loop-arr">→</div>
       <div class="loop-node ui">
         <div class="ln-name">6. Web UI re-renders</div>
-        <div class="ln-desc"><code style="font-family:'JetBrains Mono',monospace;font-size:10px;">usePersona</code> hook slices mood into <code style="font-family:'JetBrains Mono',monospace;font-size:10px;">persona.core_blocks.mood</code> · Chat header reacts</div>
+        <div class="ln-desc"><code style="font-family:'JetBrains Mono',monospace;font-size:10px;">usePersona</code> hook slices the new episodic_state into the chat header</div>
       </div>
     </div>
 
     <div class="callout">
-      <strong>Feedback becomes input:</strong> the <em>next</em> turn's Step 3 (L1 read) pulls whatever mood this loop wrote. So if the user's last message made the persona anxious, the next reply is generated in an anxious tone — memory and mood are closed-loop.
+      <strong>Read-side closure:</strong> the next turn's Step 3 (L1+L6 read) pulls the freshly-written episodic_state. <code>assemble_turn</code> entry checks the snapshot's <code>updated_at</code>; if it's older than 12 hours, mood resets to <code>neutral</code> so a long quiet period doesn't open the next conversation under stale affect. When mood is <code>neutral</code>, the <code># How you feel right now</code> system-prompt section is skipped entirely to keep the prompt terse.
     </div>
   </div>
 </div>
@@ -1618,10 +1657,10 @@
       <div class="act-detail">audio_url, duration</div>
       <div class="act-detail">show ▶ voice play button</div>
 
-      <div class="act-step" style="background:#6366f1;">◎</div>
+      <div class="act-step" style="background:#ec4899;">◎</div>
       <div class="act-what"><span class="dot d-l1"></span> chat.mood.update</div>
-      <div>L1.mood_block refreshed (after turn)</div>
-      <div class="act-detail">mood_summary text</div>
+      <div>L6.episodic_state refreshed (post session-close, via extraction's session_mood_signal)</div>
+      <div class="act-detail">mood, energy, last_user_signal, updated_at</div>
       <div class="act-detail">re-render chat header mood</div>
 
       <div class="act-step" style="background:#10b981;">◎</div>

@@ -26,9 +26,9 @@ uv run echovessel run          # opens http://localhost:7777/ on first boot
 
 ## Architecture at a glance
 
-> 🗺 **Full one-page visual tour**: [`architecture.html`](https://alanyian.com/projects/echovessel/docs/architecture.html) — open in a browser to get module layers, memory L1-L4 stack, message flow, cross-channel SSE mirror, full HTTP surface, iron rules, and release timeline on a single scrollable page.
+> 🗺 **Full one-page visual tour**: [`architecture.html`](https://alanyian.com/projects/echovessel/docs/architecture.html) — open in a browser to get module layers, memory L1-L6 stack, message flow, cross-channel SSE mirror, full HTTP surface, iron rules, and release timeline on a single scrollable page.
 >
-> 🧠 **Memory in one diagram**: [`memory/layers.html`](https://alanyian.com/projects/echovessel/docs/memory/layers.html) — the simplest possible view of L1→L4 · four layers · how they connect · write / distill / read modes · credits the Stanford Generative Agents paper for the scoring formula.
+> 🧠 **Memory in one diagram**: [`memory/layers.html`](https://alanyian.com/projects/echovessel/docs/memory/layers.html) — the simplest possible view of L1→L6 · six layers · how they connect · write / distill / read modes · credits the Stanford Generative Agents paper for the scoring formula.
 >
 > 🔄 **Runtime flows / "how layers wake up"**: [`architecture-flow.html`](https://alanyian.com/projects/echovessel/docs/architecture-flow.html) — companion page focused on per-turn activation sequence, real story trace ("I got a cat named 小黑"), retrieval ranking, policy gates, and SSE nervous-system events.
 
@@ -48,7 +48,7 @@ uv run echovessel run          # opens http://localhost:7777/ on first boot
                            ▼
               ┌────────────┴────────────┐
               │         MEMORY          │
-              │   L1 · L2 · L3 · L4     │
+              │ L1·L2·L3·L4·L5·L6 │
               │   retrieve · consolidate│
               │      observer pattern   │
               └────────────┬────────────┘
@@ -71,7 +71,7 @@ Each module gets exactly one page. Read in any order — pages cross-link where 
 
 | Module | What it is |
 | --- | --- |
-| 📖 [memory.md](./memory.md) | Hierarchical persona memory: L1 core blocks · L2 raw messages · L3 events · L4 reflections · retrieve with rerank · observer pattern for lifecycle events · idempotent schema migration |
+| 📖 [memory.md](./memory.md) | Hierarchical persona memory: L1 core blocks · L2 raw messages · L3 events · L4 thoughts / intentions / expectations · L5 entities + aliases · L6 episodic state · retrieve with rerank · observer pattern for lifecycle events · idempotent schema migration |
 | 🗣️ [voice.md](./voice.md) | Text-to-speech, speech-to-text, and voice cloning. Provider abstraction over FishAudio, Whisper, and stubs. `VoiceService.generate_voice()` facade with on-disk caching |
 | 📡 [channels.md](./channels.md) | Channel Protocol: how external transports (web, Discord, iMessage, WeChat) plug into the daemon. Debounce state machine for burst user input. The cross-channel unified-persona design |
 | ⚡ [proactive.md](./proactive.md) | Autonomous messaging. Four policy gates (quiet hours · cold user · rate limit · no-in-flight-turn). Relationship triggers. Delivery inherits from `persona.voice_enabled` |
