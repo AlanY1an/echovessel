@@ -221,7 +221,6 @@ def test_get_state_after_onboarding_reports_not_required() -> None:
                 "persona_block": "Luna is curious and gentle.",
                 "self_block": "",
                 "user_block": "",
-                "mood_block": "",
             },
         )
         assert r1.status_code == 200
@@ -249,7 +248,6 @@ def test_post_onboarding_writes_core_blocks() -> None:
                 "persona_block": "P block",
                 "self_block": "S block",
                 "user_block": "U block",
-                "mood_block": "M block",
             },
         )
     assert resp.status_code == 200
@@ -263,7 +261,6 @@ def test_post_onboarding_writes_core_blocks() -> None:
     assert labels.get("persona") == "P block"
     assert labels.get("self") == "S block"
     assert labels.get("user") == "U block"
-    assert labels.get("mood") == "M block"
 
 
 def test_post_onboarding_duplicate_returns_409() -> None:
@@ -274,7 +271,6 @@ def test_post_onboarding_duplicate_returns_409() -> None:
             "persona_block": "P",
             "self_block": "",
             "user_block": "",
-            "mood_block": "",
         }
         r1 = client.post("/api/admin/persona/onboarding", json=body)
         assert r1.status_code == 200
@@ -296,7 +292,6 @@ def test_post_onboarding_empty_blocks_are_silently_skipped() -> None:
                 "persona_block": "only this",
                 "self_block": "",
                 "user_block": "",
-                "mood_block": "",
             },
         )
     assert resp.status_code == 200
@@ -325,8 +320,8 @@ def test_get_persona_returns_all_five_blocks_empty_for_unwritten() -> None:
         "persona": "",
         "self": "",
         "user": "",
-        "mood": "",
         "relationship": "",
+        "style": "",
     }
 
 
@@ -340,7 +335,6 @@ def test_get_persona_reflects_onboarding_writes() -> None:
                 "persona_block": "P",
                 "self_block": "S",
                 "user_block": "",
-                "mood_block": "",
             },
         )
         resp = client.get("/api/admin/persona")
@@ -350,8 +344,8 @@ def test_get_persona_reflects_onboarding_writes() -> None:
     assert data["core_blocks"]["persona"] == "P"
     assert data["core_blocks"]["self"] == "S"
     assert data["core_blocks"]["user"] == ""
-    assert data["core_blocks"]["mood"] == ""
     assert data["core_blocks"]["relationship"] == ""
+    assert data["core_blocks"]["style"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +364,6 @@ def test_post_persona_partial_update_only_touches_present_fields() -> None:
                 "persona_block": "P1",
                 "self_block": "S1",
                 "user_block": "",
-                "mood_block": "",
             },
         )
         # Partial update: only persona_block present.
@@ -401,7 +394,6 @@ def test_post_persona_display_name_update_applies() -> None:
                 "persona_block": "P",
                 "self_block": "",
                 "user_block": "",
-                "mood_block": "",
             },
         )
         resp = client.post(

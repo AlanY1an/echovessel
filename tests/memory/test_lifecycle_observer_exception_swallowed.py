@@ -20,10 +20,13 @@ from echovessel.memory import (
     create_engine,
     register_observer,
     unregister_observer,
-    update_mood_block,
+    update_episodic_state,
 )
 from echovessel.memory.backends.sqlite import SQLiteBackend
-from echovessel.memory.consolidate import consolidate_session
+from echovessel.memory.consolidate import (
+    ExtractionResult,
+    consolidate_session,
+)
 from echovessel.memory.ingest import ingest_message
 from echovessel.memory.models import Session as SessionRow
 from echovessel.memory.sessions import mark_session_closing
@@ -111,7 +114,7 @@ async def test_exploding_on_session_closed_does_not_block_consolidate(
         db.refresh(session)
 
         async def extract_fn(_messages):
-            return []
+            return ExtractionResult()
 
         # Consolidate runs through trivial-skip path. The close hook
         # will explode, but the session's status must still be CLOSED.
@@ -138,12 +141,20 @@ def test_exploding_on_mood_updated_does_not_block_write(
     create_all_tables(engine)
     with caplog.at_level("WARNING"), DbSession(engine) as db:
         _seed(db)
-        block = update_mood_block(
+        new_state = update_episodic_state(
             db,
             persona_id="p_boom",
-            new_mood_text="tired but steady",
+            signal={
+                "mood": "tired but steady",
+                "energy": 4,
+                "last_user_signal": None,
+            },
         )
-        # The mood block was written successfully
-        assert block.content == "tired but steady"
+        # The episodic state was written successfully despite the
+        # observer raising.
+        assert new_state["mood"] == "tired but steady"
+        persona = db.get(Persona, "p_boom")
+        assert persona is not None
+        assert persona.episodic_state["mood"] == "tired but steady"
 
     assert any("on_mood_updated" in r.message for r in caplog.records)

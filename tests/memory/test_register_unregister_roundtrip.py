@@ -15,7 +15,7 @@ from echovessel.memory import (
     create_engine,
     register_observer,
     unregister_observer,
-    update_mood_block,
+    update_episodic_state,
 )
 from echovessel.memory.ingest import ingest_message
 
@@ -58,8 +58,14 @@ def test_register_then_unregister_stops_callbacks():
             ingest_message(
                 db, "p_reg", "self", "imessage", MessageRole.USER, "hi"
             )
-            update_mood_block(
-                db, persona_id="p_reg", new_mood_text="quiet"
+            update_episodic_state(
+                db,
+                persona_id="p_reg",
+                signal={
+                    "mood": "quiet",
+                    "energy": 5,
+                    "last_user_signal": None,
+                },
             )
         # No additional fires after unregister
         assert counter.fired == 1

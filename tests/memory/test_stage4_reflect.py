@@ -42,6 +42,7 @@ from echovessel.memory.backends.sqlite import SQLiteBackend
 from echovessel.memory.consolidate import (
     ExtractedEvent,
     ExtractedThought,
+    ExtractionResult,
     consolidate_session,
 )
 from echovessel.memory.forget import DeletionChoice, delete_concept_node
@@ -115,7 +116,7 @@ def _seed_existing_thought(
 
 def _make_extract(events: list[ExtractedEvent]):
     async def _fn(_msgs):
-        return list(events)
+        return ExtractionResult(events=list(events))
 
     return _fn
 

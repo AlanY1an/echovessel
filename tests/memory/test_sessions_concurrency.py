@@ -17,7 +17,7 @@ when a concurrent insert races in.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -121,9 +121,15 @@ def test_get_or_create_returns_existing_open_without_creating_duplicate():
     """Happy path regression guard: if an OPEN session for the triple
     already exists, ``get_or_create_open_session`` must return it as-is
     — no new row, no attempted insert that would trip the unique index.
+
+    Uses a fixed ``now`` window so the seeded session's
+    ``last_message_at`` does not trip the idle-stale threshold as real
+    wall-clock drifts past the hardcoded 2026-04-18 date.
     """
     engine = create_engine(":memory:")
     create_all_tables(engine)
+
+    seeded_at = datetime(2026, 4, 18, 10, 0, 0)
 
     with DbSession(engine) as db:
         _seed(db)
@@ -134,14 +140,16 @@ def test_get_or_create_returns_existing_open_without_creating_duplicate():
                 user_id="u",
                 channel_id="web",
                 status=SessionStatus.OPEN,
-                started_at=datetime(2026, 4, 18, 10, 0, 0),
-                last_message_at=datetime(2026, 4, 18, 10, 0, 0),
+                started_at=seeded_at,
+                last_message_at=seeded_at,
             )
         )
         db.commit()
 
     with DbSession(engine) as db:
-        sess = get_or_create_open_session(db, "p", "u", "web")
+        sess = get_or_create_open_session(
+            db, "p", "u", "web", now=seeded_at + timedelta(minutes=1)
+        )
         db.commit()
         returned_id = sess.id
 

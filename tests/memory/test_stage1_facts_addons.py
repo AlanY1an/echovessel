@@ -153,11 +153,12 @@ def _build(llm_response: str = _VALID_LLM, *, llm: StubProvider | None = None):
 # ---------------------------------------------------------------------------
 
 
-def test_facts_timezone_persists_in_db_but_not_in_system_prompt() -> None:
-    """``timezone`` is one of the ten facts that exist for system code
-    only (birthday reminders, locale-aware phrasing). It MUST round-trip
-    through onboarding + GET /api/admin/persona, and MUST NOT show up
-    in the rendered system prompt's "# Who you are" section.
+def test_facts_timezone_persists_in_db_but_not_in_who_you_are_bullets() -> None:
+    """``timezone`` rides the ``# Right now`` section via
+    :func:`_format_now_section` rather than appearing as a bullet in
+    ``# Who you are``. The fact columns that DO surface as bullets in
+    v0.4 are name / gender / birth year / nationality / location /
+    occupation / native language (plan §6.5).
     """
 
     rt, client, _llm = _build()
@@ -169,7 +170,6 @@ def test_facts_timezone_persists_in_db_but_not_in_system_prompt() -> None:
                 "persona_block": "P",
                 "self_block": "",
                 "user_block": "",
-                "mood_block": "",
                 "facts": {
                     "full_name": "张丽华",
                     "gender": "female",
@@ -184,11 +184,9 @@ def test_facts_timezone_persists_in_db_but_not_in_system_prompt() -> None:
         resp = client.get("/api/admin/persona")
 
     facts = resp.json()["facts"]
-    # API returned timezone — it's stored.
     assert facts["timezone"] == "Asia/Shanghai"
     assert facts["location"] == "沈阳"
 
-    # System prompt does NOT contain timezone or location.
     with DbSession(rt.ctx.engine) as db:
         persona_row = db.get(Persona, "stage1-test")
     view = PersonaFactsView.from_persona_row(persona_row)
@@ -198,11 +196,11 @@ def test_facts_timezone_persists_in_db_but_not_in_system_prompt() -> None:
         persona_facts=view,
     )
 
+    # Without ``now=``, the ``# Right now`` section is not rendered, so
+    # the timezone string must not appear as a ``# Who you are`` bullet.
     assert "Asia/Shanghai" not in rendered
-    assert "沈阳" not in rendered
-    assert "location" not in rendered.lower()
-    assert "timezone" not in rendered.lower()
-    # The five contract fields ARE there.
+    # Location DOES render as a bullet (plan §6.5).
+    assert "沈阳" in rendered
     assert "张丽华" in rendered
     assert "Born: 1962" in rendered
     assert "retired_teacher" in rendered
