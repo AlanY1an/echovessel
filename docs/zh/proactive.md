@@ -150,6 +150,20 @@ scheduler 会在调用 `prepare_voice` 之前现场读取 `persona.voice_enabled
 
 `prepare_voice` 永远不会抛。任何 voice 侧的失败——瞬时 provider 故障、永久配置错误、预算用尽、未预期的异常——都会被解析成一次文字回退,这样 channel 发送永远至少还有一段文字可以推。失败原因记在 audit trail 的 `voice_error` 字段里。
 
+### 与 slow_tick 的关系（v1 暂不集成）
+
+memory 模块里跑着 slow_tick reflection phase（详见 [`memory.md` § Slow_tick consolidate phase](./memory.md#slow_tick-consolidate-phase-l4-forward-looking)）。slow_tick 在 session 之间跑,产 `type='thought'` 节点和 `type='expectation'` 子类节点（带 `event_time_end` 作为 due_at）。expectation 表达的语义是"我预期 user 会在某个时间窗里做某件事"——这看起来天然就是 proactive 的触发源:expectation 临近 due_at 时由 proactive 主动起话头("你之前说今晚会更新一下,有进展吗？")。
+
+**当前 proactive 没有把这条线接上**——proactive 当前只读 L3 events / L4 thoughts / RecallMessages,不读 expectation 节点,不会因为 expectation 即将到期而 fire 主动消息。理由是:
+
+- expectation 是 slow_tick 的产物,目前还没有足够的 dogfood 数据校准 LLM 对 expectation 的命中率;先让 expectation 在 fast loop 里被 user 自然回复 fulfill / expire,等到 1-2 周线下数据后再决定要不要把它接成 proactive trigger。
+- proactive 的 Send-N-per-window 闸门已经够紧;再多塞一个 trigger source 容易越界。
+- expectation 的 due_at 精度只到 day,proactive tick 是 60s——粗细对不上;接的话还得引入 day-bucket 节流逻辑,工作量不在这次 ship 范围。
+
+v2 计划:在 `proactive/triggers/` 下加一个新 trigger（类似 `relationship_anniversary`）读 `concept_nodes WHERE type='expectation' AND event_time_end BETWEEN now AND now + 24h AND superseded_by_id IS NULL`,通过现有 policy gate 链(quiet hours / 24h cap / cool-down 等)再决定是否真的发。今天读这一段的人:**don't add it yet**——等 dogfood 数据。
+
+memory 写 expectation 时触发的 `on_thought_created` observer hook 会同时被 proactive 看见,但 v1 proactive 的实现就是个 no-op(收下不动作)。
+
 ## How to Extend
 
 ### 1. 加一条新的关系触发

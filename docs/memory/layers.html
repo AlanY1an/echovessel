@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EchoVessel Memory — Four Layers, One Picture</title>
+<title>EchoVessel Memory — Six Layers, One Picture</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -42,7 +42,7 @@
 
   .legend {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 12px;
     margin-top: 32px;
   }
@@ -57,6 +57,8 @@
   .leg-item.l2 { border-left-color: #0ea5e9; }
   .leg-item.l3 { border-left-color: #10b981; }
   .leg-item.l4 { border-left-color: #f59e0b; }
+  .leg-item.l5 { border-left-color: #14b8a6; }
+  .leg-item.l6 { border-left-color: #ec4899; }
   .leg-item h3 {
     font-size: 13px; font-weight: 700; margin-bottom: 4px;
   }
@@ -71,6 +73,8 @@
   .leg-item.l2 .lv { background: #0ea5e9; }
   .leg-item.l3 .lv { background: #10b981; }
   .leg-item.l4 .lv { background: #f59e0b; }
+  .leg-item.l5 .lv { background: #14b8a6; }
+  .leg-item.l6 .lv { background: #ec4899; }
   .leg-item .sub {
     font-size: 11px; color: #64748b;
     line-height: 1.55; margin-top: 4px;
@@ -137,8 +141,8 @@
 <body>
 
 <header>
-  <h1>EchoVessel Memory <span>· Four Layers, One Picture</span></h1>
-  <div class="subtitle">The simplest possible view of how L1–L4 connect.</div>
+  <h1>EchoVessel Memory <span>· Six Layers, One Picture</span></h1>
+  <div class="subtitle">L1–L4 form the conversation loop · L5 entities and L6 episodic state sit alongside, feeding the same prompt.</div>
 </header>
 
 <!-- ─── Diagram ─── -->
@@ -184,7 +188,7 @@
     <rect x="40" y="120" width="260" height="120" rx="12" fill="#eef2ff" stroke="#6366f1" stroke-width="2"/>
     <text x="60" y="148" font-family="JetBrains Mono, monospace" font-size="14" font-weight="700" fill="#4338ca">L1</text>
     <text x="110" y="148" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#4338ca">core_blocks</text>
-    <text x="60" y="168" font-family="Inter, sans-serif" font-size="11" fill="#6366f1" font-weight="500">persona · self · user · relationship · mood</text>
+    <text x="60" y="168" font-family="Inter, sans-serif" font-size="11" fill="#6366f1" font-weight="500">persona · self · user · relationship · style</text>
     <text x="60" y="196" font-family="Inter, sans-serif" font-size="10" fill="#4f46e5" font-style="italic">— "who the persona is"</text>
     <text x="60" y="214" font-family="Inter, sans-serif" font-size="10" fill="#64748b">✍️ authored · by human (onboarding / admin)</text>
     <text x="60" y="228" font-family="Inter, sans-serif" font-size="10" fill="#64748b">📖 read every single turn</text>
@@ -289,9 +293,9 @@
   <div class="leg-item l1">
     <h3><span class="lv">L1</span>core_blocks</h3>
     <div class="sub">
-      Five <strong>authored</strong> identity documents — persona, self, user, relationship, mood. Written by humans during onboarding or via the admin UI. Always sit at the top of every LLM prompt.
+      Five <strong>authored</strong> identity documents — persona, self, user, relationship, style. Written by humans during onboarding or via the admin UI; the slow_tick reflection phase may append to <code>self</code> within an edit-distance bound. Always sit at the top of every LLM prompt.
       <br><br>
-      <code>1 row per label</code> · never auto-distilled
+      <code>1 row per label</code> · never auto-distilled per turn
     </div>
   </div>
 
@@ -307,18 +311,37 @@
   <div class="leg-item l3">
     <h3><span class="lv">L3</span>events</h3>
     <div class="sub">
-      Episodic memory. When a session closes, an LLM reads L2 and distills <strong>0–3 discrete events</strong>, each with a signed <code>emotional_impact</code> in <code>[-10, +10]</code> and up to 3 relational tags from a closed vocabulary.
+      Episodic memory. When a session closes, an LLM reads L2 and distills <strong>0–3 discrete events</strong>, each with a signed <code>emotional_impact</code> in <code>[-10, +10]</code>, up to 3 relational tags, and an optional <code>event_time_*</code> day-precision window for time-anchored recall.
       <br><br>
       <code>concept_nodes</code> WHERE <code>type=EVENT</code> · embedded via sqlite-vec
     </div>
   </div>
 
   <div class="leg-item l4">
-    <h3><span class="lv">L4</span>thoughts</h3>
+    <h3><span class="lv">L4</span>thoughts + intentions + expectations</h3>
     <div class="sub">
-      Long-term impressions. After gate passes (shock OR timer, never over <code>3/24h</code>), an LLM reflects on recent L3 events and produces <strong>1–2 thoughts</strong>. Every thought <strong>must cite</strong> its source event IDs via <code>filling[]</code>.
+      Reflection layer · three sub-types share the same table.
+      <code>thought</code> backward-looking insight, <code>intention</code> strict commitment with <code>subject='persona'</code>, <code>expectation</code> forward prediction with <code>event_time_end</code> as due_at. Each carries a <code>filling[]</code> chain back to its source events.
       <br><br>
-      <code>concept_nodes</code> WHERE <code>type=THOUGHT</code> · edges in <code>concept_node_filling</code>
+      <code>concept_nodes</code> WHERE <code>type IN (THOUGHT, INTENTION, EXPECTATION)</code>
+    </div>
+  </div>
+
+  <div class="leg-item l5">
+    <h3><span class="lv">L5</span>entities + aliases</h3>
+    <div class="sub">
+      Canonical names for third-party people / places / orgs / pets, with <strong>many-to-one alias rows</strong> ("Scott" = "黄逸扬" = "Yiyang"). Three-tier dedup at extraction time: alias match → embedding 0.65 / 0.85 → uncertain branch where the persona naturally asks the user. At retrieve time an alias hit pulls every linked ConceptNode into the candidate pool with an <code>entity_anchor</code> rerank bonus.
+      <br><br>
+      tables · <code>entities</code> · <code>entity_aliases</code> · junction <code>concept_node_entities</code>
+    </div>
+  </div>
+
+  <div class="leg-item l6">
+    <h3><span class="lv">L6</span>episodic_state</h3>
+    <div class="sub">
+      The persona's <strong>current affect</strong> as a single-row JSON snapshot — <code>{mood, energy, last_user_signal, updated_at}</code>. Written as a side-effect of extraction's <code>session_mood_signal</code> (no extra LLM call). <code>assemble_turn</code> entry decays mood back to <code>neutral</code> after 12h. Renders as <code># How you feel right now</code>; the section is skipped while mood is neutral.
+      <br><br>
+      column · <code>personas.episodic_state</code>
     </div>
   </div>
 </div>
@@ -336,15 +359,15 @@
   <div class="mode distill">
     <h3><span class="pill">distill</span>Deferred · per session</h3>
     <p>
-      After a session idle-closes (default 30min), a background worker pulls L2 messages and asks a small LLM to extract <strong>0–3 events</strong> (L3). If the reflection gate allows, a medium LLM then reflects on recent events to produce <strong>1–2 thoughts</strong> (L4), each with explicit <code>filling[]</code> evidence.
+      After a session idle-closes (default 30min), a background worker pulls L2 messages and asks a small LLM to extract <strong>0–3 events</strong> (L3) plus any new L5 entities; the same call emits a <code>session_mood_signal</code> that lands in L6. If the reflection gate allows, a medium LLM reflects to produce <strong>1–2 thoughts</strong> (L4) with explicit <code>filling[]</code> evidence. The optional <strong>G phase</strong> then runs <code>slow_cycle</code> for between-session reflection — produces forward-looking <code>expectation</code> nodes under cool-down + token-wall + daily-cap gates.
     </p>
   </div>
   <div class="mode read">
     <h3><span class="pill">read</span>Fused · every turn</h3>
     <p>
-      At assembly time, every new user message triggers: L1 read (all 5 blocks), L2 read (recent window), and an L3+L4 vector search with ranking formula:
+      At assembly time, every new user message triggers: L1 read (all 5 blocks), L6 read (episodic state · 12h decay check), L2 read (recent window grouped into day buckets), L5 alias scan (<code>find_query_entities</code>), and an L3+L4 vector search with ranking formula:
       <br><br>
-      <code>total = 0.5·recency + 3·relevance + 2·|impact| + 1·relational_bonus</code>
+      <code>total = 0.5·recency + 3·relevance + 2·|impact| + 1·relational_bonus + 1.5·entity_anchor</code>
       <br><br>
       Nothing ever filters by channel_id (iron rule D4).
     </p>
@@ -387,7 +410,7 @@
   <a href="../architecture-flow.html">architecture-flow.html (nervous system) →</a>
   <br>
   <br>
-  EchoVessel v0.0.1-alpha · 2026-04-16
+  EchoVessel · memory architecture reference
 </div>
 
 </body>

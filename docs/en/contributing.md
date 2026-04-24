@@ -34,7 +34,7 @@ If any of those three fail on a fresh clone, that is a bug; please open an issue
 EchoVessel/
 ├── src/echovessel/           the library and daemon
 │   ├── core/                 shared types, enums, utilities
-│   ├── memory/               L1-L4 persona memory
+│   ├── memory/               L1-L6 persona memory
 │   ├── voice/                TTS, STT, voice cloning
 │   ├── channels/             Channel Protocol + concrete channels
 │   │   └── web/frontend/     React 19 + Vite + TypeScript UI source (built into `web/static/`)

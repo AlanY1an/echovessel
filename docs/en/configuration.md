@@ -151,6 +151,31 @@ Controls the background worker that extracts events and thoughts from closed ses
 | `worker_poll_seconds` | `5` | How often the consolidate worker wakes up to check for closed sessions. Lower values react faster but spin the database more. |
 | `worker_max_retries` | `3` | Retry count per session on transient failures before it is marked failed and left for manual inspection. |
 
+## `[users]`
+
+The `users` table stores one row per user profile, carrying `display_name` and `timezone`. The `[users]` config section does not define users directly (that is the admin API's job); it carries global defaults that apply to user rows.
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `timezone` | `null` (no global default) | An IANA timezone string like `"Asia/Taipei"` or `"America/New_York"`. The per-row `users.timezone` value takes precedence; when empty, the web channel populates it from the browser's `Intl.DateTimeFormat().resolvedOptions().timeZone` on first connect, and the owner can override it from the admin UI. `assemble_turn` uses the resolved value to render `IncomingMessage.received_at` into the system prompt's `# Right now` first line. |
+
+Design rationale: the user timezone is **not** a static config value because the same daemon may eventually serve multiple users (MVP is single-user, but the schema is in place). Keeping it on the `users` row instead of `[users]` global avoids painting all future users into one timezone corner.
+
+## `[slow_tick]`
+
+Toggles and quotas for the slow_tick reflection phase. Full design lives in [`memory.md`](./memory.md#slow_tick-consolidate-phase-l4-forward-looking--plan-7) under the slow_tick section. All values have conservative defaults that are safe to leave on out of the box; before flipping `enabled` to true on a true-believer install, watch the admin Transcripts tab for a cycle or two to confirm the prompts look reasonable.
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `enabled` | `true` | Global kill switch. When false, the G phase short-circuits, the worker skips slow_cycle calls entirely, and the proactive path is unaffected. |
+| `cool_down_minutes` | `30` | Minimum gap between two slow_cycle runs for the same persona. Skipped when the current session contains a SHOCK event (\|impact\| ≥ 8), so a high-emotion conversation can fire one immediately. |
+| `daily_cap` | `36` | Maximum cycle count per rolling 24h window. Coarse rate-limit that keeps an emotionally dense day from running the LLM bill unchecked. |
+| `daily_input_token_budget` | `150_000` | Cumulative input-token ceiling per 24h across all cycles. Pairs with `daily_cap` for a two-axis brake. |
+| `daily_output_token_budget` | `30_000` | Same, output-token side. |
+| `transcript_retention_days` | `14` | How long cycle JSON under `develop-docs/slow_tick_transcripts/` lives; the worker prunes older files itself. Set to 0 to disable retention (transcripts kept forever — useful while debugging). |
+
+Config parse failures (non-int / negative / out-of-range) fail-fast at startup; reload runs the same validation. When daily cap or a token budget is hit, the worker marks the over-budget cycle as `throttled` and logs a warning; the next rolling window restores capacity automatically.
+
 ## `[idle_scanner]`
 
 The idle scanner closes stale open sessions so that memory can consolidate them.

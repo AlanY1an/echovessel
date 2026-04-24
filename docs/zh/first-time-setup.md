@@ -157,7 +157,7 @@ LLM 会尝试抽取结构化身份信息(姓名 / 性别 / 生日 / 国籍 / 时
 
 ### 记忆随时间成长
 
-当你持续跟 persona 聊下去 · 一个后台 worker 会把结束掉的对话 session 合并(consolidate)成更高层的记忆:事件("我们聊了东京那趟")· 想法("用户好像很期待樱花季")· 心情更新。这个流程自己有节奏,不需要你插手 · 会话结束后一两分钟就开始出现在检索结果里。完整的四层记忆如何交互看 [`memory.md`](./memory.md)。
+当你持续跟 persona 聊下去 · 一个后台 worker 会把结束掉的对话 session 合并(consolidate)成更高层的记忆:事件("我们聊了东京那趟")· 想法("用户好像很期待樱花季")· 还有 episodic state 的情绪更新。这个流程自己有节奏,不需要你插手 · 会话结束后一两分钟就开始出现在检索结果里。完整的六层记忆如何交互看 [`memory.md`](./memory.md)。
 
 ---
 
@@ -246,7 +246,7 @@ provider 选项 · 声音克隆工作流 · 完整语音配置参考都在 [`voi
 
 按你感兴趣的方向挑一个:
 
-- [`memory.md`](./memory.md) · 四层记忆怎么工作 · 检索和 rerank 怎么喂进 prompt · consolidate worker 如何把原始对话变成长期知识
+- [`memory.md`](./memory.md) · 六层记忆怎么工作 · 检索和 rerank 怎么喂进 prompt · consolidate worker 如何把原始对话变成长期知识
 - [`voice.md`](./voice.md) · provider 选择 · 声音克隆流程 · 语音投递决策从 persona 状态如何流到 channel 层
 - [`channels.md`](./channels.md) · 怎么新增一个 transport · debounce state machine · 一 persona 多嘴的铁律 · Discord DM 的完整流程
 - [`proactive.md`](./proactive.md) · 如何让 persona 在严格 gate 下主动发第一条消息

@@ -129,6 +129,40 @@ The persona reply is written to memory **before** the channel is told to send. I
 
 `on_turn_done` is always called exactly once, from a `finally` block at the bottom of `assemble_turn`. On a successful turn, on a transient LLM error that kept partial tokens, on a permanent LLM error that produced nothing, on a memory ingest failure — the channel is always notified. Without this invariant a channel's debounce state machine could hang permanently waiting for a turn that already ended.
 
+### Prompt section order
+
+`assemble_turn` step 5 builds the system and user prompts in a fixed order. The order itself is part of the prompt engineering — LLMs anchor strongest on the last block they read, so "what the user is saying right now" must be at the end and "who the persona is" must be at the start. Any mid-section reordering is a deliberate change to a stable contract, not a casual edit.
+
+**System prompt (`build_system_prompt`)**:
+
+1. `You are {persona_display_name}, a long-term companion who talks with this user as a real friend, not an assistant.` — opener, single line.
+2. `# Right now` — dual-timezone. Line one is the user's local wall-clock (`IncomingMessage.received_at`, with tz). When `personas.timezone` carries an IANA zone, line two appends the persona's "conceptually based" time. Both lines render so the persona can answer "isn't it afternoon for you?" in user-local terms while still tracking its own implied location.
+3. `# Who you are` — seven biographic facts from `PersonaFactsView`: `Name / Gender / Born / Nationality / Based in / Occupation / Native language`. Each `None` field skips its bullet; an all-`None` view skips the whole section. `timezone` is on the view but only feeds the dual-tz renderer in `# Right now`, never a bullet.
+4. `# How you feel right now` — L6 episodic state. Skipped entirely while mood is the default `neutral` (keeps the prompt terse). Otherwise renders `mood`, `energy /10`, and (when present) a `last sense from them` line.
+5. L1 core blocks in this order: `# Persona` / `# About yourself (private self-narrative)` / `# About the user` / `# Relationship` / `# Style preferences`. Missing blocks are silently skipped.
+6. `# Entity disambiguation pending` — injected by retrieve only when the current query alias-matches an entity with `merge_status='uncertain'`. Describes the ambiguity and asks the LLM to clarify with the user mid-flow.
+7. `STYLE_INSTRUCTIONS` — hardcoded · always last. Carries the F10 transport-name ban, the competence-boundary lines ("我刚才说错了" / "I got that wrong" · do not retrofit · do not invent), and the negative few-shot block lifted from `prompts/judge.py` anti-patterns (formulaic opener / generic affect label / empty reassurance / strategy lock, etc).
+
+**User prompt (`build_user_prompt`)** — section order, walking older context first:
+
+1. `# Recent sessions` — up to five most-recent `session_summary` L4 thoughts (each session-close yields one as a side-effect of the extraction LLM). Each line carries a day-bucket prefix (`[Older] / [Earlier this week] / [Yesterday] / [Earlier today] / [Just now]`). Skipped when empty.
+2. `# Recent thoughts you've had about this person` — descriptions of `type='thought'` rows from the retrieve rerank top_k. Skipped when empty.
+3. `# About {speaker}` — pinned L4 thoughts from `force_load_user_thoughts=10` (ranked by recency × importance, bypassing query similarity). IDs already returned by the previous section are excluded at the retrieve layer so there's no duplication. `{speaker}` is `User.display_name`, falling back to `them`.
+4. `# Recent things you remember happened` — `type='event'` rows from the rerank top_k, each appended with the R4 day-precision delta phrase (`· event 2026-04-26~2026-05-02 · status=active (3 days in)`). Atemporal events render without a phrase.
+5. `# Promises you've made` — currently active persona-side intentions (`subject='persona'` AND `type='intention'` AND `event_time_end >= now` or NULL). Each line also carries a delta phrase.
+6. `# Our recent conversation` — the L2 ~20-message tail grouped under day-bucket headers, OLDER → NEWER (`## Older` → `## Just now`). Each line is `them:` / `me:` rather than the literal `user:` / `persona:`. Conversational pronouns keep the tone consistent and never expose the internal role labels.
+7. `# What they just said` — what the user typed this turn (a multi-message burst is joined with newlines).
+
+The auxiliary data needed to render the ConceptNode-backed sections (speaker_display, active_intentions, recent_session_summaries) is fetched up-front in `assemble_turn` and threaded into `build_turn_user_prompt`, so `build_user_prompt` stays a pure renderer with no DB session.
+
+### Slow_tick and the consolidate worker
+
+slow_tick does not run inside runtime — it lives as the G phase appended to `consolidate_worker._process_one` (in the memory module). Runtime's only responsibility is "5-second polling that hands CLOSING sessions to the worker". See [`memory.md` § Slow_tick consolidate phase](./memory.md#slow_tick-consolidate-phase-l4-forward-looking--plan-7) for the full mechanics; this document does not duplicate them, to keep the runtime / memory separation of concerns clean. The pieces runtime owns are:
+
+- `cfg.slow_tick.*` config keys flow through runtime config parsing on their way to the worker (see [`configuration.md`](./configuration.md)).
+- Admin endpoints `GET /api/admin/slow-tick/transcripts` and `GET /api/admin/slow-tick/transcripts/{cycle_id}` are exposed by the web channel; their content is the cycle JSON the worker writes to disk.
+- The runtime memory observer receives `on_thought_created` / `on_event_created` without distinguishing fast loop vs slow loop — handlers should check `node.type` themselves (`'thought'` vs `'expectation'`).
+
 ### Memory observer wiring
 
 Memory's lifecycle hooks (`on_session_closed`, `on_new_session_started`, `on_mood_updated`) are defined as **sync** methods on the `MemoryEventObserver` Protocol — memory cannot import asyncio because its write path is synchronous and runs inside SQLite's single-writer lock. Runtime's observer implementation is also sync, which means its methods return immediately; the real work of broadcasting the event to channels is scheduled onto the runtime event loop via `asyncio.run_coroutine_threadsafe(self._broadcast(...), self._loop)`.

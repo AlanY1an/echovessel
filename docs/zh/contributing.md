@@ -34,7 +34,7 @@ uv run lint-imports                # 架构契约 · 必须保持绿
 EchoVessel/
 ├── src/echovessel/           库和 daemon 本体
 │   ├── core/                 共享类型、枚举、工具
-│   ├── memory/               L1-L4 persona 记忆
+│   ├── memory/               L1-L6 persona 记忆
 │   ├── voice/                TTS / STT / 语音克隆
 │   ├── channels/             Channel Protocol + 具体 channel
 │   │   └── web/frontend/     React 19 + Vite + TypeScript UI 源码(编入 `web/static/`)

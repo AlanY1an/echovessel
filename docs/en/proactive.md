@@ -150,6 +150,20 @@ The scheduler reads `persona.voice_enabled` and `persona.voice_id` live, right b
 
 `prepare_voice` never raises. Every voice-path failure — transient provider outage, permanent misconfiguration, budget exhaustion, unexpected exception — resolves to a text fallback so the channel send always has a text payload to publish. The failure is captured in the `voice_error` field of the audit trail.
 
+### Relationship to slow_tick (no v1 integration)
+
+The slow_tick reflection phase lives inside the memory module (see [`memory.md` § Slow_tick consolidate phase](./memory.md#slow_tick-consolidate-phase-l4-forward-looking) for full mechanics). Slow_tick runs between sessions and produces both `type='thought'` nodes and `type='expectation'` sub-class nodes (with `event_time_end` doubling as a due_at). An expectation expresses "I expect the user to do X within window Y" — which looks like the natural trigger source for proactive: when an expectation's due_at is near, the persona could spontaneously open with "you mentioned you'd update tonight, anything to share?".
+
+**Proactive does NOT wire this path up today** — proactive currently reads L3 events, L4 thoughts, and RecallMessages, but does not read expectation nodes and will not fire a proactive message because an expectation is about to expire. The reasons:
+
+- Expectations are slow_tick output, and we don't yet have enough dogfood signal to calibrate how often the LLM's expectations actually land. Let the fast loop fulfill or expire them through natural user replies for a week or two before deciding whether to wire them as a proactive trigger.
+- Proactive's Send-N-per-window gates are already tight; adding another trigger source is easy to overshoot.
+- Expectation `due_at` precision is day-level; the proactive tick is 60s. Bridging the granularity mismatch needs day-bucket throttling logic that is out of scope for this ship.
+
+v2 plan: add a new trigger under `proactive/triggers/` (analogous to `relationship_anniversary`) that reads `concept_nodes WHERE type='expectation' AND event_time_end BETWEEN now AND now + 24h AND superseded_by_id IS NULL`, then routes through the existing policy gate chain (quiet hours / 24h cap / cool-down / …) before actually sending. Anyone reading this section today: **don't add it yet** — wait for dogfood data.
+
+The `on_thought_created` observer hook that fires when memory writes an expectation row IS visible to proactive, but in v1 the handler is a deliberate no-op (receives, ignores).
+
 ## How to Extend
 
 ### 1. Add a new relationship trigger

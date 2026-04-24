@@ -129,6 +129,40 @@ Persona 的回复**先写进 memory,再让 channel 发出去**。如果写入失
 
 `on_turn_done` 永远恰好被调一次,位置是 `assemble_turn` 底部的 `finally` 块。Turn 成功时、LLM 瞬时错误只留下部分 token 时、LLM 永久错误一个 token 都没出来时、memory ingest 失败时——channel 永远被通知。没有这条不变式,一个 channel 的 debounce 状态机会永远挂在那里等一个早就结束的 turn。
 
+### Prompt 段顺序
+
+`assemble_turn` 的 step 5 把 system prompt 和 user prompt 按固定顺序组起来。顺序本身是 prompt 工程的一部分——LLM 对最后读到的段最敏感,所以"现在用户要说什么"必须在最末,"persona 是谁"必须在最前。任何中段的重排都不该是顺手改——契约是稳定的。
+
+**System prompt（`build_system_prompt`）**:
+
+1. `You are {persona_display_name}, a long-term companion who talks with this user as a real friend, not an assistant.` — opener,只一行。
+2. `# Right now` — 双时区。第一行是 user 的本地时间（`IncomingMessage.received_at`,带 tz）。如果 `personas.timezone` 设了一个 IANA zone,第二行附 persona 的"概念上所在地"时间。两行同时渲染,这样 persona 在以 user-local 时间回应（"你那边不是下午吗"）的同时仍能保持自己的所在地一致性。
+3. `# Who you are` — `PersonaFactsView` 里的 7 项 biographic facts:`Name / Gender / Born / Nationality / Based in / Occupation / Native language`。每一项 None 时跳过该 bullet,全 None 时整段跳过。`timezone` 在 facts 里,但只喂给 `# Right now` 的双时区渲染,不作为 bullet 显示。
+4. `# How you feel right now` — L6 episodic state。当 mood 仍是默认 `neutral` 时整段跳过(prompt 保持简短)。否则渲染 `mood`、`energy /10`,以及如果有的话,`last sense from them` 行。
+5. L1 core blocks(按这个顺序): `# Persona` / `# About yourself (private self-narrative)` / `# About the user` / `# Relationship` / `# Style preferences`。任何缺失的 block 静默跳过。
+6. `# Entity disambiguation pending` — 仅当当前 query 命中了 `merge_status='uncertain'` 的 entity 时由 retrieve 注入;描述模糊性并请 LLM 在自然对话节奏里向 user 问一句。
+7. `STYLE_INSTRUCTIONS` — 硬编码 · 永远在最末。包含 F10 transport-name 禁令、competence boundary("我刚才说错了" / "I got that wrong" · 不 retrofit · 不 invent),以及从 `prompts/judge.py` 反模式抽出的 negative few-shot 段(formulaic opener / generic affect label / empty reassurance / strategy lock 等)。
+
+**User prompt（`build_user_prompt`）** — 段顺序从老到新走:
+
+1. `# Recent sessions` — 最多 5 条最近的 session_summary L4 thoughts(每个 session close 时由 extraction LLM 顺便产出)。每行带一个 day-bucket 前缀(`[Older] / [Earlier this week] / [Yesterday] / [Earlier today] / [Just now]`)。空时整段跳过。
+2. `# Recent thoughts you've had about this person` — retrieve rerank top_k 里 `type='thought'` 的描述。空时跳过。
+3. `# About {speaker}` — `force_load_user_thoughts=10` 出来的 pinned L4 thoughts(按 recency × importance,绕 query similarity)。已经在上一段出现的 id 在 retrieve 层就被剔除了,这里不会重复。`{speaker}` 是 `User.display_name`,缺省 fallback `them`。
+4. `# Recent things you remember happened` — retrieve rerank top_k 里 `type='event'`,每行附 R4 day-precision delta phrase(`· event 2026-04-26~2026-05-02 · status=active (3 days in)`)。Atemporal event 不附 phrase。
+5. `# Promises you've made` — 当前活跃的 persona-side intentions(`subject='persona'` AND `type='intention'` AND `event_time_end >= now` 或 NULL)。每条同样附 delta phrase。
+6. `# Our recent conversation` — L2 最近 ~20 条消息按 day-bucket 分组,顺序 OLDER → NEWER(`## Older` → `## Just now`)。每行用 `them:` / `me:` 而非字面的 `user:` / `persona:`。这样人称一致,不暴露内部 role 标签。
+7. `# What they just said` — 本 turn 用户写的内容(burst 多条用换行连接)。
+
+把 ConceptNode 渲染所需的辅助数据(speaker_display, active_intentions, recent_session_summaries)在 `assemble_turn` 里提前查好后传进 `build_turn_user_prompt`,让 `build_user_prompt` 保持纯渲染、不再持有 DB session。
+
+### Slow_tick 与 consolidate 的关系
+
+slow_tick 不在 runtime 里跑——它住在 `consolidate_worker._process_one` 末尾的 G 阶段(memory 模块内)。runtime 的责任只有"按 5s polling 把 CLOSING session 喂给 worker"。详见 [`memory.md` § Slow_tick consolidate phase](./memory.md#slow_tick-consolidate-phase-l4-forward-looking--plan-7);本文档不重复细节,以保持 runtime / memory 的关注分离。runtime 这边能接触到的部分是:
+
+- `cfg.slow_tick.*` 几个 config 项穿过 runtime config 解析后传到 worker(详见 [`configuration.md`](./configuration.md))。
+- admin endpoints `GET /api/admin/slow-tick/transcripts` 和 `GET /api/admin/slow-tick/transcripts/{cycle_id}` 走 runtime 的 web channel 暴露,内容是 worker 落盘的 cycle JSON。
+- runtime memory observer 收 `on_thought_created` / `on_event_created` 时不区分 fast loop 还是 slow loop——hook 实现方应当通过 `node.type` 自己判断(`'thought'` vs `'expectation'`)。
+
 ### Memory observer 接线
 
 Memory 的 lifecycle hook(`on_session_closed`、`on_new_session_started`、`on_mood_updated`)在 `MemoryEventObserver` Protocol 里被定义为**同步**方法——memory 没法 import asyncio,因为它的写入路径是同步的,跑在 SQLite 单写入者的锁里面。Runtime 的 observer 实现也是同步的,所以它的方法立即返回;把事件广播到 channel 这个真正的工作被通过 `asyncio.run_coroutine_threadsafe(self._broadcast(...), self._loop)` 调度到 runtime 的 event loop 上。

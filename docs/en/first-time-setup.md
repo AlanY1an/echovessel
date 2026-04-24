@@ -157,7 +157,7 @@ Subsequent messages build on the same conversation history. The daemon keeps sho
 
 ### How memory grows over time
 
-As you keep talking to the persona, a background worker consolidates finished conversation sessions into higher-level memory: events ("we talked about the Tokyo trip"), thoughts ("the user seems excited about cherry blossom season"), and mood updates. This happens on its own cadence — you do not need to do anything — and starts showing up in retrieval results within a minute or two of the session ending. See [`memory.md`](./memory.md) for the full story on how the four memory layers interact.
+As you keep talking to the persona, a background worker consolidates finished conversation sessions into higher-level memory: events ("we talked about the Tokyo trip"), thoughts ("the user seems excited about cherry blossom season"), and episodic-state mood updates. This happens on its own cadence — you do not need to do anything — and starts showing up in retrieval results within a minute or two of the session ending. See [`memory.md`](./memory.md) for the full story on how the six memory layers interact.
 
 ---
 
@@ -246,7 +246,7 @@ Some sections reload on `SIGHUP`, others require a full restart. The `[llm]` sec
 
 Pick whichever direction fits your curiosity:
 
-- [`memory.md`](./memory.md) — how the four memory layers work, how retrieval and reranking feed the prompt, and how the consolidate worker turns raw conversation into long-term knowledge.
+- [`memory.md`](./memory.md) — how the six memory layers work, how retrieval and reranking feed the prompt, and how the consolidate worker turns raw conversation into long-term knowledge.
 - [`voice.md`](./voice.md) — provider options, the voice cloning workflow, and how voice delivery decisions flow from persona state through the channel layer.
 - [`channels.md`](./channels.md) — how to add a new transport, the debounce state machine, the one-persona-many-mouths guarantee, and the full Discord DM walkthrough.
 - [`proactive.md`](./proactive.md) — how to let the persona send the first message under carefully gated conditions.

@@ -26,9 +26,9 @@ uv run echovessel run          # 首次启动会自动打开 http://localhost:77
 
 ## 架构一览
 
-> 🗺 **完整一页架构图**:[`architecture.html`](https://alanyian.com/projects/echovessel/docs/architecture.html) —— 浏览器打开,一页拿到模块分层、Memory L1-L4 架构、消息流程、跨 channel SSE mirror、完整 HTTP 接口清单、铁律、发布时间线。
+> 🗺 **完整一页架构图**:[`architecture.html`](https://alanyian.com/projects/echovessel/docs/architecture.html) —— 浏览器打开,一页拿到模块分层、Memory L1-L6 架构、消息流程、跨 channel SSE mirror、完整 HTTP 接口清单、铁律、发布时间线。
 >
-> 🧠 **记忆系统最简图**:[`memory/layers.html`](https://alanyian.com/projects/echovessel/docs/memory/layers.html) —— 一张 SVG · 4 层 · 如何连接 · write / distill / read 三种模式 · 附 Stanford Generative Agents 打分公式的致敬说明。
+> 🧠 **记忆系统最简图**:[`memory/layers.html`](https://alanyian.com/projects/echovessel/docs/memory/layers.html) —— 一张 SVG · 6 层 · 如何连接 · write / distill / read 三种模式 · 附 Stanford Generative Agents 打分公式的致敬说明。
 >
 > 🔄 **运行时流程 / "记忆层如何被唤醒"**:[`architecture-flow.html`](https://alanyian.com/projects/echovessel/docs/architecture-flow.html) —— 配套页 · 聚焦单次 turn 的逐步唤醒、8 列 sequence 图、真实故事 trace("我养了只猫叫小黑")、检索排序、policy 门禁、SSE 神经系统事件。
 
@@ -48,7 +48,7 @@ uv run echovessel run          # 首次启动会自动打开 http://localhost:77
                            ▼
               ┌────────────┴────────────┐
               │         MEMORY          │
-              │   L1 · L2 · L3 · L4     │
+              │ L1·L2·L3·L4·L5·L6 │
               │   retrieve · consolidate│
               │     observer 模式       │
               └────────────┬────────────┘
@@ -71,7 +71,7 @@ uv run echovessel run          # 首次启动会自动打开 http://localhost:77
 
 | 模块 | 它是什么 |
 | --- | --- |
-| 📖 [memory.md](./memory.md) | 分层 persona 记忆:L1 core blocks · L2 原始消息 · L3 事件 · L4 反思 · 带 rerank 的 retrieve · 生命周期事件的 observer 模式 · 幂等 schema 迁移 |
+| 📖 [memory.md](./memory.md) | 分层 persona 记忆:L1 core blocks · L2 原始消息 · L3 事件 · L4 thoughts/intentions/expectations · L5 entities + aliases · L6 episodic state · 带 rerank 的 retrieve · 生命周期事件的 observer 模式 · 幂等 schema 迁移 |
 | 🗣️ [voice.md](./voice.md) | 文字转语音、语音转文字、声音克隆。Provider 抽象层覆盖 FishAudio / Whisper / stub · `VoiceService.generate_voice()` facade 带本地缓存 |
 | 📡 [channels.md](./channels.md) | Channel Protocol:外部传输层(web / Discord / iMessage / WeChat)如何插入 daemon。Burst 用户输入的 debounce state machine。跨 channel 统一 persona 的设计 |
 | ⚡ [proactive.md](./proactive.md) | 自主消息。四条 policy gate(quiet hours · cold user · rate limit · no-in-flight-turn)。关系触发。delivery 从 `persona.voice_enabled` 继承 |
