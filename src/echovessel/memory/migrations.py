@@ -255,6 +255,56 @@ _V0_4_NEW_TABLES: tuple[tuple[str, str], ...] = (
 )
 
 
+# Spec 4 · dev-mode turn / session trace tables. Both are observability
+# stores: turn_traces records a 12-stage waterfall for every turn that
+# runs while dev_trace is enabled; session_traces records the 6 phases
+# of the consolidate pipeline (A–G) keyed on the session that triggered
+# it. TTL is 14 days, swept by `scripts/purge_old_traces.py`.
+_V0_5_TRACE_TABLES: tuple[tuple[str, str], ...] = (
+    (
+        "turn_traces",
+        """
+        CREATE TABLE IF NOT EXISTS turn_traces (
+            turn_id TEXT PRIMARY KEY,
+            persona_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            started_at DATETIME NOT NULL,
+            finished_at DATETIME,
+            system_prompt TEXT,
+            user_prompt TEXT,
+            retrieval JSON,
+            pinned_thoughts JSON,
+            entity_alias_hits JSON,
+            episodic_state JSON,
+            llm_model TEXT,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            duration_ms INTEGER,
+            first_token_ms INTEGER,
+            steps JSON
+        )
+        """,
+    ),
+    (
+        "session_traces",
+        """
+        CREATE TABLE IF NOT EXISTS session_traces (
+            session_id TEXT PRIMARY KEY,
+            finished_at DATETIME,
+            phase_a JSON,
+            phase_b JSON,
+            phase_c JSON,
+            phase_d JSON,
+            phase_e JSON,
+            phase_f JSON,
+            phase_g JSON
+        )
+        """,
+    ),
+)
+
+
 # ---------------------------------------------------------------------------
 # New tables (v0.3)
 # ---------------------------------------------------------------------------
@@ -315,7 +365,11 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
     on the next insert.
     """
     with engine.begin() as conn:
-        for table_name, ddl in (*_V0_3_NEW_TABLES, *_V0_4_NEW_TABLES):
+        for table_name, ddl in (
+            *_V0_3_NEW_TABLES,
+            *_V0_4_NEW_TABLES,
+            *_V0_5_TRACE_TABLES,
+        ):
             if not _table_exists(conn, table_name):
                 conn.execute(text(ddl))
                 log.info("schema migration: created table %s", table_name)
@@ -418,6 +472,30 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
                     "AND source_turn_ids = '[]'"
                 )
             )
+
+        # Spec 4 · list-by-speaker index for /api/admin/turns. Separate
+        # from the table CREATE so it can be added independently on
+        # legacy DBs that already carry turn_traces from an earlier
+        # pre-release of this spec.
+        if _table_exists(conn, "turn_traces") and not _index_exists(
+            conn, "idx_turn_traces_persona_user"
+        ):
+            try:
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS "
+                        "idx_turn_traces_persona_user "
+                        "ON turn_traces(persona_id, user_id, started_at DESC)"
+                    )
+                )
+                log.info(
+                    "schema migration: added index idx_turn_traces_persona_user"
+                )
+            except Exception as e:  # noqa: BLE001
+                log.warning(
+                    "schema migration: could not create idx_turn_traces_persona_user: %s",
+                    e,
+                )
 
         # v0.4 · physical delete of MOOD rows (plan decision 1 · §4.7).
         # L6 episodic_state takes over the "how does the persona feel
