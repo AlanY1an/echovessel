@@ -54,6 +54,12 @@ from echovessel.memory.observers import (
     register_observer,
     unregister_observer,
 )
+from echovessel.memory.retrieve import (
+    ConceptSearchHit,
+    list_concept_nodes,
+    list_recall_messages,
+    search_concept_nodes,
+)
 from echovessel.memory.slow_cycle import (
     SlowCycleBudgetExceeded,
     SlowCycleExpectationInput,
@@ -65,12 +71,6 @@ from echovessel.memory.slow_cycle import (
     bulk_create_slow_thoughts,
     run_slow_cycle,
     should_run_slow_cycle,
-)
-from echovessel.memory.retrieve import (
-    ConceptSearchHit,
-    list_concept_nodes,
-    list_recall_messages,
-    search_concept_nodes,
 )
 
 __all__ = [

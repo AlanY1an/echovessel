@@ -98,7 +98,7 @@ DEFAULT_TRANSCRIPT_DIR: Path = Path("develop-docs/slow_tick_transcripts")
 # ---------------------------------------------------------------------------
 
 
-class SlowCycleBudgetExceeded(Exception):
+class SlowCycleBudgetExceeded(Exception):  # noqa: N818 — not an error suffix, this is a throttle signal
     """Raised when the per-day cap or token budget would be breached.
 
     The consolidate worker's G phase catches this and logs a WARNING —
