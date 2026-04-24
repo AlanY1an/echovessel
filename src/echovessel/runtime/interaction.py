@@ -231,6 +231,11 @@ class TurnContext:
     # always rendered under ``# About {speaker}`` regardless of query
     # similarity. 0 disables; the spec calls for 10.
     pinned_thoughts_count: int = 10
+    # v0.5 · plan §2.1 force-load. Top-N L4 thoughts with
+    # ``subject='persona'`` rendered under ``# How you see yourself
+    # lately``. Replaces the deleted L1.self block; defaults to 5 per
+    # the v0.5 spec.
+    persona_thoughts_count: int = 5
     # Spec 5 · plan §6.4 # Recent sessions. How many recent
     # session_summary thoughts (most recent first) to surface above
     # the conversation.
@@ -419,6 +424,7 @@ async def assemble_turn(
         top_memories: list = []
         entity_disambiguation_hint: str = ""
         pinned_thoughts: list[ConceptNode] = []
+        persona_thoughts: list[ConceptNode] = []
         try:
             retrieval = retrieve(
                 ctx.db,
@@ -435,9 +441,14 @@ async def assemble_turn(
                 # background "who is this person" awareness even when
                 # the current message is "?" or "嗯".
                 force_load_user_thoughts=ctx.pinned_thoughts_count,
+                # v0.5 · plan §2.1 force-load persona's own
+                # subject='persona' L4 thoughts for ``# How you see
+                # yourself lately``. Replaces the deleted L1.self block.
+                force_load_persona_thoughts=ctx.persona_thoughts_count,
             )
             top_memories = retrieval.memories
             pinned_thoughts = retrieval.pinned_thoughts
+            persona_thoughts = retrieval.persona_thoughts
         except Exception as e:  # noqa: BLE001
             log.warning("retrieve failed; continuing with empty memories: %s", e)
 
@@ -457,6 +468,25 @@ async def assemble_turn(
         except Exception as e:  # noqa: BLE001
             log.warning(
                 "entity disambiguation hint rendering failed; continuing: %s",
+                e,
+            )
+
+        # ---- Step 3c: L5 anchored entity descriptions (v0.5 plan §2.2)
+        # Load ``# About {canonical_name}`` payload for every entity
+        # alias-matched by the current query whose description is set.
+        # This is the L5-driven replacement for the deleted L1.relationship
+        # block — entities with no description are silently skipped.
+        entity_descriptions: list[tuple[str, str]] = []
+        try:
+            entity_descriptions = _load_anchored_entity_descriptions(
+                ctx.db,
+                query_text=last_message.content,
+                persona_id=ctx.persona_id,
+                user_id=resolved_user_id,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "anchored entity descriptions load failed; continuing: %s",
                 e,
             )
 
@@ -551,6 +581,7 @@ async def assemble_turn(
             episodic_state=episodic_state,
             entity_disambiguation_hint=entity_disambiguation_hint,
             expectation_matches=expectation_matches,
+            entity_descriptions=entity_descriptions,
         )
         user_prompt = build_turn_user_prompt(
             top_memories=top_memories,
@@ -562,6 +593,7 @@ async def assemble_turn(
             active_intentions=active_intentions,
             recent_session_summaries=recent_summaries,
             pending_expectations=pending_expectations,
+            persona_thoughts=persona_thoughts,
         )
 
         # ---- Step 6: LLM stream ------------------------------------
@@ -805,6 +837,52 @@ def maybe_decay_episodic_state(persona: Persona, now: datetime) -> bool:
     return False
 
 
+def _load_anchored_entity_descriptions(
+    db: DbSession,
+    *,
+    query_text: str,
+    persona_id: str,
+    user_id: str,
+) -> list[tuple[str, str]]:
+    """Return ``[(canonical_name, description)]`` for v0.5 plan §2.2.
+
+    For every entity whose alias appears in ``query_text``, surface
+    its ``description`` if non-empty. Used to render the
+    ``# About {canonical_name}`` system-prompt sections that replaced
+    the deleted L1.relationship block.
+
+    Order is deterministic by ``canonical_name`` so two turns with
+    the same anchor set produce identical prompts (helps prompt
+    caching). Skips soft-deleted entities and entities with empty
+    description silently — section is only rendered when there is
+    actually something to say.
+    """
+    from sqlmodel import select
+
+    query_entity_ids = find_query_entities(
+        db, query_text, persona_id=persona_id, user_id=user_id
+    )
+    if not query_entity_ids:
+        return []
+
+    rows = list(
+        db.exec(
+            select(Entity).where(
+                Entity.id.in_(query_entity_ids),  # type: ignore[union-attr]
+                Entity.deleted_at.is_(None),  # type: ignore[union-attr]
+            )
+        )
+    )
+    out: list[tuple[str, str]] = []
+    for ent in rows:
+        desc = (ent.description or "").strip()
+        if not desc:
+            continue
+        out.append((ent.canonical_name, desc))
+    out.sort(key=lambda pair: pair[0])
+    return out
+
+
 def _render_entity_disambiguation_hint(
     db: DbSession,
     *,
@@ -896,18 +974,28 @@ def build_system_prompt(
     episodic_state: dict | None = None,
     entity_disambiguation_hint: str = "",
     expectation_matches: list[tuple[ConceptNode, str]] | None = None,
+    entity_descriptions: list[tuple[str, str]] | None = None,
 ) -> str:
     """Assemble the system prompt for one turn.
 
-    v0.4 ordering (plan §6.4):
+    v0.5 ordering (plan §2):
 
         You are {persona}...
         # Right now              — dual-timezone if persona_tz known
         # Who you are            — 7 biographic bullets
         # How you feel right now — L6 episodic state (non-neutral only)
-        # Persona / Self / About the user / Relationship  — L1 blocks
-        # Style preferences      — L1.style block, rendered as section
+        # Persona                — L1.persona block (human-authored)
+        # About the user         — L1.user block (human-authored)
+        # Style preferences      — L1.style block (admin API only)
+        # About {canonical_name} — per-entity L5 description (anchored)
         STYLE_INSTRUCTIONS        — hardcoded behaviour guardrails
+
+    v0.5 delta: the legacy ``# About yourself (private self-narrative)``
+    and ``# Relationship`` sections are gone. Persona-authored
+    reflections migrated to the user prompt as ``# How you see yourself
+    lately`` (plan §2.1); third-party people / places / orgs moved to
+    the L5.entities table whose ``description`` field now drives the
+    per-entity sections here (plan §2.2).
 
     Missing sections are silently skipped. ``persona_facts=None`` and
     ``episodic_state=None`` keep the pre-v0.4 layout.
@@ -961,10 +1049,23 @@ def build_system_prompt(
         lines.append("")
 
     _section("Persona", BlockLabel.PERSONA)
-    _section("About yourself (private self-narrative)", BlockLabel.SELF)
     _section("About the user", BlockLabel.USER)
-    _section("Relationship", BlockLabel.RELATIONSHIP)
     _section("Style preferences", BlockLabel.STYLE)
+
+    # v0.5 · plan §2.2 · # About {canonical_name} — render a per-entity
+    # description block for every entity whose alias the current query
+    # anchored, as long as the entity has a non-empty ``description``
+    # (written either manually from the admin UI or by slow_cycle's
+    # description-synthesis pass). Entities that were anchored but
+    # carry no description are skipped silently so empty entities don't
+    # bloat the prompt.
+    if entity_descriptions:
+        for ent_name, ent_desc in entity_descriptions:
+            if not ent_desc or not ent_desc.strip():
+                continue
+            lines.append(f"# About {ent_name}")
+            lines.append(ent_desc.strip())
+            lines.append("")
 
     # L5 · entity disambiguation hint (plan §6.3.1). Non-empty means an
     # 'uncertain' entity was alias-matched by the current query — the
@@ -1002,6 +1103,7 @@ def build_turn_user_prompt(
     active_intentions: list[ConceptNode] | None = None,
     recent_session_summaries: list[ConceptNode] | None = None,
     pending_expectations: list[ConceptNode] | None = None,
+    persona_thoughts: list[ConceptNode] | None = None,
 ) -> str:
     """v0.4 · user prompt renderer that expands a burst of messages.
 
@@ -1048,6 +1150,7 @@ def build_turn_user_prompt(
         active_intentions=active_intentions,
         recent_session_summaries=recent_session_summaries,
         pending_expectations=pending_expectations,
+        persona_thoughts=persona_thoughts,
     )
 
 
@@ -1294,28 +1397,32 @@ def build_user_prompt(
     active_intentions: list[ConceptNode] | None = None,
     recent_session_summaries: list[ConceptNode] | None = None,
     pending_expectations: list[ConceptNode] | None = None,
+    persona_thoughts: list[ConceptNode] | None = None,
 ) -> str:
     """Assemble the user prompt for one turn.
 
-    Rendering order (Spec 5 plan §6.4 — older context first, then the
-    speaker context, then current memories, then promises, then the
-    live conversation):
+    Rendering order (v0.5 plan §2.1 inserts ``# How you see yourself
+    lately`` between the speaker context and the current memories — it
+    is the user-prompt replacement for the deleted L1.self block):
 
-        # Recent sessions          (NEW · session_summary thoughts, day-bucketed)
-        # Recent thoughts          (existing · L4)
-        # About {speaker}          (NEW · pinned thoughts, force-loaded)
+        # Recent sessions                       (Spec 5 · session_summary, day-bucketed)
+        # Recent thoughts you've had about this person  (existing · L4 user-side)
+        # About {speaker}                       (Spec 5 · pinned user thoughts, force-loaded)
+        # How you see yourself lately           (v0.5 · pinned persona thoughts, force-loaded)
         # Recent things you remember happened   (existing · L3 + R4 delta)
-        # Promises you've made     (NEW · active intentions)
-        # Our recent conversation  (existing · NOW day-bucketed)
-        # What they just said      (existing)
+        # Promises you've made                  (Spec 5 · active intentions)
+        # You've been expecting                 (Spec 6 · pending expectations)
+        # Our recent conversation               (existing · day-bucketed when ``now`` set)
+        # What they just said                   (existing)
 
-    All Spec 5 sections are default-empty so legacy callers (most of
-    the test suite) keep their pre-Spec-5 output verbatim.
+    All Spec 5 / v0.5 sections are default-empty so legacy callers
+    (most of the test suite) keep their pre-v0.5 output verbatim.
     """
     pinned_thoughts = pinned_thoughts or []
     active_intentions = active_intentions or []
     recent_session_summaries = recent_session_summaries or []
     pending_expectations = pending_expectations or []
+    persona_thoughts = persona_thoughts or []
 
     lines: list[str] = []
 
@@ -1362,6 +1469,17 @@ def build_user_prompt(
     if pinned_thoughts:
         lines.append(f"# About {speaker_display}")
         for thought in pinned_thoughts:
+            lines.append(f"- {_node_description(thought)}")
+        lines.append("")
+
+    # # How you see yourself lately — v0.5 plan §2.1 · force-loaded
+    # subject='persona' L4 thoughts that replace the deleted L1.self
+    # block. Always rendered last in the speaker-context cluster so
+    # the persona's own reflections sit just before the live event /
+    # promise / expectation surfaces.
+    if persona_thoughts:
+        lines.append("# How you see yourself lately")
+        for thought in persona_thoughts:
             lines.append(f"- {_node_description(thought)}")
         lines.append("")
 
