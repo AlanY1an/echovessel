@@ -233,6 +233,26 @@ class ConsolidateSection(BaseModel):
     worker_max_retries: int = Field(default=3, ge=0, le=10)
 
 
+class DevTraceSection(BaseModel):
+    """Per-turn dev-mode trace recorder (Spec 4).
+
+    When ``enabled=false`` the fast loop uses ``NullTurnTracer`` and the
+    consolidate pipeline skips session_traces writes entirely — zero
+    hot-path overhead. When ``enabled=true`` every turn writes a row to
+    ``turn_traces`` and every consolidate run writes a row to
+    ``session_traces``. Admin + dev-mode drawer in the Web frontend
+    read those rows on demand.
+
+    Retention is swept by ``scripts/purge_old_traces.py --days 14`` —
+    no cron wiring here yet.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    retention_days: int = Field(default=14, ge=1, le=365)
+
+
 class IdleScannerSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -530,6 +550,7 @@ class Config(BaseModel):
     memory: MemorySection = Field(default_factory=MemorySection)
     llm: LLMSection
     consolidate: ConsolidateSection = Field(default_factory=ConsolidateSection)
+    dev_trace: DevTraceSection = Field(default_factory=DevTraceSection)
     idle_scanner: IdleScannerSection = Field(default_factory=IdleScannerSection)
     slow_tick: SlowTickSection = Field(default_factory=SlowTickSection)
     proactive: ProactiveSection = Field(default_factory=ProactiveSection)

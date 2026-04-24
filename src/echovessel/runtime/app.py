@@ -582,6 +582,7 @@ class Runtime:
             slow_tick_daily_output_token_budget=self.ctx.config.slow_tick.daily_output_token_budget,
             slow_tick_input_token_limit=self.ctx.config.slow_tick.input_token_limit,
             slow_tick_transcript_dir=slow_tick_transcript_dir,
+            dev_trace_enabled=self.ctx.config.dev_trace.enabled,
         )
 
         self._scanner = IdleScanner(
@@ -1352,6 +1353,7 @@ class Runtime:
                 llm_max_tokens=self.ctx.config.llm.max_tokens,
                 llm_temperature=self.ctx.config.llm.temperature,
                 llm_timeout_seconds=float(self.ctx.config.llm.timeout_seconds),
+                dev_trace_enabled=self.ctx.config.dev_trace.enabled,
             )
             result: AssembledTurn = await assemble_turn(
                 turn_ctx,

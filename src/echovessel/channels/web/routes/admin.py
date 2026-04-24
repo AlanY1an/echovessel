@@ -56,6 +56,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import text
 from sqlmodel import Session as DbSession
 from sqlmodel import func, select
 
@@ -2989,6 +2990,141 @@ def build_admin_router(
             raise HTTPException(
                 status_code=500, detail=f"transcript read failed: {e}"
             ) from e
+
+    # ---- GET /api/admin/turns (Spec 4 · dev-mode trace) ----------------
+    #
+    # Three endpoints back the dev-mode ▸ trace drawer:
+    #   - GET /api/admin/turns                    → recent turn headers
+    #   - GET /api/admin/turns/{turn_id}          → full turn trace
+    #   - GET /api/admin/sessions/{id}/consolidate-trace → phases A–G
+    #
+    # The payload shape is 1:1 with the ``turn_traces`` /
+    # ``session_traces`` row because the frontend's TraceDrawer reads
+    # field names directly — re-keying in the backend would force
+    # matching re-keying in the client for zero net value.
+
+    def _decode_trace_json(value: Any) -> Any:
+        if value is None or value == "":
+            return None
+        if isinstance(value, (dict, list)):
+            return value
+        try:
+            return json.loads(value)
+        except Exception:  # noqa: BLE001
+            return value
+
+    @router.get("/api/admin/turns")
+    async def list_turns(
+        limit: int = Query(default=20, ge=1, le=100),
+    ) -> dict[str, Any]:
+        persona_id = _persona_id()
+        with _open_db() as db:
+            rows = db.execute(
+                text(
+                    "SELECT turn_id, persona_id, user_id, channel_id, "
+                    "started_at, finished_at, duration_ms, first_token_ms, "
+                    "input_tokens, output_tokens, llm_model "
+                    "FROM turn_traces "
+                    "WHERE persona_id = :pid "
+                    "ORDER BY started_at DESC "
+                    "LIMIT :limit"
+                ),
+                {"pid": persona_id, "limit": limit},
+            ).fetchall()
+        items: list[dict[str, Any]] = []
+        for r in rows:
+            m = r._mapping  # noqa: SLF001 — SA Row→dict is the documented idiom
+            items.append(
+                {
+                    "turn_id": m["turn_id"],
+                    "persona_id": m["persona_id"],
+                    "user_id": m["user_id"],
+                    "channel_id": m["channel_id"],
+                    "started_at": (
+                        m["started_at"].isoformat()
+                        if hasattr(m["started_at"], "isoformat")
+                        else m["started_at"]
+                    ),
+                    "finished_at": (
+                        m["finished_at"].isoformat()
+                        if hasattr(m["finished_at"], "isoformat")
+                        else m["finished_at"]
+                    ),
+                    "duration_ms": m["duration_ms"],
+                    "first_token_ms": m["first_token_ms"],
+                    "input_tokens": m["input_tokens"],
+                    "output_tokens": m["output_tokens"],
+                    "llm_model": m["llm_model"],
+                }
+            )
+        return {"items": items, "limit": limit}
+
+    @router.get("/api/admin/turns/{turn_id}")
+    async def get_turn_trace(turn_id: str) -> dict[str, Any]:
+        with _open_db() as db:
+            row = db.execute(
+                text("SELECT * FROM turn_traces WHERE turn_id = :tid"),
+                {"tid": turn_id},
+            ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="turn trace not found")
+        m = row._mapping  # noqa: SLF001
+        return {
+            "turn_id": m["turn_id"],
+            "persona_id": m["persona_id"],
+            "user_id": m["user_id"],
+            "channel_id": m["channel_id"],
+            "started_at": (
+                m["started_at"].isoformat()
+                if hasattr(m["started_at"], "isoformat")
+                else m["started_at"]
+            ),
+            "finished_at": (
+                m["finished_at"].isoformat()
+                if hasattr(m["finished_at"], "isoformat")
+                else m["finished_at"]
+            ),
+            "duration_ms": m["duration_ms"],
+            "first_token_ms": m["first_token_ms"],
+            "llm_model": m["llm_model"],
+            "input_tokens": m["input_tokens"],
+            "output_tokens": m["output_tokens"],
+            "system_prompt": m["system_prompt"],
+            "user_prompt": m["user_prompt"],
+            "retrieval": _decode_trace_json(m["retrieval"]) or [],
+            "pinned_thoughts": _decode_trace_json(m["pinned_thoughts"]) or {},
+            "entity_alias_hits": _decode_trace_json(m["entity_alias_hits"]) or [],
+            "episodic_state": _decode_trace_json(m["episodic_state"]),
+            "steps": _decode_trace_json(m["steps"]) or [],
+        }
+
+    @router.get("/api/admin/sessions/{session_id}/consolidate-trace")
+    async def get_consolidate_trace(session_id: str) -> dict[str, Any]:
+        with _open_db() as db:
+            row = db.execute(
+                text("SELECT * FROM session_traces WHERE session_id = :sid"),
+                {"sid": session_id},
+            ).fetchone()
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail="consolidate trace not found"
+            )
+        m = row._mapping  # noqa: SLF001
+        return {
+            "session_id": m["session_id"],
+            "finished_at": (
+                m["finished_at"].isoformat()
+                if hasattr(m["finished_at"], "isoformat")
+                else m["finished_at"]
+            ),
+            "phase_a": _decode_trace_json(m["phase_a"]),
+            "phase_b": _decode_trace_json(m["phase_b"]),
+            "phase_c": _decode_trace_json(m["phase_c"]),
+            "phase_d": _decode_trace_json(m["phase_d"]),
+            "phase_e": _decode_trace_json(m["phase_e"]),
+            "phase_f": _decode_trace_json(m["phase_f"]),
+            "phase_g": _decode_trace_json(m["phase_g"]),
+        }
 
     return router
 

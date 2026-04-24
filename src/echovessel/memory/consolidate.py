@@ -26,6 +26,10 @@ from sqlmodel import select
 
 from echovessel.core.types import EventTime, NodeType, SessionStatus
 from echovessel.memory.backend import StorageBackend
+from echovessel.memory.consolidate_tracer import (
+    ConsolidateTracer,
+    NullConsolidateTracer,
+)
 from echovessel.memory.models import (
     ConceptNode,
     ConceptNodeFilling,
@@ -305,6 +309,7 @@ async def consolidate_session(
     trivial_message_count: int = TRIVIAL_MESSAGE_COUNT,
     trivial_token_count: int = TRIVIAL_TOKEN_COUNT,
     reflection_hard_limit_24h: int = REFLECTION_HARD_LIMIT_24H,
+    tracer: ConsolidateTracer | NullConsolidateTracer | None = None,
 ) -> ConsolidateResult:
     """Run the full CONSOLIDATE pipeline on a session in 'closing' state.
 
@@ -320,6 +325,7 @@ async def consolidate_session(
     extraction into per-turn groups.
     """
     now = now or datetime.now()
+    tracer = tracer if tracer is not None else NullConsolidateTracer()
 
     if session.status == SessionStatus.CLOSED:
         return ConsolidateResult(
@@ -352,12 +358,22 @@ async def consolidate_session(
     # --- A. Trivial skip ------------------------------------------------
     # Only re-evaluate trivial on a fresh run; if extracted_events is
     # already set, the prior attempt decided this session was NOT trivial.
-    if not skip_extraction and is_trivial(
-        session,
-        messages,
-        trivial_message_count=trivial_message_count,
-        trivial_token_count=trivial_token_count,
-    ):
+    if not skip_extraction:
+        trivial_result = is_trivial(
+            session,
+            messages,
+            trivial_message_count=trivial_message_count,
+            trivial_token_count=trivial_token_count,
+        )
+    else:
+        trivial_result = False
+    if not skip_extraction:
+        reason = "thresholds+no_strong_emotion" if trivial_result else "above_threshold"
+        tracer.record_phase_a(is_trivial=trivial_result, reason=reason)
+    else:
+        tracer.record_phase_a(is_trivial=False, reason="resume_skip_extraction")
+
+    if not skip_extraction and trivial_result:
         session.status = SessionStatus.CLOSED
         session.trivial = True
         session.extracted = True
@@ -365,6 +381,11 @@ async def consolidate_session(
         db.add(session)
         db.commit()
         db.refresh(session)
+        tracer.record_phase_f(
+            status=getattr(session.status, "value", session.status),
+            extracted_at=session.extracted_at,
+            close_trigger="trivial",
+        )
         # Round 4: fire `on_session_closed` strictly after the commit
         # that transitioned status → CLOSED.
         track_pending_session_closed(session)
@@ -563,6 +584,9 @@ async def consolidate_session(
         # in the junction is already persisted. A commit failure in the
         # entity branch leaves events intact — junction is rebuildable
         # from extraction output on the next run.
+        junction_writes_out: list[dict] = []
+        junction_rejects_out: list[dict] = []
+        entities_resolved_out: list[dict] = []
         if extraction_output.mentioned_entities or (
             extraction_output.entity_clarification is not None
         ):
@@ -573,7 +597,46 @@ async def consolidate_session(
                 session=session,
                 extraction_output=extraction_output,
                 event_by_ext_idx=event_by_ext_idx,
+                junction_writes_out=junction_writes_out,
+                junction_rejects_out=junction_rejects_out,
+                entities_resolved_out=entities_resolved_out,
             )
+
+        # Phase B trace · every field filled even when lists are empty
+        # so the drawer can always distinguish "ran but nothing to
+        # show" from "didn't reach this phase".
+        mood = extraction_output.session_mood_signal
+        tracer.record_phase_b(
+            extract_prompt=None,
+            extract_response_raw=None,
+            events_created=[
+                {
+                    "id": n.id,
+                    "description": (n.description or "")[:120],
+                    "impact": n.emotional_impact,
+                    "type": getattr(n.type, "value", n.type),
+                    "subject": n.subject,
+                }
+                for n in created_events
+            ],
+            entities_resolved=entities_resolved_out,
+            junction_writes=junction_writes_out,
+            junction_rejects=junction_rejects_out,
+            session_mood_signal=(
+                {
+                    "mood": mood.mood,
+                    "energy": mood.energy,
+                    "last_user_signal": mood.last_user_signal,
+                }
+                if mood is not None
+                else None
+            ),
+            commitments_extracted=[
+                {"id": n.id, "description": n.description}
+                for n in created_events
+                if getattr(n.type, "value", n.type) == "intention"
+            ],
+        )
 
         # Spec 5 · plan §6.2 step 5. Persist session_summary as an L4
         # ConceptNode(type='thought', source_session_id=session.id) so
@@ -626,23 +689,32 @@ async def consolidate_session(
         if abs(n.emotional_impact) >= SHOCK_IMPACT_THRESHOLD:
             shock_event = n
             break
+    tracer.record_phase_c(shock_event_id=shock_event.id if shock_event else None)
 
     # --- D. TIMER trigger ----------------------------------------------
     timer_due = _is_timer_due(db, session.persona_id, session.user_id, now)
+    reflections_last_24h = _count_reflections_24h(
+        db, session.persona_id, session.user_id, now
+    )
+    tracer.record_phase_d(
+        timer_due=timer_due, reflections_last_24h=reflections_last_24h
+    )
 
     reflection_reason: str | None = None
     created_thoughts: list[ConceptNode] = []
+    reflection_gate = "none"
 
     # --- E. Reflection execution (hard gate) ---------------------------
     should_reflect = shock_event is not None or timer_due
     if should_reflect:
-        recent_count_24h = _count_reflections_24h(db, session.persona_id, session.user_id, now)
+        recent_count_24h = reflections_last_24h
         if recent_count_24h >= reflection_hard_limit_24h:
             # Hard gate hit; skip reflection but still mark session closed.
-            pass
+            reflection_gate = "hard_gate_hit"
         else:
             reason = "shock" if shock_event is not None else "timer"
             reflection_reason = reason
+            reflection_gate = reason
 
             # Gather inputs: recent events in the last 24h (plus the shock
             # event if present, to guarantee it's in the input).
@@ -695,6 +767,20 @@ async def consolidate_session(
                             )
                     _fire_lifecycle("on_thought_created", t, "reflection")
 
+    tracer.record_phase_e(
+        reflection_gate=reflection_gate,
+        reflect_prompt=None,
+        reflect_response_raw=None,
+        thoughts_created=[
+            {
+                "id": t.id,
+                "description": (t.description or "")[:120],
+                "impact": t.emotional_impact,
+            }
+            for t in created_thoughts
+        ],
+    )
+
     # --- F-pre. L6 episodic_state update (plan §6.2 step 6) -------------
     # Reuse the extraction LLM's ``session_mood_signal`` output — zero
     # extra round-trips. Best-effort: a write failure here is logged
@@ -728,6 +814,11 @@ async def consolidate_session(
     db.add(session)
     db.commit()
     db.refresh(session)
+    tracer.record_phase_f(
+        status=getattr(session.status, "value", session.status),
+        extracted_at=session.extracted_at,
+        close_trigger="extracted",
+    )
 
     # Round 4: fire `on_session_closed` strictly after the commit that
     # transitioned status → CLOSED. Mirrors the trivial-skip branch
@@ -847,11 +938,20 @@ def _consolidate_entities(
     session: Session,
     extraction_output: ExtractionResult,
     event_by_ext_idx: dict[int, ConceptNode],
+    junction_writes_out: list[dict] | None = None,
+    junction_rejects_out: list[dict] | None = None,
+    entities_resolved_out: list[dict] | None = None,
 ) -> None:
     """Resolve every mentioned entity + wire L3↔L5 junctions + apply
     any user-stated entity clarification. Kept as a helper so the B
     phase stays readable and so merge conflicts with other specs touching
     consolidate stay local to this function.
+
+    Optional ``*_out`` lists receive observability rows — the dev-mode
+    consolidate tracer passes in pre-allocated lists so phase_b can
+    render the "which junctions did we write, which did we reject, and
+    why?" breakdown in the drawer. Passing ``None`` (the default) makes
+    the helper behave identically to its pre-Spec-4 form.
     """
     from echovessel.memory.entities import (
         add_concept_entity_link,
@@ -884,6 +984,14 @@ def _consolidate_entities(
             )
             continue
         entity_id_by_ext_idx[ent_idx] = entity_id
+        if entities_resolved_out is not None:
+            entities_resolved_out.append(
+                {
+                    "canonical_name": ext_ent.canonical_name,
+                    "entity_id": entity_id,
+                    "dedup_path": _path,
+                }
+            )
 
     # Junction rows: one per (event_id, entity_id) pair.
     #
@@ -916,8 +1024,25 @@ def _consolidate_entities(
                     description[:60],
                     session.id,
                 )
+                if junction_rejects_out is not None:
+                    junction_rejects_out.append(
+                        {
+                            "node_id": node.id,
+                            "entity_id": entity_id,
+                            "canonical_name": ext_ent.canonical_name,
+                            "reason": "surface_form_not_in_description",
+                        }
+                    )
                 continue
             add_concept_entity_link(db, node_id=node.id, entity_id=entity_id)
+            if junction_writes_out is not None:
+                junction_writes_out.append(
+                    {
+                        "node_id": node.id,
+                        "entity_id": entity_id,
+                        "canonical_name": ext_ent.canonical_name,
+                    }
+                )
     db.commit()
 
     # User-stated clarification from this session (plan §6.3.1). Safe to

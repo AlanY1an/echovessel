@@ -45,6 +45,7 @@ from echovessel.memory.models import (
 )
 from echovessel.memory.retrieve import (
     find_query_entities,
+    get_nodes_linked_to_entities,
     list_recall_messages,
     load_core_blocks,
     render_event_delta_phrase,
@@ -54,6 +55,11 @@ from echovessel.runtime.llm.base import LLMProvider
 from echovessel.runtime.llm.errors import (
     LLMPermanentError,
     LLMTransientError,
+)
+from echovessel.runtime.turn_tracer import (
+    NullTurnTracer,
+    TurnTracer,
+    make_turn_tracer,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -243,6 +249,11 @@ class TurnContext:
     llm_max_tokens: int = 1024
     llm_temperature: float = 0.7
     llm_timeout_seconds: float = 60.0
+    # Spec 4 · dev-mode trace flag. ``True`` makes assemble_turn thread a
+    # recording :class:`TurnTracer` through the 12-stage waterfall;
+    # ``False`` (default) uses :class:`NullTurnTracer` and pays no
+    # per-stage cost.
+    dev_trace_enabled: bool = False
     # Additional tune knobs per interaction — left as defaults in MVP.
     extras: dict = field(default_factory=dict)
 
@@ -326,6 +337,42 @@ async def assemble_turn(
 
     last_message = turn.messages[-1]
 
+    # Spec 4 · dev-mode tracer. When disabled the Null variant makes every
+    # subsequent tracer call a no-op so the hot path pays ~nothing for
+    # the instrumentation scaffolding.
+    turn_started_at = _now()
+    tracer = make_turn_tracer(
+        enabled=ctx.dev_trace_enabled,
+        turn_id=turn.turn_id,
+        persona_id=ctx.persona_id,
+        user_id=last_message.user_id,
+        channel_id=last_message.channel_id,
+        started_at=turn_started_at,
+    )
+
+    # Stage 1 · debounce. Not a real call — the debounce happens in the
+    # channel adapter before we see the burst. Reconstruct its window
+    # from the spread of received_at stamps across the IncomingTurn
+    # messages so the timeline still surfaces the wait the user paid
+    # before the LLM even started working.
+    if len(turn.messages) >= 2:
+        stamps = [m.received_at for m in turn.messages if m.received_at is not None]
+        if len(stamps) >= 2:
+            debounce_ms = max(
+                0, int((max(stamps) - min(stamps)).total_seconds() * 1000)
+            )
+        else:
+            debounce_ms = 0
+    else:
+        debounce_ms = 0
+    tracer.add_synthetic_step(
+        "debounce",
+        t_ms=0,
+        duration_ms=debounce_ms,
+        message_count=len(turn.messages),
+        reconstructed_window_ms=debounce_ms,
+    )
+
     try:
         # ---- Step 0: resolve transport-native user_id to internal --
         # Channels mint user_id from their transport (Discord snowflake,
@@ -347,7 +394,8 @@ async def assemble_turn(
             )
             resolved_user_id = last_message.user_id
 
-        # ---- Step 1: ingest each user message with shared turn_id --
+        # ---- Stage 2 · ingest_user: each user message with shared turn_id
+        tracer.stage_start("ingest_user")
         try:
             for msg in turn.messages:
                 ingest_message(
@@ -362,6 +410,7 @@ async def assemble_turn(
                 )
         except Exception as e:  # noqa: BLE001
             log.error("ingest user message(s) failed: %s", e, exc_info=True)
+            tracer.stage_end("ingest_user", error=str(e), message_count=len(turn.messages))
             return AssembledTurn(
                 reply="",
                 system_prompt="",
@@ -370,8 +419,14 @@ async def assemble_turn(
                 error=f"ingest user failed: {e}",
                 skipped=True,
             )
+        tracer.stage_end(
+            "ingest_user",
+            message_count=len(turn.messages),
+            content_preview=(last_message.content or "")[:60],
+        )
 
-        # ---- Step 2: L1 core blocks --------------------------------
+        # ---- Stage 3 · l1_load: core blocks ------------------------
+        tracer.stage_start("l1_load")
         try:
             core_blocks = load_core_blocks(
                 ctx.db,
@@ -381,6 +436,14 @@ async def assemble_turn(
         except Exception as e:  # noqa: BLE001
             log.warning("load_core_blocks failed; continuing with empty: %s", e)
             core_blocks = []
+        tracer.stage_end(
+            "l1_load",
+            block_count=len(core_blocks),
+            labels=[
+                getattr(b.label, "value", b.label)
+                for b in core_blocks
+            ],
+        )
 
         # ---- Step 2b: persona biographic facts + L6 episodic_state ----
         # Seven columns on the persona row (name / gender / birth_date /
@@ -407,24 +470,87 @@ async def assemble_turn(
         # the channel didn't stamp the envelope (legacy callers).
         user_now = last_message.received_at or _now()
 
+        # ---- Stage 4 · l6_decay_check ------------------------------
+        tracer.stage_start("l6_decay_check")
+        decayed = False
+        before_state: dict | None = None
         if persona_row is not None:
             try:
+                before_state = dict(persona_row.episodic_state or {})
                 reset = maybe_decay_episodic_state(persona_row, user_now)
                 if reset:
                     ctx.db.add(persona_row)
                     ctx.db.commit()
+                    decayed = True
                 episodic_state = dict(persona_row.episodic_state or {})
             except Exception as e:  # noqa: BLE001
                 log.warning(
                     "episodic_state decay check failed; section will omit: %s",
                     e,
                 )
+        tracer.stage_end(
+            "l6_decay_check",
+            before=before_state,
+            after=episodic_state,
+            decayed=decayed,
+        )
+        tracer.episodic_state = dict(episodic_state) if episodic_state else None
 
-        # ---- Step 3: L3/L4 retrieval (query = last user message) ---
+        # ---- Stage 5 · l5_alias_scan -------------------------------
+        # Compute query entity ids + junction-linked node ids BEFORE
+        # retrieve so tracer.entity_alias_hits and retrieval.anchored
+        # can both reference the same set. The disambiguation-hint
+        # renderer re-derives query entities internally, which is fine;
+        # we only do this separate scan when dev_trace is enabled (the
+        # Null variant still runs the calls but drops the detail).
+        tracer.stage_start("l5_alias_scan")
+        query_entity_ids: list[int] = []
+        entity_anchored_node_ids: set[int] = set()
+        try:
+            query_entity_ids = find_query_entities(
+                ctx.db,
+                last_message.content,
+                persona_id=ctx.persona_id,
+                user_id=resolved_user_id,
+            )
+            entity_anchored_node_ids = get_nodes_linked_to_entities(
+                ctx.db, query_entity_ids
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("l5 alias scan failed; continuing: %s", e)
+        if not isinstance(tracer, NullTurnTracer) and query_entity_ids:
+            try:
+                alias_rows = list(
+                    ctx.db.exec(
+                        select(Entity).where(
+                            Entity.id.in_(query_entity_ids),  # type: ignore[union-attr]
+                            Entity.deleted_at.is_(None),  # type: ignore[union-attr]
+                        )
+                    )
+                )
+                tracer.entity_alias_hits = [
+                    {
+                        "entity_id": e.id,
+                        "canonical_name": e.canonical_name,
+                        "kind": getattr(e.kind, "value", e.kind),
+                    }
+                    for e in alias_rows
+                ]
+            except Exception as e:  # noqa: BLE001
+                log.warning("capture entity_alias_hits failed: %s", e)
+                tracer.entity_alias_hits = []
+        tracer.stage_end(
+            "l5_alias_scan",
+            matched_entity_count=len(query_entity_ids),
+            anchored_node_count=len(entity_anchored_node_ids),
+        )
+
+        # ---- Stage 6 · vector_retrieve (L3/L4 retrieval) -----------
         top_memories: list = []
-        entity_disambiguation_hint: str = ""
         pinned_thoughts: list[ConceptNode] = []
         persona_thoughts: list[ConceptNode] = []
+        retrieval = None
+        tracer.stage_start("vector_retrieve")
         try:
             retrieval = retrieve(
                 ctx.db,
@@ -451,13 +577,62 @@ async def assemble_turn(
             persona_thoughts = retrieval.persona_thoughts
         except Exception as e:  # noqa: BLE001
             log.warning("retrieve failed; continuing with empty memories: %s", e)
+        tracer.stage_end(
+            "vector_retrieve",
+            kept=len(top_memories),
+            top_k=ctx.retrieve_k,
+        )
+        if top_memories:
+            tracer.retrieval = [
+                {
+                    "node_id": getattr(getattr(m, "node", None), "id", None),
+                    "type": getattr(
+                        getattr(getattr(m, "node", None), "type", None), "value", None
+                    )
+                    or getattr(getattr(m, "node", None), "type", None),
+                    "desc_snippet": (
+                        (getattr(getattr(m, "node", None), "description", "") or "")[:80]
+                    ),
+                    "recency": round(float(m.recency), 4),
+                    "relevance": round(float(m.relevance), 4),
+                    "impact": round(float(m.impact), 4),
+                    "relational": round(float(m.relational_bonus), 4),
+                    "entity_anchor": round(float(m.entity_anchor_bonus), 4),
+                    "total": round(float(m.total), 4),
+                    "anchored": (
+                        getattr(getattr(m, "node", None), "id", None)
+                        in entity_anchored_node_ids
+                    ),
+                }
+                for m in top_memories
+            ]
 
-        # ---- Step 3b: L5 entity disambiguation hint (plan §6.3.1) ---
-        # If the query alias-matches an entity whose merge_status is
-        # 'uncertain', inject a soft prompt nudge so the persona asks
-        # the user whether it's the same person as the candidate merge
-        # target. Deliberately phrasing-free — we don't script the
-        # question; the LLM asks in its own voice.
+        # ---- Stage 7 · pinned_thoughts -----------------------------
+        # The retrieve() call above already force-loaded user thoughts;
+        # this stage is a no-op in terms of work but surfaces the
+        # result as a distinct row on the waterfall so developers can
+        # see the force-load counts and inspect the rendered list.
+        tracer.stage_start("pinned_thoughts")
+        tracer.stage_end(
+            "pinned_thoughts",
+            user=len(pinned_thoughts),
+            persona=0,
+        )
+        if not isinstance(tracer, NullTurnTracer):
+            tracer.pinned_thoughts = {
+                "user": [
+                    {
+                        "id": t.id,
+                        "description": (t.description or "")[:120],
+                    }
+                    for t in pinned_thoughts
+                ],
+                "persona": [],
+            }
+
+        # L5 entity disambiguation hint (plan §6.3.1) — rendered after
+        # the alias scan stage captured its inputs.
+        entity_disambiguation_hint: str = ""
         try:
             entity_disambiguation_hint = _render_entity_disambiguation_hint(
                 ctx.db,
@@ -572,7 +747,8 @@ async def assemble_turn(
         except Exception as e:  # noqa: BLE001
             log.warning("check pending expectations failed; continuing: %s", e)
 
-        # ---- Step 5: prompt assembly -------------------------------
+        # ---- Stage 8 · build_system_prompt -------------------------
+        tracer.stage_start("build_system_prompt")
         system_prompt = build_system_prompt(
             persona_display_name=ctx.persona_display_name,
             core_blocks=core_blocks,
@@ -583,6 +759,15 @@ async def assemble_turn(
             expectation_matches=expectation_matches,
             entity_descriptions=entity_descriptions,
         )
+        tracer.stage_end(
+            "build_system_prompt",
+            chars=len(system_prompt),
+            section_count=system_prompt.count("\n# "),
+        )
+        tracer.system_prompt = system_prompt
+
+        # ---- Stage 9 · build_user_prompt ---------------------------
+        tracer.stage_start("build_user_prompt")
         user_prompt = build_turn_user_prompt(
             top_memories=top_memories,
             recent_messages=recent,
@@ -595,8 +780,14 @@ async def assemble_turn(
             pending_expectations=pending_expectations,
             persona_thoughts=persona_thoughts,
         )
+        tracer.stage_end(
+            "build_user_prompt",
+            chars=len(user_prompt),
+            section_count=user_prompt.count("\n# "),
+        )
+        tracer.user_prompt = user_prompt
 
-        # ---- Step 6: LLM stream ------------------------------------
+        # ---- Stage 10 · llm_stream ---------------------------------
         # We allocate an opaque "pending" message id by hashing the turn
         # id so all token deltas within a single stream share the same
         # grouping key on the channel side. Channels treat this as an
@@ -604,7 +795,10 @@ async def assemble_turn(
         pending_message_id = _pending_id_for_turn(turn)
         accumulated: list[str] = []
         last_error: str | None = None
+        first_token_at: datetime | None = None
+        llm_usage: object | None = None
 
+        tracer.stage_start("llm_stream")
         try:
             async for item in llm.stream(
                 system=system_prompt,
@@ -615,8 +809,11 @@ async def assemble_turn(
                 timeout=ctx.llm_timeout_seconds,
             ):
                 if not isinstance(item, str):
-                    continue  # skip trailing Usage sentinel
+                    llm_usage = item  # trailing Usage sentinel
+                    continue
                 token = item
+                if first_token_at is None:
+                    first_token_at = datetime.utcnow()
                 accumulated.append(token)
                 if on_token is not None:
                     try:
@@ -640,6 +837,25 @@ async def assemble_turn(
 
         full_reply = "".join(accumulated)
 
+        llm_model_str = llm.model_for("main")
+        input_tokens = getattr(llm_usage, "input_tokens", None) if llm_usage else None
+        output_tokens = getattr(llm_usage, "output_tokens", None) if llm_usage else None
+        tracer.stage_end(
+            "llm_stream",
+            model=llm_model_str,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            reply_chars=len(full_reply),
+            error=last_error,
+        )
+        tracer.llm_model = llm_model_str
+        tracer.input_tokens = input_tokens
+        tracer.output_tokens = output_tokens
+        if first_token_at is not None:
+            tracer.first_token_ms = max(
+                0, int((first_token_at - turn_started_at).total_seconds() * 1000)
+            )
+
         if last_error is not None and not full_reply:
             # Nothing made it through — treat as skipped.
             return AssembledTurn(
@@ -651,7 +867,8 @@ async def assemble_turn(
                 skipped=True,
             )
 
-        # ---- Step 7: ingest persona reply (same turn_id) -----------
+        # ---- Stage 11 · ingest_persona (same turn_id) --------------
+        tracer.stage_start("ingest_persona")
         try:
             ingest_message(
                 ctx.db,
@@ -669,6 +886,7 @@ async def assemble_turn(
                 e,
                 exc_info=True,
             )
+            tracer.stage_end("ingest_persona", error=str(e))
             return AssembledTurn(
                 reply="",
                 system_prompt=system_prompt,
@@ -677,6 +895,10 @@ async def assemble_turn(
                 error=f"ingest persona failed: {e}",
                 skipped=True,
             )
+        tracer.stage_end(
+            "ingest_persona",
+            reply_chars=len(full_reply),
+        )
 
         return AssembledTurn(
             reply=full_reply,
@@ -690,11 +912,30 @@ async def assemble_turn(
         )
 
     finally:
+        # ---- Stage 12 · on_turn_done ------------------------------
         # Spec §17a.3: on_turn_done is MANDATORY once per turn, before
         # or after errors. Exceptions raised by on_turn_done are
         # swallowed — channels are expected to be noexcept here.
+        tracer.stage_start("on_turn_done")
         if on_turn_done is not None:
             await _invoke_on_turn_done(on_turn_done, turn.turn_id)
+        tracer.stage_end("on_turn_done", callback_wired=on_turn_done is not None)
+
+        # Persist the trace row. Best-effort: any failure here is
+        # logged but must not bubble up — the dispatcher only cares
+        # about the assemble_turn return value, and dev-mode tracing
+        # is opt-in so a broken trace write during a production turn
+        # would still sink the user-visible reply otherwise.
+        finished_at = datetime.utcnow()
+        tracer.finished_at = finished_at
+        tracer.duration_ms = max(
+            0, int((finished_at - turn_started_at).total_seconds() * 1000)
+        )
+        if isinstance(tracer, TurnTracer):
+            try:
+                tracer.persist(ctx.db)
+            except Exception as e:  # noqa: BLE001
+                log.warning("turn_tracer.persist failed: %s", e)
 
 
 async def _invoke_on_turn_done(on_turn_done: OnTurnDoneCb, turn_id: str) -> None:

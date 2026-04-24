@@ -48,6 +48,11 @@ from echovessel.memory.consolidate import (
     ReflectFn,
     consolidate_session,
 )
+from echovessel.memory.consolidate_tracer import (
+    ConsolidateTracer,
+    NullConsolidateTracer,
+    make_consolidate_tracer,
+)
 from echovessel.memory.models import Persona, Session
 from echovessel.memory.observers import MemoryEventObserver
 from echovessel.memory.slow_cycle import (
@@ -138,6 +143,10 @@ class ConsolidateWorker:
     slow_tick_input_token_limit: int = DEFAULT_INPUT_TOKEN_LIMIT
     slow_tick_transcript_dir: Path | str | None = None
     observer: MemoryEventObserver | None = None
+    # Spec 4 · dev-mode trace. When True, each consolidate_session run
+    # writes a session_traces row + each slow_cycle run appends its
+    # phase_g payload. Default off → zero overhead.
+    dev_trace_enabled: bool = False
     _queue: list[str] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
@@ -202,6 +211,10 @@ class ConsolidateWorker:
                     if session.extracted:
                         return  # idempotency (§12)
                     now = self.now_fn()
+                    tracer = make_consolidate_tracer(
+                        enabled=self.dev_trace_enabled,
+                        session_id=session_id,
+                    )
                     result = await consolidate_session(
                         db=db,
                         backend=self.backend,
@@ -213,6 +226,7 @@ class ConsolidateWorker:
                         trivial_message_count=self.trivial_message_count,
                         trivial_token_count=self.trivial_token_count,
                         reflection_hard_limit_24h=self.reflection_hard_limit_24h,
+                        tracer=tracer,
                     )
                     log.info(
                         "consolidated session %s: skipped=%s events=%d thoughts=%d",
@@ -224,7 +238,18 @@ class ConsolidateWorker:
                     # G phase · slow-tick reflection (plan §7.1). Runs
                     # strictly after F committed ``session.status=CLOSED``,
                     # so failure here cannot unwind the session close.
-                    await self._maybe_run_slow_cycle(db, session, now)
+                    await self._maybe_run_slow_cycle(db, session, now, tracer=tracer)
+                    # Persist the session_traces row. Best-effort: a
+                    # failure here is logged and the session stays CLOSED.
+                    if isinstance(tracer, ConsolidateTracer):
+                        try:
+                            tracer.persist(db)
+                        except Exception as e:  # noqa: BLE001
+                            log.warning(
+                                "consolidate_tracer.persist failed for %s: %s",
+                                session_id,
+                                e,
+                            )
                 return
             except LLMTransientError as e:
                 retries += 1
@@ -301,7 +326,12 @@ class ConsolidateWorker:
             log.error("failed to mark session %s as FAILED: %s", session_id, e)
 
     async def _maybe_run_slow_cycle(
-        self, db: object, session: Session, now: datetime
+        self,
+        db: object,
+        session: Session,
+        now: datetime,
+        *,
+        tracer: ConsolidateTracer | NullConsolidateTracer | None = None,
     ) -> None:
         """Phase G entry point. Decides + runs the slow-tick cycle.
 
@@ -317,12 +347,25 @@ class ConsolidateWorker:
         we must not let a broken reflection undo that transition.
         """
         if self.slow_cycle_fn is None or not self.slow_tick_enabled:
+            if tracer is not None:
+                tracer.record_phase_g(
+                    ran=False,
+                    cool_down_ok=None,
+                    budget_check="disabled",
+                    slow_cycle_prompt=None,
+                )
             return
         try:
             persona = db.exec(  # type: ignore[attr-defined]
                 select(Persona).where(Persona.id == session.persona_id)
             ).one_or_none()
             if persona is None:
+                if tracer is not None:
+                    tracer.record_phase_g(
+                        ran=False,
+                        cool_down_ok=None,
+                        budget_check="persona_missing",
+                    )
                 return
             if not should_run_slow_cycle(
                 db,  # type: ignore[arg-type]
@@ -332,6 +375,12 @@ class ConsolidateWorker:
                 enabled=self.slow_tick_enabled,
                 cool_down_minutes=self.slow_tick_cool_down_minutes,
             ):
+                if tracer is not None:
+                    tracer.record_phase_g(
+                        ran=False,
+                        cool_down_ok=False,
+                        budget_check="ok",
+                    )
                 return
 
             result = await run_slow_cycle(
@@ -346,6 +395,7 @@ class ConsolidateWorker:
                 input_token_limit=self.slow_tick_input_token_limit,
                 transcript_dir=self.slow_tick_transcript_dir,
                 observer=self.observer,
+                tracer=tracer,
             )
             log.info(
                 "slow cycle for session %s: ran=%s thoughts=%d expectations=%d",
