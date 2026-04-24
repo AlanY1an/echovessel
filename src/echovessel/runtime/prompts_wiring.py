@@ -150,6 +150,8 @@ def make_extract_fn(llm: LLMProvider) -> ExtractFn:
                 emotion_tags=list(re.emotion_tags),
                 relational_tags=list(re.relational_tags),
                 event_time=re.event_time,
+                subject=re.subject,
+                superseded_event_ids=list(re.superseded_event_ids),
             )
             for re in parsed.events
         ]
@@ -185,6 +187,7 @@ def make_extract_fn(llm: LLMProvider) -> ExtractFn:
             mentioned_entities=mentioned_entities,
             entity_clarification=entity_clarification,
             session_mood_signal=session_mood_signal,
+            session_summary=parsed.session_summary,
         )
 
     return _extract

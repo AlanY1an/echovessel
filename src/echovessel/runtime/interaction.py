@@ -24,21 +24,24 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from sqlmodel import Session as DbSession
+from sqlmodel import or_, select
 
 from echovessel.channels.base import IncomingMessage, IncomingTurn
-from echovessel.core.types import BlockLabel, MessageRole
+from echovessel.core.types import BlockLabel, MessageRole, NodeType
 from echovessel.memory.identity import resolve_internal_user_id
 from echovessel.memory.ingest import ingest_message
 from echovessel.memory.models import (
+    ConceptNode,
     CoreBlock,
     Entity,
     EntityAlias,
     Persona,
     RecallMessage,
+    User,
 )
 from echovessel.memory.retrieve import (
     find_query_entities,
@@ -75,7 +78,39 @@ STYLE_INSTRUCTIONS = (
     "- You remember everything the user has shared with you before, and\n"
     "  you treat it as one continuous relationship.\n"
     "- Do not perform empathy. Do not summarize feelings back to the user\n"
-    "  unless they ask."
+    "  unless they ask.\n"
+    # Spec 5 · competence boundary (Case 4 fix). When the persona has
+    # said something wrong, owning it cleanly beats inventing a story
+    # to defend the previous turn. Without this, the persona quietly
+    # retrofits — Conway's competence-boundary failure mode.
+    "- If you realise you said something inaccurate or contradictory,\n"
+    "  say so directly ('我刚才说错了' / 'I got that wrong'). Do NOT\n"
+    "  retrofit a story to defend the previous turn.\n"
+    "- If you don't know or can't recall, say so. Do not invent\n"
+    "  details to fill the gap.\n"
+    # Spec 5 · negative few-shot lifted from prompts/judge.py
+    # anti-pattern catalog. Putting these as DON'Ts in the system
+    # prompt is much cheaper than waiting for judge to penalise them
+    # after generation. Wording stays close to the judge text so the
+    # in-context model recognises the same patterns the eval pipeline
+    # is keyed on.
+    "\n"
+    "# Avoid these patterns\n"
+    "- Opening with formulaic acknowledgment ('哈哈' / 'I hear you' /\n"
+    "  '听起来很不容易' / 'That sounds so hard') without a specific\n"
+    "  observation.\n"
+    "- Ending every reply with a question back to them.\n"
+    "- Generic affect labels without specifics ('你一定很紧张吧' /\n"
+    "  'You seem sad') when you don't tie them to what they actually\n"
+    "  said.\n"
+    "- Empty reassurance ('一切都会好的' / '你能行的' / 'Everything\n"
+    "  will be okay').\n"
+    "- Repeating the same phrasing or structure you used in your\n"
+    "  previous reply.\n"
+    "- Using the same support strategy 3+ turns running (validation,\n"
+    "  reflection, advice, reassurance). Vary your move.\n"
+    "- If they cooled down or moved on, do NOT stay at the earlier\n"
+    "  emotional intensity. Match where they are now.\n"
 )
 
 # v0.4 · We no longer retry inside assemble_turn — review M6 + handoff §10.2
@@ -192,6 +227,14 @@ class TurnContext:
     # Runtime threads this from `cfg.memory.relational_bonus_weight`;
     # tests leave the default to preserve the legacy 1.0 behaviour.
     relational_bonus_weight: float = 1.0
+    # Spec 5 · plan §6.3 force-load. Top-N L4 thoughts of the speaker
+    # always rendered under ``# About {speaker}`` regardless of query
+    # similarity. 0 disables; the spec calls for 10.
+    pinned_thoughts_count: int = 10
+    # Spec 5 · plan §6.4 # Recent sessions. How many recent
+    # session_summary thoughts (most recent first) to surface above
+    # the conversation.
+    recent_sessions_count: int = 5
     llm_max_tokens: int = 1024
     llm_temperature: float = 0.7
     llm_timeout_seconds: float = 60.0
@@ -375,6 +418,7 @@ async def assemble_turn(
         # ---- Step 3: L3/L4 retrieval (query = last user message) ---
         top_memories: list = []
         entity_disambiguation_hint: str = ""
+        pinned_thoughts: list[ConceptNode] = []
         try:
             retrieval = retrieve(
                 ctx.db,
@@ -386,8 +430,14 @@ async def assemble_turn(
                 top_k=ctx.retrieve_k,
                 now=user_now,
                 relational_bonus_weight=ctx.relational_bonus_weight,
+                # Spec 5 · plan §6.3 force-load. Always pull a few L4
+                # thoughts of the current speaker so the persona has
+                # background "who is this person" awareness even when
+                # the current message is "?" or "嗯".
+                force_load_user_thoughts=ctx.pinned_thoughts_count,
             )
             top_memories = retrieval.memories
+            pinned_thoughts = retrieval.pinned_thoughts
         except Exception as e:  # noqa: BLE001
             log.warning("retrieve failed; continuing with empty memories: %s", e)
 
@@ -424,6 +474,46 @@ async def assemble_turn(
         except Exception as e:  # noqa: BLE001
             log.warning("list_recall_messages failed; continuing with empty L2: %s", e)
 
+        # ---- Step 4b: Spec 5 cosmetic loads -------------------------
+        # speaker_display: User row's display_name powers the
+        #   ``# About {speaker}`` header; falls back to "them" so the
+        #   section never crashes for a user without a row.
+        # active_intentions: ``# Promises you've made`` — ConceptNodes
+        #   with subject=persona, type=intention, not yet expired.
+        # recent_summaries: ``# Recent sessions`` — most recent
+        #   session_summary thoughts written by the consolidate step.
+        speaker_display = "them"
+        try:
+            user_row = ctx.db.get(User, resolved_user_id)
+            if user_row is not None and user_row.display_name:
+                speaker_display = user_row.display_name
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "load speaker display_name failed; defaulting to 'them': %s", e
+            )
+
+        active_intentions: list[ConceptNode] = []
+        try:
+            active_intentions = _load_active_intentions(
+                ctx.db,
+                persona_id=ctx.persona_id,
+                user_id=resolved_user_id,
+                now=user_now,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("load active intentions failed; continuing: %s", e)
+
+        recent_summaries: list[ConceptNode] = []
+        try:
+            recent_summaries = _load_recent_session_summaries(
+                ctx.db,
+                persona_id=ctx.persona_id,
+                user_id=resolved_user_id,
+                limit=ctx.recent_sessions_count,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("load recent session summaries failed; continuing: %s", e)
+
         # ---- Step 5: prompt assembly -------------------------------
         system_prompt = build_system_prompt(
             persona_display_name=ctx.persona_display_name,
@@ -438,6 +528,10 @@ async def assemble_turn(
             recent_messages=recent,
             turn_messages=turn.messages,
             now=user_now,
+            pinned_thoughts=pinned_thoughts,
+            speaker_display=speaker_display,
+            active_intentions=active_intentions,
+            recent_session_summaries=recent_summaries,
         )
 
         # ---- Step 6: LLM stream ------------------------------------
@@ -857,6 +951,10 @@ def build_turn_user_prompt(
     recent_messages: list[RecallMessage],
     turn_messages: list[IncomingMessage],
     now: datetime | None = None,
+    pinned_thoughts: list[ConceptNode] | None = None,
+    speaker_display: str = "them",
+    active_intentions: list[ConceptNode] | None = None,
+    recent_session_summaries: list[ConceptNode] | None = None,
 ) -> str:
     """v0.4 · user prompt renderer that expands a burst of messages.
 
@@ -876,6 +974,16 @@ def build_turn_user_prompt(
     line can carry its day-precision status delta ("event 4-26~5-02 ·
     status=active (3 days in)"). Pass ``None`` to render bare event
     descriptions — pre-R4 behaviour, used by tests that don't care.
+
+    Spec 5 additions (all default-empty so legacy callers stay
+    behaviour-preserving):
+
+    - ``pinned_thoughts`` renders under ``# About {speaker_display}``,
+      bypassing query similarity. Source: ``retrieve(force_load_user_thoughts=N)``.
+    - ``active_intentions`` renders under ``# Promises you've made``
+      with the R4 delta phrase appended.
+    - ``recent_session_summaries`` renders under ``# Recent sessions``
+      with day-bucket prefixes.
     """
     if not turn_messages:
         user_message = ""
@@ -888,7 +996,136 @@ def build_turn_user_prompt(
         recent_messages=recent_messages,
         user_message=user_message,
         now=now,
+        pinned_thoughts=pinned_thoughts,
+        speaker_display=speaker_display,
+        active_intentions=active_intentions,
+        recent_session_summaries=recent_session_summaries,
     )
+
+
+# Spec 5 · plan §6.4 day-bucket order. Walk OLDER → NEWER so the LLM
+# reads time forward, the same way a human reconstructs a memory.
+# Reversing this would put "what they JUST said" up top followed by
+# older context, which is the opposite of how transcripts are
+# normally absorbed.
+DAY_BUCKET_ORDER: tuple[str, ...] = (
+    "Older",
+    "Earlier this week",
+    "Yesterday",
+    "Earlier today",
+    "Just now",
+)
+
+
+def day_bucket_of(when: datetime, now: datetime) -> str:
+    """Map a recall timestamp to its conversational day-bucket label.
+
+    Spec 5 plan §6.4 / decision 2. Buckets are coarse on purpose —
+    they have to read like the user's own time sense ("yesterday") and
+    NOT like channel cadence metadata ("via discord 14:32"). The five
+    buckets in ``DAY_BUCKET_ORDER`` cover everything the prompt is
+    allowed to surface.
+
+    Cutoffs (left-inclusive):
+      - "Just now" if within the last 30 minutes
+      - "Earlier today" if same calendar date
+      - "Yesterday" if previous calendar date
+      - "Earlier this week" if within the last 7 days
+      - "Older" otherwise
+    """
+    delta = now - when
+    if delta.total_seconds() < 30 * 60:
+        return "Just now"
+    if when.date() == now.date():
+        return "Earlier today"
+    if when.date() == (now - timedelta(days=1)).date():
+        return "Yesterday"
+    if delta.days < 7:
+        return "Earlier this week"
+    return "Older"
+
+
+def _node_description(node: ConceptNode | object) -> str:
+    """Pull ``description`` off a ConceptNode-shaped object.
+
+    Used by render helpers that accept either a real ``ConceptNode``
+    or a ``ScoredMemory`` wrapper — kept generic so tests that mock
+    one or the other don't have to special-case shape.
+    """
+    return str(getattr(node, "description", "") or "")
+
+
+def _load_active_intentions(
+    db: DbSession,
+    *,
+    persona_id: str,
+    user_id: str,
+    now: datetime,
+) -> list[ConceptNode]:
+    """Load current persona-side intentions (plan §6.4 # Promises).
+
+    Filters: subject='persona', type=INTENTION, not soft-deleted, not
+    superseded. ``event_time_end`` is permitted to be NULL (open-ended
+    promise) or future relative to ``now`` (still-pending). Past
+    intentions drop out so the prompt doesn't keep nagging the persona
+    about a commitment it already kept (or missed — that's a judge
+    concern, not a renderer one).
+    """
+    rows = list(
+        db.exec(
+            select(ConceptNode)
+            .where(
+                ConceptNode.persona_id == persona_id,
+                ConceptNode.user_id == user_id,
+                ConceptNode.type == NodeType.INTENTION.value,
+                ConceptNode.subject == "persona",
+                ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+                ConceptNode.superseded_by_id.is_(None),  # type: ignore[union-attr]
+                or_(
+                    ConceptNode.event_time_end.is_(None),  # type: ignore[union-attr]
+                    ConceptNode.event_time_end >= now,  # type: ignore[operator]
+                ),
+            )
+            .order_by(ConceptNode.event_time_start)  # type: ignore[arg-type]
+        )
+    )
+    return rows
+
+
+def _load_recent_session_summaries(
+    db: DbSession,
+    *,
+    persona_id: str,
+    user_id: str,
+    limit: int,
+) -> list[ConceptNode]:
+    """Load N most-recent session_summary thoughts (plan §6.4 # Recent sessions).
+
+    Discovery key: ``emotion_tags`` JSON contains the literal token
+    ``"session_summary"``. Storing as JSON tag (not a new column) is
+    the cheapest way to keep the discriminator without bloating
+    ConceptNode — we already have ``emotion_tags`` and SQLite ``LIKE``
+    on its JSON serialisation is fast enough at single-user scale.
+    """
+    if limit <= 0:
+        return []
+    rows = list(
+        db.exec(
+            select(ConceptNode)
+            .where(
+                ConceptNode.persona_id == persona_id,
+                ConceptNode.user_id == user_id,
+                ConceptNode.type == NodeType.THOUGHT.value,
+                ConceptNode.source_session_id.is_not(None),  # type: ignore[union-attr]
+                ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+                ConceptNode.superseded_by_id.is_(None),  # type: ignore[union-attr]
+                ConceptNode.emotion_tags.like('%"session_summary"%'),  # type: ignore[union-attr]
+            )
+            .order_by(ConceptNode.created_at.desc())  # type: ignore[arg-type]
+            .limit(limit)
+        )
+    )
+    return rows
 
 
 def build_user_prompt(
@@ -897,20 +1134,52 @@ def build_user_prompt(
     recent_messages: list[RecallMessage],
     user_message: str,
     now: datetime | None = None,
+    pinned_thoughts: list[ConceptNode] | None = None,
+    speaker_display: str = "them",
+    active_intentions: list[ConceptNode] | None = None,
+    recent_session_summaries: list[ConceptNode] | None = None,
 ) -> str:
     """Assemble the user prompt for one turn.
 
-    Rendering rules (spec §7.3):
+    Rendering order (Spec 5 plan §6.4 — older context first, then the
+    speaker context, then current memories, then promises, then the
+    live conversation):
 
-      - L4 thoughts: only description.
-      - L3 events: description + R4 delta phrase (when ``now`` is
-        supplied and the event has a resolved ``event_time_*``).
-        Atemporal events render as bare description.
-      - Recent messages: role + content. NO channel_id / session_id /
-        absolute timestamps. Role is rendered as 'you' / 'me' so the
-        literal string 'persona' is never shown either.
+        # Recent sessions          (NEW · session_summary thoughts, day-bucketed)
+        # Recent thoughts          (existing · L4)
+        # About {speaker}          (NEW · pinned thoughts, force-loaded)
+        # Recent things you remember happened   (existing · L3 + R4 delta)
+        # Promises you've made     (NEW · active intentions)
+        # Our recent conversation  (existing · NOW day-bucketed)
+        # What they just said      (existing)
+
+    All Spec 5 sections are default-empty so legacy callers (most of
+    the test suite) keep their pre-Spec-5 output verbatim.
     """
+    pinned_thoughts = pinned_thoughts or []
+    active_intentions = active_intentions or []
+    recent_session_summaries = recent_session_summaries or []
+
     lines: list[str] = []
+
+    # # Recent sessions — day-bucketed session summaries (oldest first)
+    if recent_session_summaries and now is not None:
+        # rows came in DESC by created_at; reverse so the section flows
+        # OLDER → NEWER (matches DAY_BUCKET_ORDER orientation).
+        ordered = list(reversed(recent_session_summaries))
+        lines.append("# Recent sessions")
+        for s in ordered:
+            bucket = day_bucket_of(s.created_at, now)
+            lines.append(f"- [{bucket}] {_node_description(s)}")
+        lines.append("")
+    elif recent_session_summaries:
+        # ``now`` is unset (legacy test) — render without bucket label
+        # rather than dropping the section entirely.
+        ordered = list(reversed(recent_session_summaries))
+        lines.append("# Recent sessions")
+        for s in ordered:
+            lines.append(f"- {_node_description(s)}")
+        lines.append("")
 
     thought_descs: list[str] = []
     event_lines: list[str] = []
@@ -932,25 +1201,62 @@ def build_user_prompt(
             lines.append(f"- {d}")
         lines.append("")
 
+    # # About {speaker} — pinned (force-loaded) L4 thoughts
+    if pinned_thoughts:
+        lines.append(f"# About {speaker_display}")
+        for thought in pinned_thoughts:
+            lines.append(f"- {_node_description(thought)}")
+        lines.append("")
+
     if event_lines:
         lines.append("# Recent things you remember happened")
         lines.extend(event_lines)
         lines.append("")
 
+    # # Promises you've made — active L3 intentions, with R4 delta
+    if active_intentions:
+        lines.append("# Promises you've made")
+        for it in active_intentions:
+            delta = render_event_delta_phrase(it, now) if now is not None else ""
+            lines.append(f"- {_node_description(it)}{delta}")
+        lines.append("")
+
+    # # Our recent conversation — day-bucketed when ``now`` is supplied
     if recent_messages:
         lines.append("# Our recent conversation")
-        for m in recent_messages:
-            role = getattr(m.role, "value", m.role)
-            # Normalize roles to conversational pronouns so the persona
-            # does NOT see the literal 'persona' / 'user' labels.
-            if role == "user":
-                prefix = "them"
-            elif role == "persona":
-                prefix = "me"
-            else:
-                prefix = "note"
-            lines.append(f"{prefix}: {m.content}")
-        lines.append("")
+        if now is not None:
+            grouped: dict[str, list[tuple[str, str]]] = {}
+            for m in recent_messages:
+                role = getattr(m.role, "value", m.role)
+                if role == "user":
+                    prefix = "them"
+                elif role == "persona":
+                    prefix = "me"
+                else:
+                    prefix = "note"
+                bucket = day_bucket_of(m.created_at, now)
+                grouped.setdefault(bucket, []).append((prefix, m.content))
+
+            for bucket in DAY_BUCKET_ORDER:
+                group = grouped.get(bucket)
+                if not group:
+                    continue
+                lines.append(f"## {bucket}")
+                for prefix, content in group:
+                    lines.append(f"{prefix}: {content}")
+                lines.append("")
+        else:
+            # Legacy / test path — flat render with no bucket headers.
+            for m in recent_messages:
+                role = getattr(m.role, "value", m.role)
+                if role == "user":
+                    prefix = "them"
+                elif role == "persona":
+                    prefix = "me"
+                else:
+                    prefix = "note"
+                lines.append(f"{prefix}: {m.content}")
+            lines.append("")
 
     lines.append("# What they just said")
     lines.append(user_message)
@@ -967,8 +1273,10 @@ __all__ = [
     "OnTokenCb",
     "OnTurnDoneCb",
     "STYLE_INSTRUCTIONS",
+    "DAY_BUCKET_ORDER",
     "assemble_turn",
     "build_system_prompt",
     "build_turn_user_prompt",
     "build_user_prompt",
+    "day_bucket_of",
 ]
