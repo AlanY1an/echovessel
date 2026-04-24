@@ -87,6 +87,7 @@ from echovessel.memory.models import (
     ConceptNodeFilling,
     CoreBlockAppend,
     RecallMessage,
+    User,
 )
 from echovessel.memory.models import Session as RecallSession
 from echovessel.prompts import (
@@ -231,7 +232,7 @@ def _enum_or_none(value: str | None, allowed: tuple[str, ...]) -> str | None:
 class OnboardingRequest(BaseModel):
     """Body for ``POST /api/admin/persona/onboarding``.
 
-    All five block fields are required (the frontend sends them even
+    All four block fields are required (the frontend sends them even
     when empty), but empty strings are accepted and silently skipped
     at write time. ``facts`` is optional — the user may skip every
     biographic field and finish onboarding with just the blocks.
@@ -241,7 +242,6 @@ class OnboardingRequest(BaseModel):
     persona_block: str = Field(...)
     self_block: str = Field(...)
     user_block: str = Field(...)
-    mood_block: str = Field(...)
     facts: PersonaFactsPayload | None = None
 
 
@@ -294,14 +294,41 @@ class PersonaUpdateRequest(BaseModel):
     persona_block: str | None = None
     self_block: str | None = None
     user_block: str | None = None
-    mood_block: str | None = None
     relationship_block: str | None = None
+    style_block: str | None = None
 
 
 class VoiceToggleRequest(BaseModel):
     """Body for ``POST /api/admin/persona/voice-toggle``."""
 
     enabled: bool
+
+
+class StyleUpdateRequest(BaseModel):
+    """Body for ``POST /api/admin/persona/style`` (plan §6.6).
+
+    Three actions:
+      - ``set``     — soft-delete the prior STYLE row and write fresh.
+      - ``append``  — standard ``append_to_core_block`` path; joins
+                      prior content with a newline.
+      - ``clear``   — soft-delete the row; ``text`` is ignored.
+    """
+
+    action: str = Field(..., pattern="^(set|append|clear)$")
+    text: str = ""
+
+
+class UserTimezoneRequest(BaseModel):
+    """Body for ``POST /api/admin/users/timezone`` (plan decision 5).
+
+    Web channel POSTs the browser's
+    ``Intl.DateTimeFormat().resolvedOptions().timeZone`` on first
+    connect. ``override=True`` overwrites an existing value (admin UI
+    manual edit path).
+    """
+
+    timezone: str = Field(..., min_length=1, max_length=64)
+    override: bool = False
 
 
 class PersonaBootstrapRequest(BaseModel):
@@ -367,20 +394,19 @@ class PreviewDeleteRequest(BaseModel):
 
 # Map the JSON keys used on the wire to the memory BlockLabel values.
 # ``onboarding`` has no relationship_block (§3 locked shape) so it is
-# absent here; ``persona_update`` has the full set.
+# absent here; ``persona_update`` has the full set plus STYLE (v0.4).
 _ONBOARDING_LABELS: tuple[tuple[str, BlockLabel], ...] = (
     ("persona_block", BlockLabel.PERSONA),
     ("self_block", BlockLabel.SELF),
     ("user_block", BlockLabel.USER),
-    ("mood_block", BlockLabel.MOOD),
 )
 
 _UPDATE_LABELS: tuple[tuple[str, BlockLabel], ...] = (
     ("persona_block", BlockLabel.PERSONA),
     ("self_block", BlockLabel.SELF),
     ("user_block", BlockLabel.USER),
-    ("mood_block", BlockLabel.MOOD),
     ("relationship_block", BlockLabel.RELATIONSHIP),
+    ("style_block", BlockLabel.STYLE),
 )
 
 
@@ -392,12 +418,12 @@ _UPDATE_LABELS: tuple[tuple[str, BlockLabel], ...] = (
 def _user_id_for_label(label: BlockLabel, user_id: str) -> str | None:
     """Return the per-row ``user_id`` for a given block label.
 
-    Shared blocks (persona/self/mood) use NULL; per-user blocks
+    Shared blocks (persona/self/style) use NULL; per-user blocks
     (user/relationship) carry the actual user_id. Mirrors the business
     rule in :mod:`echovessel.memory.models.CoreBlock`.
     """
 
-    if label in (BlockLabel.PERSONA, BlockLabel.SELF, BlockLabel.MOOD):
+    if label in (BlockLabel.PERSONA, BlockLabel.SELF, BlockLabel.STYLE):
         return None
     return user_id
 
@@ -416,8 +442,8 @@ def _load_core_blocks_dict(db: DbSession, *, persona_id: str, user_id: str) -> d
         BlockLabel.PERSONA.value: "",
         BlockLabel.SELF.value: "",
         BlockLabel.USER.value: "",
-        BlockLabel.MOOD.value: "",
         BlockLabel.RELATIONSHIP.value: "",
+        BlockLabel.STYLE.value: "",
     }
     for row in rows:
         label_value = getattr(row.label, "value", row.label)
@@ -1059,6 +1085,92 @@ def build_admin_router(
             _try_persist_display_name(runtime, req.display_name)
 
         return {"ok": True}
+
+    # ---- POST /api/admin/persona/style ---------------------------------
+    #
+    # Owner-directed style preferences (plan §6.6 · decision 5). Three
+    # actions: set (replace), append (join with newline), clear (soft
+    # delete). Plan §8.2 bans NLP keyword autodetect of style — this
+    # endpoint is the ONLY path that writes BlockLabel.STYLE.
+
+    @router.post("/api/admin/persona/style")
+    async def post_persona_style(req: StyleUpdateRequest) -> dict[str, Any]:
+        persona_id = _persona_id()
+
+        with _open_db() as db:
+            existing = db.exec(
+                select(CoreBlock).where(
+                    CoreBlock.persona_id == persona_id,
+                    CoreBlock.label == BlockLabel.STYLE.value,
+                    CoreBlock.user_id.is_(None),  # type: ignore[union-attr]
+                    CoreBlock.deleted_at.is_(None),  # type: ignore[union-attr]
+                )
+            ).first()
+
+            if req.action == "clear":
+                if existing is not None:
+                    existing.deleted_at = datetime.now(UTC)
+                    db.add(existing)
+                    db.commit()
+                return {"ok": True, "action": "clear"}
+
+            if not req.text or not req.text.strip():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="text must be non-empty for action=set|append",
+                )
+
+            if req.action == "set" and existing is not None:
+                existing.deleted_at = datetime.now(UTC)
+                db.add(existing)
+                db.commit()
+
+            append_to_core_block(
+                db,
+                persona_id=persona_id,
+                user_id=None,
+                label=BlockLabel.STYLE.value,
+                content=req.text,
+                provenance={"source": f"admin_style_{req.action}"},
+            )
+
+        return {"ok": True, "action": req.action}
+
+    # ---- POST /api/admin/users/timezone --------------------------------
+    #
+    # Plan decision 5 · browser-supplied IANA timezone for the local
+    # owner. Web channel POSTs this on first connect from
+    # ``Intl.DateTimeFormat().resolvedOptions().timeZone``.
+    # ``override=True`` flips "only write if null" to "always write"
+    # (admin UI manual-edit path).
+
+    @router.post("/api/admin/users/timezone")
+    async def post_user_timezone(req: UserTimezoneRequest) -> dict[str, Any]:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(req.timezone)
+        except ZoneInfoNotFoundError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"unknown IANA timezone {req.timezone!r}",
+            ) from e
+
+        with _open_db() as db:
+            user_row = db.get(User, user_id)
+            if user_row is None:
+                user_row = User(id=user_id, display_name=user_id)
+                db.add(user_row)
+                db.commit()
+                db.refresh(user_row)
+
+            if user_row.timezone is None or req.override:
+                user_row.timezone = req.timezone
+                db.add(user_row)
+                db.commit()
+                return {"ok": True, "timezone": req.timezone, "written": True}
+
+            return {"ok": True, "timezone": user_row.timezone, "written": False}
 
     # ---- POST /api/admin/persona/voice-toggle --------------------------
 
