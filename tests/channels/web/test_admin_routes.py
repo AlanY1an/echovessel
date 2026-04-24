@@ -219,7 +219,6 @@ def test_get_state_after_onboarding_reports_not_required() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "Luna is curious and gentle.",
-                "self_block": "",
                 "user_block": "",
             },
         )
@@ -246,7 +245,6 @@ def test_post_onboarding_writes_core_blocks() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "P block",
-                "self_block": "S block",
                 "user_block": "U block",
             },
         )
@@ -259,7 +257,6 @@ def test_post_onboarding_writes_core_blocks() -> None:
         )
     labels = {getattr(r.label, "value", r.label): r.content for r in rows}
     assert labels.get("persona") == "P block"
-    assert labels.get("self") == "S block"
     assert labels.get("user") == "U block"
 
 
@@ -269,7 +266,6 @@ def test_post_onboarding_duplicate_returns_409() -> None:
         body = {
             "display_name": "Luna",
             "persona_block": "P",
-            "self_block": "",
             "user_block": "",
         }
         r1 = client.post("/api/admin/persona/onboarding", json=body)
@@ -290,7 +286,6 @@ def test_post_onboarding_empty_blocks_are_silently_skipped() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "only this",
-                "self_block": "",
                 "user_block": "",
             },
         )
@@ -309,7 +304,13 @@ def test_post_onboarding_empty_blocks_are_silently_skipped() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_get_persona_returns_all_five_blocks_empty_for_unwritten() -> None:
+def test_get_persona_returns_three_blocks_empty_for_unwritten() -> None:
+    """v0.5 · GET /api/admin/persona returns the 3-block dict only.
+
+    L1.self and L1.relationship were dropped (plan §1); their keys
+    must NOT appear in the response. STYLE shows up because it's now
+    a shared block alongside persona.
+    """
     _rt, client = _build_runtime_and_app()
     with client:
         resp = client.get("/api/admin/persona")
@@ -318,11 +319,12 @@ def test_get_persona_returns_all_five_blocks_empty_for_unwritten() -> None:
     assert data["id"] == "admin-test"
     assert data["core_blocks"] == {
         "persona": "",
-        "self": "",
         "user": "",
-        "relationship": "",
         "style": "",
     }
+    # Belt-and-braces: legacy keys must be absent (not just empty).
+    for legacy in ("self", "relationship", "mood"):
+        assert legacy not in data["core_blocks"]
 
 
 def test_get_persona_reflects_onboarding_writes() -> None:
@@ -333,8 +335,7 @@ def test_get_persona_reflects_onboarding_writes() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "P",
-                "self_block": "S",
-                "user_block": "",
+                "user_block": "U",
             },
         )
         resp = client.get("/api/admin/persona")
@@ -342,9 +343,7 @@ def test_get_persona_reflects_onboarding_writes() -> None:
     data = resp.json()
     assert data["display_name"] == "Luna"
     assert data["core_blocks"]["persona"] == "P"
-    assert data["core_blocks"]["self"] == "S"
-    assert data["core_blocks"]["user"] == ""
-    assert data["core_blocks"]["relationship"] == ""
+    assert data["core_blocks"]["user"] == "U"
     assert data["core_blocks"]["style"] == ""
 
 
@@ -362,8 +361,7 @@ def test_post_persona_partial_update_only_touches_present_fields() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "P1",
-                "self_block": "S1",
-                "user_block": "",
+                "user_block": "U1",
             },
         )
         # Partial update: only persona_block present.
@@ -376,10 +374,10 @@ def test_post_persona_partial_update_only_touches_present_fields() -> None:
 
         snapshot = client.get("/api/admin/persona").json()
 
-    # persona appended ("P1\nP2"), self unchanged.
+    # persona appended ("P1\nP2"), user unchanged.
     assert "P2" in snapshot["core_blocks"]["persona"]
     assert "P1" in snapshot["core_blocks"]["persona"]
-    assert snapshot["core_blocks"]["self"] == "S1"
+    assert snapshot["core_blocks"]["user"] == "U1"
     # display_name untouched because it was not in the request body.
     assert snapshot["display_name"] == "Luna"
 
@@ -392,7 +390,6 @@ def test_post_persona_display_name_update_applies() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "P",
-                "self_block": "",
                 "user_block": "",
             },
         )

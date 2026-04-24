@@ -61,15 +61,16 @@ log = logging.getLogger(__name__)
 
 
 #: Content types the high-level `import_content` dispatcher accepts.
-#: The list is deliberately small and stable — v0.3 covers exactly the
-#: five buckets called out in the round3 tracker §2.2. Adding a new
-#: bucket is additive but requires a tracker patch.
+#: v0.5 trimmed the list to four buckets — ``relationship_facts`` was
+#: dropped along with the ``L1.relationship`` core block (plan §1).
+#: Third-party people / places / orgs now live on the L5 entities
+#: table; importer pipelines that used to emit relationship_facts
+#: must rewrite their LLM contract before running against v0.5.
 ImportContentType = Literal[
     "persona_traits",       # L1.persona_block append
     "user_identity_facts",  # L1.user_block append
     "user_events",          # L3.event bulk insert
     "user_reflections",     # L4.thought bulk insert
-    "relationship_facts",   # L1.relationship_block append
 ]
 
 _ALLOWED_CONTENT_TYPES: frozenset[str] = frozenset(
@@ -78,7 +79,6 @@ _ALLOWED_CONTENT_TYPES: frozenset[str] = frozenset(
         "user_identity_facts",
         "user_events",
         "user_reflections",
-        "relationship_facts",
     ]
 )
 
@@ -238,30 +238,6 @@ def import_content(
                 "prompt_round": payload.get("prompt_round", ""),
                 "notes": payload.get("notes", ""),
                 "category": payload.get("category", "other"),
-            },
-            observer=observer,
-            now=now,
-        )
-        return ImportResult(
-            content_type=content_type,
-            core_block_append_ids=(append.id,) if append.id is not None else (),
-        )
-
-    if content_type == "relationship_facts":
-        content = _require_content(payload)
-        append = append_to_core_block(
-            db,
-            persona_id=persona_id,
-            user_id=user_id,
-            label=BlockLabel.RELATIONSHIP.value,
-            content=content,
-            provenance={
-                "imported_from": source,
-                "source_label": payload.get("source_label", ""),
-                "chunk_index": payload.get("chunk_index"),
-                "prompt_round": payload.get("prompt_round", ""),
-                "notes": payload.get("notes", ""),
-                "person_label": payload.get("person_label", ""),
             },
             observer=observer,
             now=now,

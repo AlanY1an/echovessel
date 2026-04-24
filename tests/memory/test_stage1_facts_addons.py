@@ -72,10 +72,7 @@ _VALID_LLM = json.dumps(
     {
         "core_blocks": {
             "persona_block": "你是温和的陪伴",
-            "self_block": "",
             "user_block": "",
-            "mood_block": "安静",
-            "relationship_block": "",
         },
         "facts": {
             "full_name": "张丽华",
@@ -168,7 +165,6 @@ def test_facts_timezone_persists_in_db_but_not_in_who_you_are_bullets() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "P",
-                "self_block": "",
                 "user_block": "",
                 "facts": {
                     "full_name": "张丽华",
@@ -225,9 +221,7 @@ def test_display_name_change_does_not_rewrite_core_blocks() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "She is calm.",
-                "self_block": "",
                 "user_block": "She lives in 沈阳.",
-                "mood_block": "",
             },
         )
 

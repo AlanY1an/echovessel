@@ -34,7 +34,6 @@ def _payload(**overrides):
                 "emotional_impact": 2,
             }
         ],
-        "self_narrative_append": None,
     }
     base.update(overrides)
     return json.dumps(base, ensure_ascii=False)
@@ -48,7 +47,8 @@ def test_parse_valid_payload():
     assert result.new_thoughts[0].filling_event_ids == [1, 2]
     assert len(result.new_expectations) == 1
     assert result.new_expectations[0].reasoning_event_ids == [1]
-    assert result.self_narrative_append is None
+    # v0.5 · self_narrative_append was removed from the parser schema
+    assert not hasattr(result, "self_narrative_append")
 
 
 def test_reject_filling_id_not_in_input_set():
@@ -109,12 +109,17 @@ def test_reject_impact_out_of_range():
         parse_slow_cycle_response(raw, input_event_ids={1})
 
 
-def test_self_narrative_append_truncated_to_cap():
-    long = "x" * 400  # exceeds 200-char cap
-    raw = _payload(self_narrative_append=long)
+def test_self_narrative_append_field_silently_dropped():
+    """v0.5 · a stale LLM that still emits self_narrative_append gets
+    its extra field ignored by the parser. The parser used to enforce
+    a 200-char cap on that field; now it's not even read, so the
+    resulting object has no such attribute and the surrounding typed
+    fields parse as normal.
+    """
+    raw = _payload(self_narrative_append="x" * 400)
     result = parse_slow_cycle_response(raw, input_event_ids={1, 2})
-    assert result.self_narrative_append is not None
-    assert len(result.self_narrative_append) == 200
+    assert not hasattr(result, "self_narrative_append")
+    assert len(result.new_thoughts) == 1
 
 
 def test_empty_shell_is_valid():
@@ -123,13 +128,11 @@ def test_empty_shell_is_valid():
             "salient_questions": [],
             "new_thoughts": [],
             "new_expectations": [],
-            "self_narrative_append": None,
         }
     )
     result = parse_slow_cycle_response(raw, input_event_ids=set())
     assert result.new_thoughts == []
     assert result.new_expectations == []
-    assert result.self_narrative_append is None
 
 
 def test_reject_non_json():
@@ -174,12 +177,13 @@ def test_format_user_prompt_includes_payload():
     events = [{"id": 1, "description": "event one"}]
     prompt = format_slow_cycle_user_prompt(
         recent_events=events,
-        self_block_text="quiet, attentive",
         recent_thoughts=["Alan worries in private"],
         elapsed_hours=12.5,
         now_iso="2026-04-24T12:00:00",
     )
     assert "event one" in prompt
-    assert "quiet, attentive" in prompt
+    # Recent thoughts still flow — slow_cycle still sees the persona's
+    # prior reflections even though it no longer reads/writes L1.self.
+    assert "Alan worries in private" in prompt
     assert "12.5" in prompt
     assert "2026-04-24T12:00:00" in prompt

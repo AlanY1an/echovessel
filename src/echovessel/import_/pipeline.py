@@ -390,8 +390,9 @@ def _dispatch_chunk_items(
         for item in items:
             result, ids = dispatch_item(item, db=db, source=source)
             report.record_write(result.content_type)
-            # Also record provenance for L1 appends so the caller can
-            # audit self_block side-path rows separately.
+            # Track L1 append provenance so the report surfaces every
+            # core_block write touched by the pipeline (Memory Timeline
+            # / admin audit consume this list downstream).
             for append_id in result.core_block_append_ids:
                 report.new_core_block_append_ids.append(append_id)
             new_ids.extend(ids)

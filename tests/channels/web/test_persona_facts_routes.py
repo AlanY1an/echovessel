@@ -60,10 +60,7 @@ _VALID_LLM_RESPONSE = json.dumps(
     {
         "core_blocks": {
             "persona_block": "你是一位温和的陪伴",
-            "self_block": "",
             "user_block": "用户住在沈阳",
-            "mood_block": "安静、愿意倾听",
-            "relationship_block": "",
         },
         "facts": {
             "full_name": "张丽华",
@@ -121,9 +118,7 @@ def test_onboarding_without_facts_leaves_columns_null() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "P",
-                "self_block": "",
                 "user_block": "",
-                "mood_block": "",
             },
         )
     assert resp.status_code == 200
@@ -143,9 +138,7 @@ def test_onboarding_with_facts_writes_all_supplied_fields() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "P",
-                "self_block": "",
                 "user_block": "",
-                "mood_block": "",
                 "facts": {
                     "full_name": "张丽华",
                     "gender": "female",
@@ -184,9 +177,7 @@ def test_onboarding_rejects_out_of_enum_gender_gracefully() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "P",
-                "self_block": "",
                 "user_block": "",
-                "mood_block": "",
                 "facts": {"gender": "alien"},
             },
         )
@@ -205,9 +196,7 @@ def test_onboarding_rejects_bad_birth_date_with_422() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "P",
-                "self_block": "",
                 "user_block": "",
-                "mood_block": "",
                 "facts": {"birth_date": "sometime in 1962"},
             },
         )
@@ -245,9 +234,7 @@ def test_get_persona_after_onboarding_serialises_birth_date_as_iso() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "P",
-                "self_block": "",
                 "user_block": "",
-                "mood_block": "",
                 "facts": {"birth_date": "1962-03-15", "gender": "female"},
             },
         )
@@ -272,9 +259,7 @@ def test_patch_facts_updates_only_supplied_fields() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "P",
-                "self_block": "",
                 "user_block": "",
-                "mood_block": "",
                 "facts": {
                     "full_name": "original",
                     "gender": "female",
@@ -310,9 +295,7 @@ def test_patch_facts_explicit_null_clears_field() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "P",
-                "self_block": "",
                 "user_block": "",
-                "mood_block": "",
                 "facts": {"full_name": "kept", "occupation": "teacher"},
             },
         )
@@ -413,9 +396,7 @@ def test_extract_refuses_after_onboarding_with_409() -> None:
             json={
                 "display_name": "Luna",
                 "persona_block": "already onboarded",
-                "self_block": "",
                 "user_block": "",
-                "mood_block": "",
             },
         )
         resp = client.post(

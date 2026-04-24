@@ -345,9 +345,7 @@ async def test_onboarding_roundtrip(
             json={
                 "display_name": "Smoke",
                 "persona_block": "Smoke is a test persona.",
-                "self_block": "",
                 "user_block": "",
-                "mood_block": "",
             },
         )
         assert r.status_code == 200, (
@@ -402,9 +400,7 @@ async def test_voice_toggle_roundtrip(
                 json={
                     "display_name": "Smoke",
                     "persona_block": "Smoke persona.",
-                    "self_block": "",
                     "user_block": "",
-                    "mood_block": "",
                 },
             )
             assert init.status_code == 200
@@ -457,9 +453,7 @@ async def test_duplicate_onboarding_rejected(
         payload = {
             "display_name": "Smoke",
             "persona_block": "Smoke is a test persona.",
-            "self_block": "",
             "user_block": "",
-            "mood_block": "",
         }
 
         first = await client.post(

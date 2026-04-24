@@ -14,7 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-#: The five legal content_types accepted by `memory.import_content`.
+#: The four legal content_types accepted by `memory.import_content`
+#: (v0.5 · plan §1 dropped ``relationship_facts``).
 #: Authoritative list: `src/echovessel/memory/imports.py::_ALLOWED_CONTENT_TYPES`.
 ALLOWED_CONTENT_TYPES: frozenset[str] = frozenset(
     [
@@ -22,7 +23,6 @@ ALLOWED_CONTENT_TYPES: frozenset[str] = frozenset(
         "user_identity_facts",
         "user_events",
         "user_reflections",
-        "relationship_facts",
     ]
 )
 

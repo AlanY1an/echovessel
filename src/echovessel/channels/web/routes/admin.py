@@ -55,7 +55,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlmodel import Session as DbSession
 from sqlmodel import func, select
 
@@ -255,15 +255,25 @@ def _enum_or_none(value: str | None, allowed: tuple[str, ...]) -> str | None:
 class OnboardingRequest(BaseModel):
     """Body for ``POST /api/admin/persona/onboarding``.
 
-    All four block fields are required (the frontend sends them even
-    when empty), but empty strings are accepted and silently skipped
-    at write time. ``facts`` is optional — the user may skip every
-    biographic field and finish onboarding with just the blocks.
+    v0.5: L1 collapsed to ``persona`` + ``user`` (+ ``style`` via the
+    dedicated style endpoint). The legacy ``self_block`` and
+    ``relationship_block`` fields are gone — sending either yields a
+    422. The pre-1.0 ``no backcompat shims`` rule from CLAUDE.md is
+    why the request model is strict (``extra='forbid'``); call sites
+    that still send the obsolete fields must be updated, not silently
+    accepted.
+
+    Both required block fields are still required (the frontend sends
+    them even when empty), but empty strings are accepted and
+    silently skipped at write time. ``facts`` is optional — the user
+    may skip every biographic field and finish onboarding with just
+    the blocks.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     display_name: str = Field(..., min_length=1, max_length=256)
     persona_block: str = Field(...)
-    self_block: str = Field(...)
     user_block: str = Field(...)
     facts: PersonaFactsPayload | None = None
 
@@ -309,16 +319,21 @@ class PersonaExtractRequest(BaseModel):
 class PersonaUpdateRequest(BaseModel):
     """Body for ``POST /api/admin/persona``.
 
+    v0.5 contract — only ``persona`` and ``user`` blocks may be
+    written through this endpoint. ``style`` has its own dedicated
+    endpoint (``POST /api/admin/persona/style``). ``self_block`` and
+    ``relationship_block`` are gone (plan §1) and any payload that
+    still includes them yields a 422 thanks to ``extra='forbid'``.
+
     Every field is optional — the server applies only the keys that
     are actually present in the request body.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     display_name: str | None = Field(default=None, max_length=256)
     persona_block: str | None = None
-    self_block: str | None = None
     user_block: str | None = None
-    relationship_block: str | None = None
-    style_block: str | None = None
 
 
 class VoiceToggleRequest(BaseModel):
@@ -416,20 +431,16 @@ class PreviewDeleteRequest(BaseModel):
 
 
 # Map the JSON keys used on the wire to the memory BlockLabel values.
-# ``onboarding`` has no relationship_block (§3 locked shape) so it is
-# absent here; ``persona_update`` has the full set plus STYLE (v0.4).
+# v0.5 · L1 collapsed to ``persona`` + ``user`` (+ ``style`` via its
+# own endpoint). ``self`` and ``relationship`` are gone (plan §1).
 _ONBOARDING_LABELS: tuple[tuple[str, BlockLabel], ...] = (
     ("persona_block", BlockLabel.PERSONA),
-    ("self_block", BlockLabel.SELF),
     ("user_block", BlockLabel.USER),
 )
 
 _UPDATE_LABELS: tuple[tuple[str, BlockLabel], ...] = (
     ("persona_block", BlockLabel.PERSONA),
-    ("self_block", BlockLabel.SELF),
     ("user_block", BlockLabel.USER),
-    ("relationship_block", BlockLabel.RELATIONSHIP),
-    ("style_block", BlockLabel.STYLE),
 )
 
 
@@ -441,18 +452,24 @@ _UPDATE_LABELS: tuple[tuple[str, BlockLabel], ...] = (
 def _user_id_for_label(label: BlockLabel, user_id: str) -> str | None:
     """Return the per-row ``user_id`` for a given block label.
 
-    Shared blocks (persona/self/style) use NULL; per-user blocks
-    (user/relationship) carry the actual user_id. Mirrors the business
-    rule in :mod:`echovessel.memory.models.CoreBlock`.
+    v0.5: shared blocks are ``persona`` and ``style`` (both with
+    ``user_id=NULL``). The ``user`` block is the only per-user row and
+    carries the actual ``user_id``. Mirrors the business rule in
+    :mod:`echovessel.memory.models.CoreBlock`.
     """
 
-    if label in (BlockLabel.PERSONA, BlockLabel.SELF, BlockLabel.STYLE):
+    if label in (BlockLabel.PERSONA, BlockLabel.STYLE):
         return None
     return user_id
 
 
 def _load_core_blocks_dict(db: DbSession, *, persona_id: str, user_id: str) -> dict[str, str]:
-    """Return every label → content mapping, defaulting missing labels to ''."""
+    """Return every label → content mapping, defaulting missing labels to ''.
+
+    v0.5 · only the three live labels are populated. Soft-deleted
+    rows from the v0.4 ``self`` / ``relationship`` labels are ignored
+    by the WHERE clause and never reach this dict.
+    """
 
     stmt = select(CoreBlock).where(
         CoreBlock.persona_id == persona_id,
@@ -463,9 +480,7 @@ def _load_core_blocks_dict(db: DbSession, *, persona_id: str, user_id: str) -> d
 
     out: dict[str, str] = {
         BlockLabel.PERSONA.value: "",
-        BlockLabel.SELF.value: "",
         BlockLabel.USER.value: "",
-        BlockLabel.RELATIONSHIP.value: "",
         BlockLabel.STYLE.value: "",
     }
     for row in rows:

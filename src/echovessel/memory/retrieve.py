@@ -149,6 +149,13 @@ class RetrievalResult:
     # has no obvious topical anchor. Empty when ``retrieve()`` was
     # called with the default ``force_load_user_thoughts=0``.
     pinned_thoughts: list[ConceptNode] = field(default_factory=list)
+    # v0.5 · plan §2.1 force-load for L4.thought[subject='persona'].
+    # Sibling of ``pinned_thoughts`` but surfaces the persona's own
+    # recent reflections so the ``# How you see yourself lately``
+    # user-prompt section can replace the v0.4 ``# About yourself``
+    # L1.self block (now deleted). Empty when the caller did not pass
+    # ``force_load_persona_thoughts``.
+    persona_thoughts: list[ConceptNode] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -172,10 +179,13 @@ def _type_str(node: ConceptNode) -> str:
 def load_core_blocks(db: DbSession, persona_id: str, user_id: str) -> list[CoreBlock]:
     """Load every core block that belongs to (persona_id, user_id).
 
-    Returns both shared blocks (user_id NULL) and per-user blocks for this user.
-    Ordered for prompt injection: persona -> self -> user -> relationship -> style.
+    Returns both shared blocks (user_id NULL) and per-user blocks for this
+    user. Ordered for prompt injection: persona -> user -> style. v0.5
+    dropped ``self`` and ``relationship`` (plan §1); the legacy order is
+    no longer in this list, and any leftover row carrying one of those
+    labels is filtered by ``deleted_at IS NOT NULL`` upstream.
     """
-    order = ["persona", "self", "user", "relationship", "style"]
+    order = ["persona", "user", "style"]
 
     stmt = select(CoreBlock).where(
         CoreBlock.persona_id == persona_id,
@@ -340,6 +350,7 @@ def retrieve(
     min_relevance: float = DEFAULT_MIN_RELEVANCE,
     relational_bonus_weight: float = WEIGHT_RELATIONAL_BONUS,
     force_load_user_thoughts: int = 0,
+    force_load_persona_thoughts: int = 0,
 ) -> RetrievalResult:
     """Full RETRIEVE pipeline per architecture v0.3 §3.2.
 
@@ -484,11 +495,11 @@ def retrieve(
     # — we want the persona to ALWAYS know who it's talking to even
     # when the current message is "?" or "嗯". Default kwarg=0 leaves
     # the field empty for callers that don't care.
+    already_returned = {sm.node.id for sm in top_memories if sm.node.id is not None}
     pinned_thoughts: list[ConceptNode] = []
     if force_load_user_thoughts > 0:
         # Drop ids that already appear in the rerank result so the
         # caller doesn't render the same thought twice.
-        already_returned = {sm.node.id for sm in top_memories if sm.node.id is not None}
         pinned_thoughts = _load_user_thoughts_force(
             db,
             persona_id=persona_id,
@@ -498,12 +509,27 @@ def retrieve(
             exclude_ids=already_returned,
         )
 
+    # v0.5 · plan §2.1 force-load persona's own reflections. Same
+    # dedup treatment: exclude anything already surfaced by the
+    # primary rerank so ``# How you see yourself lately`` and the main
+    # memory list never render the same thought twice.
+    persona_thoughts: list[ConceptNode] = []
+    if force_load_persona_thoughts > 0:
+        persona_thoughts = load_persona_thoughts_force(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            top_n=force_load_persona_thoughts,
+            exclude_ids=already_returned,
+        )
+
     return RetrievalResult(
         core_blocks=core_blocks,
         memories=top_memories,
         context_messages=context_messages,
         fts_fallback=fts_fallback,
         pinned_thoughts=pinned_thoughts,
+        persona_thoughts=persona_thoughts,
     )
 
 
@@ -890,6 +916,11 @@ def _load_user_thoughts_force(
     intention is "who is this person, regardless of what they just
     typed". Filters: not soft-deleted, not superseded, optionally
     excludes ids already surfaced by the main retrieve rerank.
+
+    v0.5 · this helper explicitly targets ``subject != 'persona'`` so
+    it doesn't shadow :func:`load_persona_thoughts_force`, which
+    surfaces the persona's own reflections (now written by slow_cycle
+    instead of appended to the deleted L1.self block).
     """
     if limit <= 0:
         return []
@@ -900,6 +931,7 @@ def _load_user_thoughts_force(
                 ConceptNode.persona_id == persona_id,
                 ConceptNode.user_id == user_id,
                 ConceptNode.type == NodeType.THOUGHT.value,
+                ConceptNode.subject != "persona",
                 ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
                 ConceptNode.superseded_by_id.is_(None),  # type: ignore[union-attr]
             )
@@ -913,6 +945,54 @@ def _load_user_thoughts_force(
 
     rows.sort(key=_score, reverse=True)
     return rows[:limit]
+
+
+def load_persona_thoughts_force(
+    db: DbSession,
+    *,
+    persona_id: str,
+    user_id: str,
+    top_n: int = 5,
+    exclude_ids: set[int] | None = None,
+) -> list[ConceptNode]:
+    """Return top-N ``subject='persona'`` thoughts by recency.
+
+    v0.5 · plan §2.1. Sibling of :func:`_load_user_thoughts_force` but
+    surfaces the persona's own introspection (written by slow_cycle /
+    reflection fast-loop, never by owner). Powers the
+    ``# How you see yourself lately`` user-prompt section that
+    replaced the v0.4 ``# About yourself`` L1.self block.
+
+    Ranking is strictly recency (not recency × importance like the
+    user-thoughts sibling) because a persona-authored reflection
+    rarely carries a reliable emotional_impact magnitude — the LLM
+    writes them mostly in neutral tone, so impact would collapse the
+    score down to zero for every row.
+
+    ``exclude_ids`` should carry any ids already surfaced by the
+    primary rerank so the caller doesn't render the same thought
+    twice. Soft-deleted / superseded rows are always filtered.
+    """
+    if top_n <= 0:
+        return []
+
+    stmt = (
+        select(ConceptNode)
+        .where(
+            ConceptNode.persona_id == persona_id,
+            ConceptNode.user_id == user_id,
+            ConceptNode.type == NodeType.THOUGHT.value,
+            ConceptNode.subject == "persona",
+            ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+            ConceptNode.superseded_by_id.is_(None),  # type: ignore[union-attr]
+        )
+        .order_by(ConceptNode.created_at.desc())  # type: ignore[attr-defined]
+        .limit(top_n * 2)
+    )
+    nodes = list(db.exec(stmt))
+    if exclude_ids:
+        nodes = [n for n in nodes if n.id not in exclude_ids]
+    return nodes[:top_n]
 
 
 # ---------------------------------------------------------------------------

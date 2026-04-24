@@ -2,14 +2,19 @@
 
 Runs at the tail of ``consolidate_worker._process_one`` (phase G) when
 the session has been successfully marked CLOSED. Aggregates recent
-events across sessions and produces typed thoughts + expectations +
-(rarely) a bounded append to the self block.
+events across sessions and produces typed thoughts + expectations.
+
+v0.5 note: slow_cycle MUST NOT touch L1 core_blocks. Any "persona is
+thinking about itself" output lives on L4.thought[subject='persona'],
+surfaced via ``retrieve.force_load_persona_thoughts`` + the
+``# How you see yourself lately`` prompt section. L1 is the
+human-authored identity layer from v0.5 onward.
 
 Airi anti-pattern guards enforced here (plan §7.5):
   - No free-form narrative: output must match the typed schema.
   - No new goal / external action / web call: the writer cannot
-    produce anything beyond typed ConceptNode rows + one optional
-    append line.
+    produce anything beyond typed ConceptNode rows.
+  - No L1 write path: slow_cycle never appends / edits core_blocks.
   - No recursion: a failed cycle does NOT reschedule itself; the next
     session close (or operator SQL-flip) is the only retrigger.
   - No self-scheduling: ``run_slow_cycle`` never calls itself.
@@ -17,9 +22,6 @@ Airi anti-pattern guards enforced here (plan §7.5):
     exceeds the cap is parsed as-is or dropped — never retried.
   - ``reasoning_event_ids`` MUST be non-empty (raised at schema gate
     + again at write time in ``bulk_create_expectations``).
-  - ``self_narrative_append`` rejected if it would push the self-block
-    length past the 20% edit-distance bound. Warning logged; cycle
-    continues without the append.
 
 The cycle is best-effort. Any exception raised here is caught by the
 consolidate worker's G phase, logged at WARNING, and the session stays
@@ -40,12 +42,10 @@ from typing import Any
 from sqlmodel import Session as DbSession
 from sqlmodel import select
 
-from echovessel.core.types import BlockLabel, NodeType
-from echovessel.memory.imports import append_to_core_block
+from echovessel.core.types import NodeType
 from echovessel.memory.models import (
     ConceptNode,
     ConceptNodeFilling,
-    CoreBlock,
     Persona,
     Session,
     SlowCycleStats,
@@ -65,9 +65,6 @@ DEFAULT_DAILY_INPUT_TOKEN_BUDGET: int = 150_000
 DEFAULT_DAILY_OUTPUT_TOKEN_BUDGET: int = 30_000
 DEFAULT_INPUT_TOKEN_LIMIT: int = 8_000
 DEFAULT_OUTPUT_TOKEN_LIMIT: int = 1_000
-
-# Plan §11.1 invariant 6: self block append edit distance ≤ 0.20.
-SELF_BLOCK_EDIT_DISTANCE_MAX_RATIO: float = 0.20
 
 # Cheap-but-sensible token estimate — not tiktoken-perfect, but the
 # purpose here is budgeting not billing. 1 token ≈ 4 bytes covers most
@@ -151,7 +148,6 @@ class SlowCycleOutput:
     salient_questions: list[str] = field(default_factory=list)
     new_thoughts: list[SlowCycleThoughtInput] = field(default_factory=list)
     new_expectations: list[SlowCycleExpectationInput] = field(default_factory=list)
-    self_narrative_append: str | None = None
     # Usage bookkeeping the callable reports so ``run_slow_cycle`` can
     # update the daily stats row without caring about provider specifics.
     input_tokens: int = 0
@@ -533,9 +529,9 @@ def _truncate_events_to_budget(
 ) -> list[dict[str, Any]]:
     """Drop oldest events until the packed input fits.
 
-    ``base_input`` is the rest of the payload (self_block_text + recent
-    thoughts + bookkeeping). We prepend ``events`` in reverse-chron
-    order so the newest ones survive truncation.
+    ``base_input`` is the rest of the payload (recent thoughts +
+    bookkeeping). We prepend ``events`` in reverse-chron order so the
+    newest ones survive truncation.
     """
     # Always keep at least the single most-recent event; if that alone
     # blows the budget, we return [it] and let the cycle raise later.
@@ -619,75 +615,6 @@ def prune_slow_cycle_transcripts(
 
 
 # ---------------------------------------------------------------------------
-# Self block append (with edit-distance guard)
-# ---------------------------------------------------------------------------
-
-
-def _maybe_append_self_block(
-    db: DbSession,
-    *,
-    persona_id: str,
-    now: datetime,
-    new_line: str,
-    reasoning_event_ids: list[int],
-    observer: MemoryEventObserver | None = None,
-) -> bool:
-    """Append ``new_line`` to ``core_blocks.self`` if it passes the bound.
-
-    Plan §11.1 invariant 6: edit distance ratio (new length vs old
-    length) must be ≤ ``SELF_BLOCK_EDIT_DISTANCE_MAX_RATIO``. We use
-    length ratio as a proxy; real Levenshtein is overkill for this
-    guard since the append-only pattern always grows the content.
-    Returns ``True`` if the append was performed.
-    """
-    # Load current self block content.
-    block = db.exec(
-        select(CoreBlock).where(
-            CoreBlock.persona_id == persona_id,
-            CoreBlock.user_id.is_(None),  # type: ignore[union-attr]
-            CoreBlock.label == BlockLabel.SELF.value,
-            CoreBlock.deleted_at.is_(None),  # type: ignore[union-attr]
-        )
-    ).one_or_none()
-    old_content = block.content if block is not None else ""
-    old_len = len(old_content)
-    new_len = old_len + len(new_line) + (1 if old_content else 0)
-    # Guard: never let a slow cycle balloon the self block in one shot.
-    if old_len > 0:
-        ratio = (new_len - old_len) / old_len
-        if ratio > SELF_BLOCK_EDIT_DISTANCE_MAX_RATIO:
-            log.warning(
-                "slow_cycle self block append rejected · "
-                "edit ratio %.2f > %.2f · persona=%s · line=%r",
-                ratio,
-                SELF_BLOCK_EDIT_DISTANCE_MAX_RATIO,
-                persona_id,
-                new_line,
-            )
-            return False
-
-    try:
-        append_to_core_block(
-            db,
-            persona_id=persona_id,
-            user_id=None,
-            label=BlockLabel.SELF.value,
-            content=new_line,
-            provenance={
-                "source": "slow_cycle",
-                "reasoning_event_ids": list(reasoning_event_ids),
-                "reason": "slow_cycle reflection cycle",
-            },
-            observer=observer,
-            now=now,
-        )
-        return True
-    except Exception as e:  # noqa: BLE001
-        log.warning("append_to_core_block from slow_cycle failed: %s", e)
-        return False
-
-
-# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -736,18 +663,6 @@ def _collect_recent_thought_descs(
     return [n.description for n in db.exec(stmt)]
 
 
-def _load_self_block_text(db: DbSession, *, persona_id: str) -> str:
-    block = db.exec(
-        select(CoreBlock).where(
-            CoreBlock.persona_id == persona_id,
-            CoreBlock.user_id.is_(None),  # type: ignore[union-attr]
-            CoreBlock.label == BlockLabel.SELF.value,
-            CoreBlock.deleted_at.is_(None),  # type: ignore[union-attr]
-        )
-    ).one_or_none()
-    return (block.content if block is not None else "") or ""
-
-
 @dataclass(slots=True)
 class SlowCycleRunResult:
     """Summary of a single cycle for logging and tests."""
@@ -756,7 +671,6 @@ class SlowCycleRunResult:
     skipped_reason: str | None = None
     thought_ids: list[int] = field(default_factory=list)
     expectation_ids: list[int] = field(default_factory=list)
-    self_appended: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
     transcript_path: str | None = None
@@ -784,16 +698,16 @@ async def run_slow_cycle(
 
       1. Enforce the daily budget — raise SlowCycleBudgetExceeded early
          if we're already past the cap or any token wall.
-      2. Collect recent events + thought descriptions + self-block text
-         since the persona's last tick.
+      2. Collect recent events + thought descriptions since the
+         persona's last tick. (v0.5 · no L1 read: slow_cycle is
+         event+thought only.)
       3. Truncate events head-first to fit the per-cycle input token
          budget. Never retry; truncation is the fallback.
       4. Call ``slow_cycle_fn`` with the packed input dict.
       5. Write thoughts + expectations via the typed bulk writers
          (enforcing reasoning/filling non-empty).
-      6. Optional self-block append — guarded by edit-distance bound.
-      7. UPSERT today's stats row + update ``personas.last_slow_tick_at``.
-      8. Best-effort: save a transcript for admin debugging.
+      6. UPSERT today's stats row + update ``personas.last_slow_tick_at``.
+      7. Best-effort: save a transcript for admin debugging.
     """
     persona = db.exec(select(Persona).where(Persona.id == persona_id)).one()
 
@@ -816,7 +730,6 @@ async def run_slow_cycle(
     if not recent_events:
         return SlowCycleRunResult(ran=False, skipped_reason="no_new_events")
 
-    self_block_text = _load_self_block_text(db, persona_id=persona_id)
     recent_thought_descs = _collect_recent_thought_descs(
         db, persona_id=persona_id, user_id=user_id, limit=recent_thoughts_limit
     )
@@ -824,7 +737,6 @@ async def run_slow_cycle(
 
     event_dicts = [_event_to_dict(e) for e in recent_events]
     base_input = {
-        "self_block_text": self_block_text,
         "recent_thoughts": recent_thought_descs,
         "elapsed_hours": round(elapsed_hours, 2),
         "now_iso": now.isoformat(),
@@ -860,10 +772,11 @@ async def run_slow_cycle(
                 f"ids {bad}"
             )
 
-    # 5. Writers.
+    # 5. Writers. v0.5 · L4 only. L1 is human-authored from v0.5 onward;
+    # any "self-narrative" output from an older LLM is silently
+    # dropped — slow_cycle has no L1 write path.
     thought_ids: list[int] = []
     expectation_ids: list[int] = []
-    self_appended = False
     if output.new_thoughts:
         thought_ids = bulk_create_slow_thoughts(
             db,
@@ -882,18 +795,8 @@ async def run_slow_cycle(
             observer=observer,
             now=now,
         )
-    if output.self_narrative_append:
-        reasoning = sorted(input_event_ids)
-        self_appended = _maybe_append_self_block(
-            db,
-            persona_id=persona_id,
-            now=now,
-            new_line=output.self_narrative_append,
-            reasoning_event_ids=reasoning,
-            observer=observer,
-        )
 
-    # 7. Bookkeeping.
+    # 6. Bookkeeping.
     persona.last_slow_tick_at = now
     db.add(persona)
     db.commit()
@@ -907,7 +810,7 @@ async def run_slow_cycle(
         output_tokens=output.output_tokens,
     )
 
-    # 8. Transcript (optional, best-effort).
+    # 7. Transcript (optional, best-effort).
     output_payload = {
         "salient_questions": list(output.salient_questions),
         "new_thoughts": [
@@ -928,8 +831,6 @@ async def run_slow_cycle(
             }
             for e in output.new_expectations
         ],
-        "self_narrative_append": output.self_narrative_append,
-        "self_appended": self_appended,
         "thought_ids": thought_ids,
         "expectation_ids": expectation_ids,
     }
@@ -947,7 +848,6 @@ async def run_slow_cycle(
         ran=True,
         thought_ids=thought_ids,
         expectation_ids=expectation_ids,
-        self_appended=self_appended,
         input_tokens=output.input_tokens,
         output_tokens=output.output_tokens,
         transcript_path=str(path) if path else None,
@@ -962,7 +862,6 @@ __all__ = [
     "DEFAULT_INPUT_TOKEN_LIMIT",
     "DEFAULT_OUTPUT_TOKEN_LIMIT",
     "DEFAULT_TRANSCRIPT_DIR",
-    "SELF_BLOCK_EDIT_DISTANCE_MAX_RATIO",
     "SlowCycleBudgetExceeded",
     "SlowCycleExpectationInput",
     "SlowCycleFn",

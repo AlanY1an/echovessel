@@ -111,26 +111,27 @@ them, a dump of extracted memories from an import, or both.
 
 Your job has TWO parts:
 
-## Part A — Four core blocks (prose)
+## Part A — Two core blocks (prose)
 
-Write four prose blocks the persona carries on day one. Each block is
+Write two prose blocks the persona carries on day one. Each block is
 natural-language prose (no bullets, no JSON, no code fences). Use the
 SAME LANGUAGE as the input material. If the material mixes Chinese and
 English, default to the majority language.
 
 1. **persona_block** — Who this persona is. Identity / tone / personality.
    Second-person when natural ("你是…" / "You are…"). 2–5 sentences.
-2. **self_block** — Persona's self-understanding. Often almost empty at
-   bootstrap. Leave "" or write one short line. Under 200 chars.
-3. **user_block** — Identity-level facts about the user the persona is
+2. **user_block** — Identity-level facts about the user the persona is
    talking to (name, role, long-term life situations). Third-person.
    Under 800 chars.
-4. **relationship_block** — People in the user's life (family, friends,
-   pets). Empty "" if none were mentioned. Under 800 chars.
 
 Rules:
 - NEVER invent facts the material does not support.
 - Empty blocks should be the empty string "", never null or missing keys.
+- Do NOT author a self-narrative or a third-party-people block here.
+  v0.5 routes those elsewhere (slow_cycle writes L4.thought with
+  ``subject='persona'``; individual third parties live on L5
+  entities). The bootstrap call only authors the human-curated
+  identity surface.
 
 ## Part B — Fifteen biographic facts (structured)
 
@@ -181,9 +182,7 @@ no commentary, no code fences:
 {
   "core_blocks": {
     "persona_block": "...",
-    "self_block": "...",
-    "user_block": "...",
-    "relationship_block": "..."
+    "user_block": "..."
   },
   "facts": {
     "full_name": null,
@@ -214,9 +213,7 @@ fact came directly from the text, 0 = everything was a wild guess).
 # Per-block character caps mirror :mod:`persona_bootstrap`.
 _BLOCK_CAPS: dict[str, int] = {
     "persona_block": 2000,
-    "self_block": 1000,
     "user_block": 3000,
-    "relationship_block": 3000,
 }
 
 
@@ -277,21 +274,17 @@ class ExtractedFacts:
 
 @dataclass(frozen=True, slots=True)
 class ExtractedPersona:
-    """Full output of one extraction call — 4 blocks + 15 facts + confidence."""
+    """Full output of one extraction call — 2 blocks + 15 facts + confidence."""
 
     persona_block: str = ""
-    self_block: str = ""
     user_block: str = ""
-    relationship_block: str = ""
     facts: ExtractedFacts = field(default_factory=ExtractedFacts.empty)
     facts_confidence: float = 0.0
 
     def core_blocks_as_dict(self) -> dict[str, str]:
         return {
             "persona_block": self.persona_block,
-            "self_block": self.self_block,
             "user_block": self.user_block,
-            "relationship_block": self.relationship_block,
         }
 
     def as_dict(self) -> dict[str, Any]:
@@ -425,9 +418,7 @@ def parse_persona_facts_response(response_text: str) -> ExtractedPersona:
 
     return ExtractedPersona(
         persona_block=blocks_out["persona_block"],
-        self_block=blocks_out["self_block"],
         user_block=blocks_out["user_block"],
-        relationship_block=blocks_out["relationship_block"],
         facts=facts,
         facts_confidence=confidence,
     )

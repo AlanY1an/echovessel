@@ -155,10 +155,7 @@ def _seed_concept_nodes(
 _VALID_LLM_REPLY = json.dumps(
     {
         "persona_block": "你是一个愿意认真听的朋友。",
-        "self_block": "",
         "user_block": "用户是一位 28 岁的软件工程师,住在北京,有一只叫 Mochi 的猫。",
-        "mood_block": "平静、愿意倾听。",
-        "relationship_block": "Mochi(2020 年领养的黑猫)。",
     }
 )
 
@@ -222,7 +219,8 @@ async def test_bootstrap_happy_path_with_pipeline_id() -> None:
     assert body["source_thought_count"] == 1
     assert body["suggested_blocks"]["persona_block"].startswith("你是一个愿意")
     assert "Mochi" in body["suggested_blocks"]["user_block"]
-    assert body["suggested_blocks"]["self_block"] == ""  # empty is allowed
+    # v0.5 · response is strictly 2 keys
+    assert set(body["suggested_blocks"]) == {"persona_block", "user_block"}
 
 
 # ---------------------------------------------------------------------------
