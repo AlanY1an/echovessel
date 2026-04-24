@@ -68,6 +68,19 @@ from echovessel.prompts.reflection import (
     format_reflection_user_prompt,
     parse_reflection_response,
 )
+from echovessel.prompts.slow_cycle import (
+    MAX_NEW_EXPECTATIONS,
+    MAX_NEW_THOUGHTS,
+    MAX_SALIENT_QUESTIONS,
+    SELF_NARRATIVE_APPEND_CHAR_CAP,
+    SLOW_CYCLE_SYSTEM_PROMPT,
+    RawSlowExpectation,
+    RawSlowThought,
+    SlowCycleParseError,
+    SlowCycleParseResult,
+    format_slow_cycle_user_prompt,
+    parse_slow_cycle_response,
+)
 
 __all__ = [
     # extraction
@@ -121,4 +134,16 @@ __all__ = [
     "PersonaFactsParseError",
     "format_persona_facts_user_prompt",
     "parse_persona_facts_response",
+    # slow cycle
+    "SLOW_CYCLE_SYSTEM_PROMPT",
+    "MAX_SALIENT_QUESTIONS",
+    "MAX_NEW_THOUGHTS",
+    "MAX_NEW_EXPECTATIONS",
+    "SELF_NARRATIVE_APPEND_CHAR_CAP",
+    "RawSlowThought",
+    "RawSlowExpectation",
+    "SlowCycleParseError",
+    "SlowCycleParseResult",
+    "format_slow_cycle_user_prompt",
+    "parse_slow_cycle_response",
 ]
