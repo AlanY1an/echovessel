@@ -18,7 +18,7 @@ The promise the rest of the system makes on top of memory is simple: one persona
 
 ## Core Concepts
 
-**L1 core blocks** — short, stable pieces of text that are injected into every prompt unconditionally. Five labels live in `core_blocks`: `persona`, `self`, `mood`, `user`, `relationship`. The first three are shared across users (the persona is one character, its self-image and mood do not fork per user). The last two are per-user, keyed by `(persona_id, user_id)`. Each block is capped at 5000 characters and has an append-only audit log in `core_block_appends`.
+**L1 core blocks** — short, stable pieces of text that are injected into every prompt unconditionally. Five labels live in `core_blocks`: `persona`, `self`, `user`, `relationship`, `style`. `persona` / `self` / `style` are shared across users (the persona is one character, and the owner-curated style instructions don't fork per user). `user` / `relationship` are per-user, keyed by `(persona_id, user_id)`. Each block is capped at 5000 characters and has an append-only audit log in `core_block_appends`. v0.4 physically removed the original `mood` block — current emotional state is L6 episodic state's job, not L1's.
 
 **Biographic facts** — fifteen structured identity columns on the `personas` row itself (`full_name`, `gender`, `birth_date`, `nationality`, `native_language`, `timezone`, `occupation`, `relationship_status`, …). These live alongside the prose core blocks rather than inside them, so code that needs "what timezone is she in" or "what year was she born" can query a column instead of re-parsing the persona block. All fifteen are nullable — the LLM extraction fills what it can during onboarding and the user corrects the rest in the review page. Five of them (name, gender, birth year, occupation, native language) get rendered into the system prompt's "# Who you are" section every turn; the other ten are for system use only.
 
@@ -26,7 +26,11 @@ The promise the rest of the system makes on top of memory is simple: one persona
 
 **L3 events** — facts extracted from a closed session. Stored as `ConceptNode` rows with `type='event'`: a natural-language description, an `emotional_impact` in `-10..+10`, emotion and relational tags, an embedding in the sqlite-vec companion table, and a pointer back to the `source_session_id` they came from. Events are the main unit of episodic memory — "the conversation where the user told me Mochi had surgery".
 
-**L4 thoughts** — longer-term observations distilled from many events. Same table as L3, differentiated by `type='thought'`. Each thought carries a `filling` chain (via `concept_node_filling`) that records which events it was generated from, so a user who deletes the source events can choose to keep the thought as orphaned. Thoughts are written by reflection passes, not by the extraction of a single session.
+**L4 thoughts** — longer-term observations distilled from many events. Same table as L3, differentiated by `type='thought'`. Each thought carries a `filling` chain (via `concept_node_filling`) that records which events it was generated from, so a user who deletes the source events can choose to keep the thought as orphaned. Thoughts are written by two paths: the SHOCK / TIMER reflection inside consolidate (fast loop) and the slow_tick reflection phase that runs between sessions (slow loop · v0.4's forward-looking inference). Slow_tick can also produce `type='expectation'` sub-class nodes ("she'll probably update grad school next week"); the fast loop matches new user messages against `expectation.description` by embedding similarity, marking hits `fulfilled` and overdue ones `expired`.
+
+**L5 entities** — canonical identity for third-party people / places / orgs / pets. Three tables: `entities` (canonical name + kind + tri-state `merge_status`), `entity_aliases` (many-to-one alias → entity), and `concept_node_entities` (many-to-many junction between L3 events and L5 entities). Extraction creates a new entity when a new name appears and only appends an alias row when a known entity surfaces under a new alias. At retrieve time, any alias hit in the query text pulls every ConceptNode linked to that entity into the candidate pool with a score bump — this is the engineering basis for cross-language / cross-alias recall, since vector distance alone cannot bridge "Scott" and "黄逸扬". Three-tier dedup (alias exact match → embedding 0.65 / 0.85 thresholds → uncertain branch where the persona naturally asks the user) lives in `memory/entities.py`.
+
+**L6 episodic state** — a single-row snapshot of how the persona feels right now, stored as JSON in the `personas.episodic_state` column: `{mood, energy, last_user_signal, updated_at}`. The extraction LLM emits a `session_mood_signal` field alongside events when a session closes, and consolidate writes it through — no extra LLM call, no extra round-trip, so updating L6 is free. `assemble_turn` checks for 12h decay on entry; if the snapshot is older than 12 hours, mood resets to `neutral` so a long quiet period doesn't open the next turn under stale affect. Renders to the system prompt's `# How you feel right now` section; when mood is `neutral`, the section is skipped to keep the prompt terse.
 
 **Consolidate** — the pipeline that runs when a session closes. It reads the session's L2 messages in one batch, calls the injected extraction function to produce zero or more L3 events, embeds each event, optionally triggers a reflection pass that writes L4 thoughts, and marks the session `CLOSED`. The entry point is `consolidate_session` in `src/echovessel/memory/consolidate.py`.
 
@@ -134,6 +138,47 @@ return RetrievalResult(core_blocks, memories, context_messages, fts_fallback)
 The four rerank factors matter individually. Recency is a time-based exponential with a 14-day half-life so that old-but-still-relevant memories do not vanish. Relevance comes straight from the vector backend's distance converted to `[0, 1]`. Impact is `|emotional_impact| / 10` so that a peak event outweighs a forgettable one when relevance ties. The relational bonus is a small flat boost (`0.5`) whenever a node carries any relational tag — `identity-bearing`, `unresolved`, `vulnerability`, `turning-point`, `correction`, `commitment` — so that identity facts are preferred on ties.
 
 The `min_relevance` floor is load-bearing. Without it, strictly-orthogonal vector matches tie at a relevance of `0.5` and the impact weight silently promotes high-intensity events for completely unrelated queries. The default `0.4` is low enough to keep partial-overlap candidates and high enough to reject true strangers. Callers who want the old behaviour pass `min_relevance=0.0`.
+
+### Entity-anchored retrieval (L5 sidecar)
+
+A cheap alias sidecar runs alongside the main vector path: every retrieve call tokenises the query text and feeds it to `find_query_entities()` for case-sensitive exact matches (CJK is not tokenised). Any matched entity is reverse-walked through the `concept_node_entities` junction to collect every linked ConceptNode. Those nodes enter the candidate pool regardless of vector distance and pick up a `WEIGHT_ENTITY_ANCHOR * ENTITY_ANCHOR_BONUS_VALUE` bump (default 1.5 × 1.0) at rerank. This path exists specifically for plan case 8 — sentence-transformers cannot pull "Scott" and "黄逸扬" together, but exact alias matching can. When a matched entity has `merge_status='uncertain'` (its embedding sits in the 0.65 ~ 0.85 grey zone where automatic merge is unsafe), retrieve also injects a `# Entity disambiguation pending` hint into the system prompt so the persona naturally asks the user "is Scott the same person as 黄逸扬?" mid-flow; the user's answer flips the entity to confirmed or disambiguated on the next consolidate.
+
+### Force-loaded pinned thoughts (bypasses query similarity)
+
+`retrieve(force_load_user_thoughts=N)` is the sidecar that powers the `# About {speaker}` user-prompt section: it returns the top-N L4 thoughts about the current speaker by `recency × importance`, **without ever consulting the query embedding**. The reason: when the user message is "?" or "嗯" or a single character, the query has nothing to index against, but the persona still ought to know who it's talking to. Runtime defaults to `force_load_user_thoughts=10` from `assemble_turn`, and excludes node ids already returned by the main rerank so render doesn't double-bullet. Returned via `RetrievalResult.pinned_thoughts`.
+
+### Seven kinds of stimulus reactivity (plan §12)
+
+The memory module's response path for all seven stimulus kinds is implemented and event-driven — none of them rely on cron polling:
+
+| # | Stimulus | Reaction path |
+| --- | --- | --- |
+| 1 | Ordinary user turn | `ingest_message` → session counters → length / idle trigger check · `assemble_turn` entry checks episodic decay · `retrieve` (with entity_anchor + pinned) · LLM stream |
+| 2 | High-emotion event (\|impact\| ≥ 8) | Existing SHOCK reflection (fast loop · `consolidate.py`) · slow_tick marks the session as immediate (skips the 30 min cool-down) |
+| 3 | Repeat mention | `entities.detect_mention_dedup` runs vector + entity overlap inside extraction · matches bump `mention_count++` and append `source_turn_ids` instead of inserting a new node |
+| 4 | Contradicting information | Extraction outputs `superseded_event_ids` · consolidate sets the old node's `superseded_by_id` to the new node (soft delete · row not removed) · retrieve filters `superseded_by_id IS NULL` by default |
+| 5 | User correcting style | Owner explicitly writes the `STYLE` block via `POST /api/admin/persona/style` · no NLP keyword auto-detection |
+| 6 | Quiet period (no user messages) | `idle_scanner` closes stale sessions (existing) · `assemble_turn` entry runs the 12h episodic_state decay back to neutral · slow_tick does not fire when there's no fresh inbox material |
+| 7 | Spontaneous recall (slow_tick) | The G phase appended to `consolidate_worker._process_one` runs the slow_cycle LLM under the right conditions · produces `type='thought'` and `type='expectation'` nodes · likely to be retrieved by the next fast-loop turn (this is the physical realisation of "the persona thinks of you when you're not talking") |
+
+Time only legitimately enters the system in three places: L6 episodic 12h decay · `consolidate_worker` 5s polling · L1.self TIMER reflection (force one reflection if N days have passed without any). Anything else of the "every Tuesday X / first of the month Y" shape is banned per plan §15 NOT-DO.
+
+### Slow_tick consolidate phase (L4 forward-looking · plan §7)
+
+slow_tick is **not a separate worker** — it's the G phase appended to `consolidate_worker._process_one` after A-F. After each session's CLOSING handler finishes:
+
+- `is_trivial` → skip
+- `now - persona.last_slow_tick_at < cool_down_minutes` (default 30) AND no SHOCK in this session → skip
+- otherwise run
+
+The run makes one `slow_cycle_llm` call. Input: cross-session material from the cool-down window (events + existing thoughts + the previous cycle's `salient_questions`). Output: five sub-tasks bundled in one return — `new_thoughts` / `new_expectations` / `self_block_append` / `salient_questions` / `revisit_decisions`. Then:
+
+- `bulk_create_thoughts(new_thoughts)` writes the L4 thought nodes plus their filling chains
+- `type='expectation'` nodes get written with `event_time_end` as the due_at · the fast loop runs embedding similarity between each new user message and pending `expectation.description` · matches mark fulfilled, overdue ones expired
+- if `self_block_append` is non-empty · `append_to_core_block(BlockLabel.SELF, ...)` · guarded by the ≤ 20% edit-distance invariant
+- `personas.last_slow_tick_at = now`
+
+Guardrails (plan §7.4-7.5): per-cycle token wall (input ≤ 8k · output ≤ 1k) · daily 36 cycles + 150k input + 30k output · `cfg.slow_tick.enabled = false` global kill switch · each event reflected on ≤ 3 times. Slow_tick is forbidden from: creating intentions without source-turn evidence · scheduling itself · editing nodes in place · calling external APIs · creating new NodeTypes / BlockLabels · recursively self-invoking · bypassing the token budget. The closed tool enumeration plus schema rejection enforce these invariants. Transcripts land at `develop-docs/slow_tick_transcripts/<cycle_id>.json`; the admin tab exposes `GET /api/admin/slow-tick/transcripts` for browsing history.
 
 ### One persona across channels
 
