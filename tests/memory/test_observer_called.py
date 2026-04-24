@@ -65,8 +65,10 @@ class SpyObserver:
     def on_event_created(self, event: ConceptNode) -> None:
         self.events.append(event)
 
-    def on_thought_created(self, thought: ConceptNode) -> None:
+    def on_thought_created(self, thought: ConceptNode, source: str) -> None:
         self.thoughts.append(thought)
+        self.thought_sources: list[str] = getattr(self, "thought_sources", [])
+        self.thought_sources.append(source)
 
     def on_core_block_appended(self, append: CoreBlockAppend) -> None:
         self.core_block_appends.append(append)
@@ -81,7 +83,7 @@ class ExplodingObserver:
     def on_event_created(self, event: ConceptNode) -> None:
         raise RuntimeError("boom-event")
 
-    def on_thought_created(self, thought: ConceptNode) -> None:
+    def on_thought_created(self, thought: ConceptNode, source: str) -> None:
         raise RuntimeError("boom-thought")
 
     def on_core_block_appended(self, append: CoreBlockAppend) -> None:
