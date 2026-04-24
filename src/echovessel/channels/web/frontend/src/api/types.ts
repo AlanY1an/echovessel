@@ -1125,3 +1125,81 @@ export interface FailedSessionsResponse {
   count: number
   items: FailedSession[]
 }
+
+// ─── Dev-mode trace (Spec 4) ─────────────────────────────────────────────
+
+/** One row on the per-turn waterfall timeline. */
+export interface TurnTraceStep {
+  stage: string
+  t_ms: number
+  duration_ms: number
+  detail: Record<string, unknown>
+}
+
+/** One ``ScoredMemory`` retrieval candidate. Keys mirror the backend
+ *  ``ScoredMemory`` dataclass — the drawer's VectorRetrieveTable reads
+ *  these field names directly. */
+export interface TurnTraceRetrievalRow {
+  node_id: number | null
+  type: string | null
+  desc_snippet: string
+  recency: number
+  relevance: number
+  impact: number
+  relational: number
+  entity_anchor: number
+  total: number
+  anchored: boolean
+}
+
+export interface TurnTraceEntityHit {
+  entity_id: number
+  canonical_name: string
+  kind: string
+}
+
+export interface TurnTracePinnedThoughts {
+  user: Array<{ id: number; description: string }>
+  persona: Array<{ id: number; description: string }>
+}
+
+export interface TurnTraceListItem {
+  turn_id: string
+  persona_id: string
+  user_id: string
+  channel_id: string
+  started_at: string | null
+  finished_at: string | null
+  duration_ms: number | null
+  first_token_ms: number | null
+  input_tokens: number | null
+  output_tokens: number | null
+  llm_model: string | null
+}
+
+export interface TurnTraceResponse extends TurnTraceListItem {
+  system_prompt: string | null
+  user_prompt: string | null
+  retrieval: TurnTraceRetrievalRow[]
+  pinned_thoughts: Partial<TurnTracePinnedThoughts>
+  entity_alias_hits: TurnTraceEntityHit[]
+  episodic_state: Record<string, unknown> | null
+  steps: TurnTraceStep[]
+}
+
+export interface TurnTraceListResponse {
+  items: TurnTraceListItem[]
+  limit: number
+}
+
+export interface ConsolidateTraceResponse {
+  session_id: string
+  finished_at: string | null
+  phase_a: Record<string, unknown> | null
+  phase_b: Record<string, unknown> | null
+  phase_c: Record<string, unknown> | null
+  phase_d: Record<string, unknown> | null
+  phase_e: Record<string, unknown> | null
+  phase_f: Record<string, unknown> | null
+  phase_g: Record<string, unknown> | null
+}

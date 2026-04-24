@@ -22,6 +22,7 @@ import type {
   ChatHistoryResponse,
   ChatSendPayload,
   ConfigGetResponse,
+  ConsolidateTraceResponse,
   ConfigPatchPayload,
   ConfigPatchResponse,
   CostRecentResponse,
@@ -58,6 +59,8 @@ import type {
   StyleUpdatePayload,
   StyleUpdateResponse,
   ThoughtTraceResponse,
+  TurnTraceListResponse,
+  TurnTraceResponse,
   UsersTimezonePayload,
   UsersTimezoneResponse,
   VoiceActivateResponse,
@@ -717,5 +720,36 @@ export async function postVoiceActivate(
  */
 export async function getFailedSessions(): Promise<FailedSessionsResponse> {
   return fetchJson<FailedSessionsResponse>('/api/admin/sessions/failed')
+}
+
+/**
+ * GET /api/admin/turns — recent turn-trace headers (Spec 4 dev-mode).
+ */
+export async function getTurnTraces(
+  limit = 20,
+): Promise<TurnTraceListResponse> {
+  return fetchJson<TurnTraceListResponse>(
+    `/api/admin/turns?limit=${encodeURIComponent(String(limit))}`,
+  )
+}
+
+/**
+ * GET /api/admin/turns/{turn_id} — full per-turn trace (Spec 4).
+ */
+export async function getTurnTrace(turnId: string): Promise<TurnTraceResponse> {
+  return fetchJson<TurnTraceResponse>(
+    `/api/admin/turns/${encodeURIComponent(turnId)}`,
+  )
+}
+
+/**
+ * GET /api/admin/sessions/{session_id}/consolidate-trace — phases A–G.
+ */
+export async function getConsolidateTrace(
+  sessionId: string,
+): Promise<ConsolidateTraceResponse> {
+  return fetchJson<ConsolidateTraceResponse>(
+    `/api/admin/sessions/${encodeURIComponent(sessionId)}/consolidate-trace`,
+  )
 }
 

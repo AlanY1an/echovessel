@@ -48,6 +48,50 @@
     "hours_ago": "{{count}}h ago",
     "days_ago": "{{count}}d ago"
   },
+  "trace": {
+    "label": "trace",
+    "open": "open trace drawer",
+    "drawer": {
+      "title": "Trace",
+      "fast_loop": "Fast loop",
+      "consolidate": "Consolidate",
+      "pending": "waiting for session to close"
+    },
+    "section": {
+      "retrieval": "Retrieval candidates",
+      "system_prompt": "system prompt",
+      "user_prompt": "user prompt"
+    },
+    "meta": {
+      "duration": "total",
+      "first_token": "first token",
+      "tokens": "tokens"
+    },
+    "stage": {
+      "debounce": "Debounce wait",
+      "ingest_user": "Ingest USER",
+      "l1_load": "L1 load",
+      "l6_decay_check": "L6 decay check",
+      "l5_alias_scan": "L5 alias scan",
+      "vector_retrieve": "Vector retrieve",
+      "pinned_thoughts": "Pinned thoughts",
+      "build_system_prompt": "Build system prompt",
+      "build_user_prompt": "Build user prompt",
+      "llm_stream": "LLM stream",
+      "ingest_persona": "Ingest PERSONA",
+      "on_turn_done": "on_turn_done"
+    },
+    "phase": {
+      "a": "is_trivial",
+      "b": "extraction",
+      "c": "shock",
+      "d": "timer",
+      "e": "reflect",
+      "f": "session closed",
+      "g": "slow_tick"
+    },
+    "copy_prompt": "copy"
+  },
   "admin": {
     "page_title": "Admin",
     "subtitle_prefix": "On the admin page",

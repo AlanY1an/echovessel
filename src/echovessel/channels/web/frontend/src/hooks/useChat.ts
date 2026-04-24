@@ -71,6 +71,13 @@ export interface ChatMessage {
    * treat `undefined` as "web" at render time.
    */
   source_channel_id?: string
+  /**
+   * Spec 4 · turn id this message is part of. Set on persona bubbles
+   * so the dev-mode ▸ trace entry can fetch the per-turn waterfall;
+   * also populated for user history rows for completeness. Null for
+   * pre-v0.3 history rows that predate the debounce turn tagging.
+   */
+  turn_id?: string | null
 }
 
 /**
@@ -133,6 +140,7 @@ function historyToChatMessage(h: ChatHistoryMessage): ChatMessage {
     message_id: h.id,
     timestamp: h.created_at ?? new Date().toISOString(),
     source_channel_id: h.source_channel_id,
+    turn_id: h.turn_id,
   }
 }
 
@@ -231,7 +239,7 @@ export function useChat(): UseChatResult {
         }
 
         case 'chat.message.typing_started': {
-          const { message_id, source_channel_id } = event.data
+          const { message_id, source_channel_id, turn_id } = event.data
           setMessages((prev) => {
             // Idempotent: if a placeholder with this message_id is
             // already present (unlikely, but safe across reconnects),
@@ -253,6 +261,7 @@ export function useChat(): UseChatResult {
                 message_id,
                 timestamp: nowIso(),
                 source_channel_id,
+                turn_id,
               },
             ]
           })
@@ -265,6 +274,7 @@ export function useChat(): UseChatResult {
             content,
             delivery,
             source_channel_id,
+            in_reply_to_turn_id,
           } = event.data
           setMessages((prev) => {
             const idx = prev.findIndex(
@@ -287,6 +297,7 @@ export function useChat(): UseChatResult {
                   timestamp: nowIso(),
                   delivery,
                   source_channel_id,
+                  turn_id: in_reply_to_turn_id,
                 },
               ]
             }
@@ -302,6 +313,7 @@ export function useChat(): UseChatResult {
               delivery,
               source_channel_id:
                 source_channel_id ?? existing.source_channel_id,
+              turn_id: in_reply_to_turn_id ?? existing.turn_id,
             }
             return next
           })

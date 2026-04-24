@@ -48,6 +48,50 @@
     "hours_ago": "{{count}} 小时前",
     "days_ago": "{{count}} 天前"
   },
+  "trace": {
+    "label": "trace",
+    "open": "打开 trace 抽屉",
+    "drawer": {
+      "title": "Trace",
+      "fast_loop": "快速回路",
+      "consolidate": "归并",
+      "pending": "等 session 关闭"
+    },
+    "section": {
+      "retrieval": "向量召回详情",
+      "system_prompt": "system prompt",
+      "user_prompt": "user prompt"
+    },
+    "meta": {
+      "duration": "总时长",
+      "first_token": "首 token",
+      "tokens": "token"
+    },
+    "stage": {
+      "debounce": "Debounce 等待",
+      "ingest_user": "用户消息入 L2",
+      "l1_load": "加载 core blocks",
+      "l6_decay_check": "L6 情绪 decay 检查",
+      "l5_alias_scan": "L5 alias 扫描",
+      "vector_retrieve": "向量召回",
+      "pinned_thoughts": "固定反思加载",
+      "build_system_prompt": "system prompt 组装",
+      "build_user_prompt": "user prompt 组装",
+      "llm_stream": "LLM 流式输出",
+      "ingest_persona": "persona 回复入 L2",
+      "on_turn_done": "turn 收尾"
+    },
+    "phase": {
+      "a": "is_trivial",
+      "b": "extraction",
+      "c": "shock",
+      "d": "timer",
+      "e": "reflect",
+      "f": "session 关闭",
+      "g": "slow_tick"
+    },
+    "copy_prompt": "copy"
+  },
   "admin": {
     "page_title": "管理",
     "subtitle_prefix": "在 admin 页面",

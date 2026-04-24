@@ -6,9 +6,11 @@ import type {
   ChatMessage as HookMessage,
   TimelineEntry,
 } from '../hooks/useChat'
+import { useDevMode } from '../hooks/useDevMode'
 import { avatarUrl, postVoicePreview } from '../api/client'
 import { Avatar, Presence, Wave, fmtT } from '../components/primitives'
 import { LanguageToggle } from '../components/LanguageToggle'
+import { TraceDrawer } from '../components/TraceDrawer'
 
 interface ChatProps {
   displayName: string
@@ -46,6 +48,8 @@ export function Chat({
   const [journalOpen, setJournalOpen] = useState(false)
   const [journalText, setJournalText] = useState('')
   const logRef = useRef<HTMLDivElement | null>(null)
+  const { enabled: devMode } = useDevMode()
+  const [openTraceTurnId, setOpenTraceTurnId] = useState<string | null>(null)
 
   // Auto-scroll to bottom whenever the timeline grows. Using scrollHeight
   // is sufficient — the log is the flex column owner and its own scroll
@@ -156,6 +160,8 @@ export function Chat({
               voiceId={canPlayVoice ? voiceId : null}
               avatarUrl={leadPersonaRow ? personaAvatar : null}
               avatarLetter={leadPersonaRow ? initialOf(displayName) : null}
+              devMode={devMode}
+              onOpenTrace={(turnId) => setOpenTraceTurnId(turnId)}
             />
           )
         })}
@@ -255,6 +261,12 @@ export function Chat({
           </button>
         </div>
       </div>
+      {openTraceTurnId !== null && (
+        <TraceDrawer
+          turnId={openTraceTurnId}
+          onClose={() => setOpenTraceTurnId(null)}
+        />
+      )}
     </div>
   )
 }
@@ -341,6 +353,8 @@ function MessageRow({
   voiceId,
   avatarUrl,
   avatarLetter,
+  devMode,
+  onOpenTrace,
 }: {
   m: HookMessage
   seed: number
@@ -351,6 +365,8 @@ function MessageRow({
    *  run so only the first bubble of a burst carries the picture. */
   avatarUrl: string | null
   avatarLetter: string | null
+  devMode: boolean
+  onOpenTrace: (turnId: string) => void
 }) {
   const side = m.role === 'user' ? 'me' : 'them'
 
@@ -417,6 +433,8 @@ function MessageRow({
 
   const offerVoice =
     m.role === 'persona' && voiceId !== null && m.content.trim().length > 0
+  const offerTrace =
+    devMode && m.role === 'persona' && !!m.turn_id
 
   return (
     <div className={`msg-row ${side}`}>
@@ -436,6 +454,19 @@ function MessageRow({
           {time && <span>{time}</span>}
           {time && source && <span>·</span>}
           {source && <span>{source}</span>}
+          {offerTrace && (
+            <>
+              {(time || source) && <span>·</span>}
+              <button
+                type="button"
+                className="trace-entry"
+                onClick={() => onOpenTrace(m.turn_id as string)}
+                aria-label={t('trace.open')}
+              >
+                ▸ {t('trace.label')}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
