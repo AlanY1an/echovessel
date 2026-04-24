@@ -514,6 +514,34 @@ async def assemble_turn(
         except Exception as e:  # noqa: BLE001
             log.warning("load recent session summaries failed; continuing: %s", e)
 
+        # Spec 6 · Pending expectations for the user prompt + a fast-loop
+        # embedding check against the current user message for the system
+        # prompt's "# Expectation match" hint. Both best-effort: failure
+        # in either path leaves the prompt intact without the section.
+        pending_expectations: list[ConceptNode] = []
+        try:
+            pending_expectations = _load_pending_expectations(
+                ctx.db,
+                persona_id=ctx.persona_id,
+                user_id=resolved_user_id,
+                now=user_now,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("load pending expectations failed; continuing: %s", e)
+
+        expectation_matches: list[tuple[ConceptNode, str]] = []
+        try:
+            expectation_matches = check_pending_expectations(
+                ctx.db,
+                persona_id=ctx.persona_id,
+                user_id=resolved_user_id,
+                user_message_text=last_message.content,
+                embed_fn=ctx.embed_fn,
+                now=user_now,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("check pending expectations failed; continuing: %s", e)
+
         # ---- Step 5: prompt assembly -------------------------------
         system_prompt = build_system_prompt(
             persona_display_name=ctx.persona_display_name,
@@ -522,6 +550,7 @@ async def assemble_turn(
             now=user_now,
             episodic_state=episodic_state,
             entity_disambiguation_hint=entity_disambiguation_hint,
+            expectation_matches=expectation_matches,
         )
         user_prompt = build_turn_user_prompt(
             top_memories=top_memories,
@@ -532,6 +561,7 @@ async def assemble_turn(
             speaker_display=speaker_display,
             active_intentions=active_intentions,
             recent_session_summaries=recent_summaries,
+            pending_expectations=pending_expectations,
         )
 
         # ---- Step 6: LLM stream ------------------------------------
@@ -865,6 +895,7 @@ def build_system_prompt(
     now: datetime | None = None,
     episodic_state: dict | None = None,
     entity_disambiguation_hint: str = "",
+    expectation_matches: list[tuple[ConceptNode, str]] | None = None,
 ) -> str:
     """Assemble the system prompt for one turn.
 
@@ -941,6 +972,21 @@ def build_system_prompt(
     if entity_disambiguation_hint:
         lines.append(entity_disambiguation_hint.rstrip() + "\n")
 
+    # Spec 6 · expectation match hint (plan §7.6). Fast-loop embedding
+    # check saw the user's current message rhyme with an open
+    # expectation; surface the match so the LLM can acknowledge
+    # naturally. Phrasing-free — we describe the match, we do NOT
+    # script the reply.
+    if expectation_matches:
+        match_lines = ["# Expectation match"]
+        for exp, status in expectation_matches:
+            desc = (exp.description or "").strip()
+            match_lines.append(
+                f"- You had been expecting: \"{desc}\". This turn seems to "
+                f"{status} it — acknowledge it in your own voice if it fits."
+            )
+        lines.append("\n".join(match_lines) + "\n")
+
     lines.append(STYLE_INSTRUCTIONS)
     return "\n".join(lines)
 
@@ -955,6 +1001,7 @@ def build_turn_user_prompt(
     speaker_display: str = "them",
     active_intentions: list[ConceptNode] | None = None,
     recent_session_summaries: list[ConceptNode] | None = None,
+    pending_expectations: list[ConceptNode] | None = None,
 ) -> str:
     """v0.4 · user prompt renderer that expands a burst of messages.
 
@@ -1000,6 +1047,7 @@ def build_turn_user_prompt(
         speaker_display=speaker_display,
         active_intentions=active_intentions,
         recent_session_summaries=recent_session_summaries,
+        pending_expectations=pending_expectations,
     )
 
 
@@ -1092,6 +1140,113 @@ def _load_active_intentions(
     return rows
 
 
+def _load_pending_expectations(
+    db: DbSession,
+    *,
+    persona_id: str,
+    user_id: str,
+    now: datetime,
+) -> list[ConceptNode]:
+    """Load active L4 expectations (plan §7 · Spec 6 · T7).
+
+    Filters: ``type='expectation'``, not soft-deleted, not superseded,
+    ``event_time_end`` is NULL (open-ended) or ``>= now`` (still in
+    window). Ordered by earliest due first so the ``# You've been
+    expecting`` section shows the most time-sensitive predictions at
+    the top.
+    """
+    rows = list(
+        db.exec(
+            select(ConceptNode)
+            .where(
+                ConceptNode.persona_id == persona_id,
+                ConceptNode.user_id == user_id,
+                ConceptNode.type == NodeType.EXPECTATION.value,
+                ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+                ConceptNode.superseded_by_id.is_(None),  # type: ignore[union-attr]
+                or_(
+                    ConceptNode.event_time_end.is_(None),  # type: ignore[union-attr]
+                    ConceptNode.event_time_end >= now,  # type: ignore[operator]
+                ),
+            )
+            .order_by(ConceptNode.event_time_end)  # type: ignore[arg-type]
+        )
+    )
+    return rows
+
+
+# Cosine threshold for marking a pending expectation as "fulfilled" by
+# the current user message. 0.7 matches plan §7.6 — tuned downstream
+# by dogfood if the fast loop produces too many false positives.
+EXPECTATION_MATCH_COSINE_THRESHOLD: float = 0.7
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Pure-Python cosine similarity, no numpy. Returns 0.0 on zero
+    vectors to avoid div-by-zero."""
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for x, y in zip(a, b, strict=False):
+        dot += x * y
+        norm_a += x * x
+        norm_b += y * y
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    import math
+
+    return dot / (math.sqrt(norm_a) * math.sqrt(norm_b))
+
+
+def check_pending_expectations(
+    db: DbSession,
+    *,
+    persona_id: str,
+    user_id: str,
+    user_message_text: str,
+    embed_fn: Callable[[str], list[float]],
+    now: datetime,
+    threshold: float = EXPECTATION_MATCH_COSINE_THRESHOLD,
+) -> list[tuple[ConceptNode, str]]:
+    """Find pending expectations likely fulfilled by ``user_message_text``.
+
+    Fast-loop embedding-only check (plan §7.6 + §8 invariants). Does
+    NOT call an LLM. Returns a list of (expectation_node, status_str)
+    pairs where ``status_str`` is currently always ``'fulfilled'`` —
+    the "violated" distinction is deferred to the next slow cycle
+    which has more context. Empty result when no pending expectation
+    clears the cosine threshold, or when there are no pending ones
+    at all.
+    """
+    if not user_message_text or not user_message_text.strip():
+        return []
+    pending = _load_pending_expectations(
+        db, persona_id=persona_id, user_id=user_id, now=now
+    )
+    if not pending:
+        return []
+    try:
+        msg_emb = embed_fn(user_message_text)
+    except Exception as e:  # noqa: BLE001
+        log.warning("check_pending_expectations embed_fn failed: %s", e)
+        return []
+
+    matched: list[tuple[ConceptNode, str]] = []
+    for exp in pending:
+        try:
+            target_emb = embed_fn(exp.description or "")
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "check_pending_expectations target embed failed (exp id=%s): %s",
+                exp.id,
+                e,
+            )
+            continue
+        if _cosine(msg_emb, target_emb) >= threshold:
+            matched.append((exp, "fulfilled"))
+    return matched
+
+
 def _load_recent_session_summaries(
     db: DbSession,
     *,
@@ -1138,6 +1293,7 @@ def build_user_prompt(
     speaker_display: str = "them",
     active_intentions: list[ConceptNode] | None = None,
     recent_session_summaries: list[ConceptNode] | None = None,
+    pending_expectations: list[ConceptNode] | None = None,
 ) -> str:
     """Assemble the user prompt for one turn.
 
@@ -1159,6 +1315,7 @@ def build_user_prompt(
     pinned_thoughts = pinned_thoughts or []
     active_intentions = active_intentions or []
     recent_session_summaries = recent_session_summaries or []
+    pending_expectations = pending_expectations or []
 
     lines: list[str] = []
 
@@ -1221,6 +1378,14 @@ def build_user_prompt(
             lines.append(f"- {_node_description(it)}{delta}")
         lines.append("")
 
+    # # You've been expecting — active L4 expectations (plan §7 · Spec 6)
+    if pending_expectations:
+        lines.append("# You've been expecting")
+        for exp in pending_expectations:
+            delta = render_event_delta_phrase(exp, now) if now is not None else ""
+            lines.append(f"- {_node_description(exp)}{delta}")
+        lines.append("")
+
     # # Our recent conversation — day-bucketed when ``now`` is supplied
     if recent_messages:
         lines.append("# Our recent conversation")
@@ -1274,9 +1439,11 @@ __all__ = [
     "OnTurnDoneCb",
     "STYLE_INSTRUCTIONS",
     "DAY_BUCKET_ORDER",
+    "EXPECTATION_MATCH_COSINE_THRESHOLD",
     "assemble_turn",
     "build_system_prompt",
     "build_turn_user_prompt",
     "build_user_prompt",
+    "check_pending_expectations",
     "day_bucket_of",
 ]
