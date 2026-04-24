@@ -10,11 +10,9 @@
   },
   "topbar": {
     "admin": "Admin",
-    "back_to_chat": "Back to chat",
-    "mood_unset": "—"
+    "back_to_chat": "Back to chat"
   },
   "chat": {
-    "mood_default": "Calm, willing to listen",
     "placeholder": "Say something⋯",
     "send": "Send",
     "empty": "No messages yet. Say anything to start.",
@@ -34,8 +32,7 @@
     "typing": "Typing",
     "persona_name": "Anya",
     "persona_initial": "A",
-    "persona_sub": "here · {{mood}}",
-    "chip_mood": "mood · {{mood}}",
+    "persona_sub_plain": "here",
     "chip_session": "session · current",
     "day_today": "Today",
     "day_yesterday": "Yesterday",
@@ -184,8 +181,8 @@
       "self_block_help": "First person · how she thinks of herself",
       "user_block_label": "User block",
       "user_block_help": "Third person · what she knows about you",
-      "mood_block_label": "Mood block",
-      "mood_block_help": "Current mood · evolves over time",
+      "style_block_label": "Style block",
+      "style_block_help": "Persistent style preferences (e.g. \"avoid starting with 'haha'\" / \"use Alan, not nicknames\").",
       "relationship_block_label": "Relationship block",
       "relationship_block_help": "How the relationship is framed",
       "import_prompt": "Have existing material for the persona to remember?",
@@ -259,7 +256,7 @@
     "events": {
       "section_title": "Events",
       "empty": "No events yet · chat with the persona for a while and she'll summarise them herself",
-      "lead": "Concrete events the persona remembers. Each one carries a timestamp, emotional weight, related people, and mood. <strong>{{count}}</strong> total on the server.",
+      "lead": "Concrete events the persona remembers. Each one carries a timestamp, emotional weight, and related people. <strong>{{count}}</strong> total on the server.",
       "no_match_title": "No matching events",
       "no_match_body": "Try a broader keyword, or click \"Clear\" to return to the full list.",
       "loading_more": "Loading…",
@@ -360,9 +357,8 @@
       "user_hint": "Editing this changes identity-level knowledge of you (job, family, long-term hobbies).",
       "relationship_label": "People the persona knows around you",
       "relationship_hint": "Editing this changes the persona's understanding of people close to you. Grouped by person.",
-      "mood_label": "The persona's current mood",
-      "mood_hint": "Editing this temporarily adjusts the persona's current mood.",
-      "mood_warning": "After the next conversation the runtime will refresh and overwrite this.",
+      "style_label": "Style preferences",
+      "style_hint": "A persistent style directive (e.g. \"avoid starting replies with 'haha'\"). Empty = no explicit preference.",
       "placeholder_small": "(leave blank and it will evolve through conversation)",
       "placeholder_default": "Not written yet.",
       "char_count": "{{count}} chars",
@@ -393,7 +389,6 @@
     }
   },
   "onboarding": {
-    "topbar_mood": "Waiting for you",
     "welcome_title": "Someone who will remember you",
     "welcome_punct": ".",
     "welcome_subtitle": "Before we start — who is this persona?",
@@ -442,8 +437,6 @@
     "review_block_self_hint": "Usually left blank at onboarding · accrues through reflection later",
     "review_block_user": "What the persona knows about you",
     "review_block_relationship": "People around you the persona knows",
-    "review_block_mood": "The persona's current mood",
-    "review_block_mood_hint": "The runtime refreshes this after the next conversation",
     "writing_persona": "Writing persona⋯",
     "review_ready": "Click Finish when reviewed",
     "commit_cta": "Finish · start chatting →",
