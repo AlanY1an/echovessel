@@ -8,7 +8,7 @@ from sqlmodel import select
 from echovessel.core.types import BlockLabel, NodeType
 from echovessel.import_.models import Chunk, ContentItem
 from echovessel.import_.routing import dispatch_item, translate_llm_write
-from echovessel.memory.models import ConceptNode, CoreBlock, CoreBlockAppend
+from echovessel.memory.models import ConceptNode, CoreBlockAppend
 
 
 def _chunk_with(content: str) -> Chunk:
@@ -107,26 +107,36 @@ def test_user_reflections_dispatch_creates_thought_node(
         assert nodes[0].type == NodeType.THOUGHT.value
 
 
-def test_relationship_facts_dispatch(db_session_factory, engine):
-    item = ContentItem(
-        content_type="relationship_facts",
-        payload={
-            "persona_id": "p_test",
-            "user_id": "self",
-            "content": "Alan 是她男友",
-            "person_label": "Alan",
-        },
-    )
-    with db_session_factory() as db:
-        result, _ = dispatch_item(item, db=db, source="hash-5")
-    assert result.content_type == "relationship_facts"
-    with DbSession(engine) as db:
-        appends = list(db.exec(select(CoreBlockAppend)))
-        assert any(a.label == BlockLabel.RELATIONSHIP.value for a in appends)
+def test_relationship_facts_target_is_rejected(db_session_factory):
+    """v0.5 · L1.relationship_block was deleted from LEGAL_LLM_TARGETS.
+
+    A pipeline that still emits the legacy target now sees a hard
+    ValueError from :func:`translate_llm_write` instead of a silent
+    write — CLAUDE.md ``no backcompat shims`` rule.
+    """
+    chunk = _chunk_with("Alan 是她男友这一句话用作 evidence")
+    raw = {
+        "target": "L1.relationship_block",
+        "content": "Alan 是她男友",
+        "person_label": "Alan",
+        "confidence": 0.9,
+        "evidence_quote": "Alan 是她男友这一句话用作 evidence",
+    }
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown target"):
+        translate_llm_write(
+            raw, chunk=chunk, persona_id="p_test", user_id="self"
+        )
 
 
-def test_self_block_side_path(db_session_factory, engine):
-    # translate an L1.self_block write end-to-end
+def test_self_block_target_is_rejected(db_session_factory):
+    """v0.5 · L1.self_block was deleted from LEGAL_LLM_TARGETS too.
+
+    Persona self-narrative now lives on L4.thought[subject='persona']
+    via slow_cycle, so the import-time target is gone. Same hard fail
+    as the relationship case.
+    """
     chunk = _chunk_with("我容易在半夜醒来然后想太多这是一句话")
     raw = {
         "target": "L1.self_block",
@@ -134,21 +144,9 @@ def test_self_block_side_path(db_session_factory, engine):
         "confidence": 0.9,
         "evidence_quote": "我容易在半夜醒来然后想太多",
     }
-    item = translate_llm_write(
-        raw,
-        chunk=chunk,
-        persona_id="p_test",
-        user_id="self",
-    )
-    assert item is not None
-    assert item.payload.get("_self_block") is True
-    with db_session_factory() as db:
-        result, new_ids = dispatch_item(item, db=db, source="hash-self")
-    # Self-block is the only dispatch that reports the internal marker
-    assert result.content_type == "persona_self_traits"
-    assert new_ids == []
-    with DbSession(engine) as db:
-        blocks = list(db.exec(select(CoreBlock)))
-        self_blocks = [b for b in blocks if b.label == BlockLabel.SELF]
-        assert len(self_blocks) == 1
-        assert "我容易在半夜醒来" in self_blocks[0].content
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown target"):
+        translate_llm_write(
+            raw, chunk=chunk, persona_id="p_test", user_id="self"
+        )

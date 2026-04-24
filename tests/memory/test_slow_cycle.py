@@ -13,9 +13,8 @@ import pytest
 from sqlmodel import Session as DbSession
 from sqlmodel import select
 
-from echovessel.core.types import BlockLabel, NodeType, SessionStatus
+from echovessel.core.types import NodeType, SessionStatus
 from echovessel.memory import (
-    CoreBlock,
     Persona,
     Session,
     User,
@@ -532,29 +531,33 @@ async def test_run_slow_cycle_rejects_unknown_filling_event_id():
         )
 
 
-async def test_run_slow_cycle_self_append_within_bound():
-    """20% edit bound allows small appends to an existing self block."""
+async def test_run_slow_cycle_never_writes_l1(caplog):
+    """v0.5 invariant: slow_cycle MUST NOT touch core_blocks at all.
+
+    Even when an older LLM still produces a ``self_narrative_append``-
+    shaped field (or any other L1 hint), :func:`run_slow_cycle` only
+    writes L4 thoughts + expectations. The legacy ``self`` core_block
+    is gone from the enum and slow_cycle no longer carries an L1
+    write path. This test pins the new invariant by asserting that
+    after a successful cycle:
+
+    * no new ``core_blocks`` rows exist for the persona;
+    * the ``SlowCycleRunResult`` no longer carries a ``self_appended``
+      attribute (its removal is part of the contract).
+    """
+    import logging
+
+    from echovessel.memory.models import CoreBlock as _CoreBlock
+
     engine = create_engine(":memory:")
     create_all_tables(engine)
     _seed(engine)
     e1 = _add_event(engine, description="user shared a frank worry")
 
-    # Seed an existing self block ~400 chars long so a 40-char append
-    # is well within the 20% ratio.
-    existing = "x" * 400
-    with DbSession(engine) as db:
-        db.add(
-            CoreBlock(
-                persona_id="p",
-                user_id=None,
-                label=BlockLabel.SELF.value,
-                content=existing,
-                char_count=len(existing),
-            )
-        )
-        db.commit()
-
     async def slow_fn(_inp):
+        # No ``self_narrative_append`` kwarg here — the field is gone
+        # from ``SlowCycleOutput``. Older runtimes still wired through
+        # the parser would emit it; the parser silently drops it now.
         return SlowCycleOutput(
             new_thoughts=[
                 SlowCycleThoughtInput(
@@ -563,13 +566,12 @@ async def test_run_slow_cycle_self_append_within_bound():
                     emotional_impact=1,
                 )
             ],
-            self_narrative_append="I learned to wait for him to open up.",
             input_tokens=200,
             output_tokens=50,
         )
 
     now = datetime(2026, 4, 24, 12, 0, 0)
-    with DbSession(engine) as db:
+    with caplog.at_level(logging.WARNING), DbSession(engine) as db:
         result = await run_slow_cycle(
             db,
             persona_id="p",
@@ -577,70 +579,25 @@ async def test_run_slow_cycle_self_append_within_bound():
             slow_cycle_fn=slow_fn,
             now=now,
         )
-        assert result.self_appended is True
-        block = db.exec(
-            select(CoreBlock).where(
-                CoreBlock.persona_id == "p",
-                CoreBlock.label == BlockLabel.SELF.value,
-            )
-        ).one()
-        assert "wait for him to open up" in block.content
-
-
-async def test_run_slow_cycle_self_append_rejected_when_ratio_too_large():
-    """A 50-char append on top of a 100-char self block exceeds 20%."""
-    engine = create_engine(":memory:")
-    create_all_tables(engine)
-    _seed(engine)
-    e1 = _add_event(engine, description="user trusted me with a secret")
-
-    existing = "y" * 100
-    with DbSession(engine) as db:
-        db.add(
-            CoreBlock(
-                persona_id="p",
-                user_id=None,
-                label=BlockLabel.SELF.value,
-                content=existing,
-                char_count=len(existing),
-            )
+        # No L1 write side-effect.
+        assert not hasattr(result, "self_appended")
+        rows = list(
+            db.exec(select(_CoreBlock).where(_CoreBlock.persona_id == "p"))
         )
-        db.commit()
-
-    long_line = "z" * 80  # 80 chars on top of 100 → 80% ratio
-
-    async def slow_fn(_inp):
-        return SlowCycleOutput(
-            new_thoughts=[
-                SlowCycleThoughtInput(
-                    description="Alan trusted me",
-                    filling_event_ids=[e1],
-                    emotional_impact=3,
-                )
-            ],
-            self_narrative_append=long_line,
-            input_tokens=100,
-            output_tokens=20,
+        assert rows == [], (
+            "v0.5 · slow_cycle wrote a core_block row; L1 must be human-only"
         )
+        assert len(result.thought_ids) == 1
 
-    now = datetime(2026, 4, 24, 12, 0, 0)
-    with DbSession(engine) as db:
-        result = await run_slow_cycle(
-            db,
-            persona_id="p",
-            user_id="self",
-            slow_cycle_fn=slow_fn,
-            now=now,
-        )
-        assert result.self_appended is False
-        # Self block content is unchanged.
-        block = db.exec(
-            select(CoreBlock).where(
-                CoreBlock.persona_id == "p",
-                CoreBlock.label == BlockLabel.SELF.value,
-            )
-        ).one()
-        assert block.content == existing
+
+async def test_slow_cycle_output_dataclass_has_no_self_narrative_field():
+    """Belt-and-braces: the typed schema for slow_cycle output must not
+    accept ``self_narrative_append`` as a kwarg, so a stale call site
+    upstream fails loudly instead of silently dropping the value."""
+    import dataclasses
+
+    fields = {f.name for f in dataclasses.fields(SlowCycleOutput)}
+    assert "self_narrative_append" not in fields
 
 
 async def test_run_slow_cycle_truncates_events_over_input_budget():

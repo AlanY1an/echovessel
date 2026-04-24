@@ -57,17 +57,17 @@ def test_load_core_blocks_returns_shared_and_per_user():
         db.add(
             CoreBlock(
                 persona_id="p_test",
-                user_id=None,
-                label=BlockLabel.SELF,
-                content="我还在了解自己",
+                user_id="self",
+                label=BlockLabel.USER,
+                content="Alan 是软件工程师",
             )
         )
         db.add(
             CoreBlock(
                 persona_id="p_test",
-                user_id="self",
-                label=BlockLabel.USER,
-                content="Alan 是软件工程师",
+                user_id=None,
+                label=BlockLabel.STYLE,
+                content="别用'哈哈'开头",
             )
         )
         db.commit()
@@ -75,11 +75,11 @@ def test_load_core_blocks_returns_shared_and_per_user():
         blocks = load_core_blocks(db, "p_test", "self")
         labels = [b.label for b in blocks]
         assert BlockLabel.PERSONA in labels
-        assert BlockLabel.SELF in labels
         assert BlockLabel.USER in labels
-        # Order: persona before self before user
-        assert labels.index(BlockLabel.PERSONA) < labels.index(BlockLabel.SELF)
-        assert labels.index(BlockLabel.SELF) < labels.index(BlockLabel.USER)
+        assert BlockLabel.STYLE in labels
+        # Order: persona → user → style (v0.5 collapsed L1 to 3 labels)
+        assert labels.index(BlockLabel.PERSONA) < labels.index(BlockLabel.USER)
+        assert labels.index(BlockLabel.USER) < labels.index(BlockLabel.STYLE)
 
 
 def test_load_core_blocks_excludes_other_users():

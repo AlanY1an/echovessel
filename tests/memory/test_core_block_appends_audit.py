@@ -144,25 +144,27 @@ def test_import_user_identity_facts_writes_audit():
         assert appends[0].provenance_json["category"] == "pet"
 
 
-def test_import_relationship_facts_writes_audit():
+def test_import_relationship_facts_content_type_is_rejected():
+    """v0.5 · ``relationship_facts`` was dropped from the legal
+    content_type whitelist (plan §1). The dispatcher must hard-fail
+    instead of silently accepting it.
+    """
     engine = create_engine(":memory:")
     create_all_tables(engine)
     with DbSession(engine) as db:
         _seed(db)
-        import_content(
-            db,
-            source="diary-ccc",
-            content_type="relationship_facts",
-            payload={
-                "persona_id": "p_test",
-                "user_id": "self",
-                "content": "Alan 是用户的弟弟",
-                "person_label": "Alan",
-            },
-        )
-        appends = list(db.exec(select(CoreBlockAppend)))
-        assert appends[0].label == "relationship"
-        assert appends[0].provenance_json["person_label"] == "Alan"
+        with pytest.raises(ValueError, match="unknown content_type"):
+            import_content(
+                db,
+                source="diary-ccc",
+                content_type="relationship_facts",  # type: ignore[arg-type]
+                payload={
+                    "persona_id": "p_test",
+                    "user_id": "self",
+                    "content": "Alan 是用户的弟弟",
+                    "person_label": "Alan",
+                },
+            )
 
 
 def test_unknown_content_type_raises():

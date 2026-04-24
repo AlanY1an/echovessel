@@ -24,10 +24,7 @@ def _valid_response(
 ) -> str:
     default_blocks = {
         "persona_block": "你是温和的陪伴者",
-        "self_block": "",
         "user_block": "用户住在沈阳",
-        "mood_block": "安静",
-        "relationship_block": "",
     }
     default_facts = {
         "full_name": None,
@@ -67,7 +64,9 @@ def test_parse_happy_path_fills_all_blocks_and_null_facts():
     assert isinstance(out, ExtractedPersona)
     assert out.persona_block.startswith("你是温和")
     assert out.user_block == "用户住在沈阳"
-    assert out.self_block == ""
+    # v0.5 · ``ExtractedPersona`` only carries persona + user blocks
+    assert not hasattr(out, "self_block")
+    assert not hasattr(out, "relationship_block")
     assert out.facts == ExtractedFacts.empty()
     assert out.facts_confidence == pytest.approx(0.7)
 
@@ -225,21 +224,20 @@ def test_formatter_inlines_existing_blocks_when_present():
         context_text="补充材料",
         existing_blocks={
             "persona_block": "你是一位温和的长者",
-            "self_block": "",
-            "relationship_block": "",
+            "user_block": "",
         },
     )
     assert "EXISTING BLOCKS" in prompt
     assert "你是一位温和的长者" in prompt
     # Empty existing blocks are skipped — we don't flood the prompt with
-    # six empty headers.
-    assert "### self_block" not in prompt
+    # empty headers.
+    assert "### user_block" not in prompt
 
 
 def test_formatter_omits_existing_blocks_section_when_all_empty():
     prompt = format_persona_facts_user_prompt(
         context_text="材料",
-        existing_blocks={"persona_block": "", "self_block": ""},
+        existing_blocks={"persona_block": "", "user_block": ""},
     )
     assert "EXISTING BLOCKS" not in prompt
 
