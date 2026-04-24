@@ -57,8 +57,9 @@ export interface DaemonState {
 
 /**
  * Full persona state for the Admin screen. `core_blocks` carries the
- * current L1 core block text for each of the five labels. `voice_id` may
- * be null if no voice has been cloned/selected yet.
+ * current L1 core block text for each of the five labels (persona /
+ * self / user / relationship / style · v0.4). ``voice_id`` may be
+ * null if no voice has been cloned/selected yet.
  */
 export interface PersonaStateApi {
   id: string
@@ -70,8 +71,8 @@ export interface PersonaStateApi {
     persona: string
     self: string
     user: string
-    mood: string
     relationship: string
+    style: string
   }
   facts: PersonaFacts
 }
@@ -131,15 +132,15 @@ export const EMPTY_PERSONA_FACTS: PersonaFacts = {
 
 /**
  * First-run onboarding payload. Creates the persona and writes the
- * initial values for the four core blocks. Rejected with 409 if already
- * onboarded.
+ * initial values for the three prose core blocks (persona / self /
+ * user). Rejected with 409 if already onboarded. Relationship and
+ * style blocks are owner-curated later from the Admin Persona tab.
  */
 export interface OnboardingPayload {
   display_name: string
   persona_block: string
   self_block: string
   user_block: string
-  mood_block: string
   /** Optional biographic facts written to the persona row alongside
    *  the core blocks. Omit or send null to leave every fact unset. */
   facts?: PersonaFacts | null
@@ -169,7 +170,6 @@ export interface PersonaExtractRequest {
     persona_block?: string
     self_block?: string
     user_block?: string
-    mood_block?: string
     relationship_block?: string
   }
   locale?: string
@@ -191,7 +191,6 @@ export interface PersonaExtractResponse {
     persona_block: string
     self_block: string
     user_block: string
-    mood_block: string
     relationship_block: string
   }
   facts: PersonaFacts
@@ -232,8 +231,9 @@ export interface PersonaBootstrapRequest {
 
 /**
  * Response from bootstrap-from-material. ``suggested_blocks`` is the
- * LLM's five-block draft, presented to the user for review before
- * they click "完成" (which POSTs to /api/admin/persona/onboarding).
+ * LLM's four-block draft (persona / self / user / relationship),
+ * presented to the user for review before they click "完成" (which
+ * POSTs to /api/admin/persona/onboarding).
  *
  * Empty blocks are returned as empty strings, not omitted keys.
  */
@@ -242,7 +242,6 @@ export interface PersonaBootstrapResponse {
     persona_block: string
     self_block: string
     user_block: string
-    mood_block: string
     relationship_block: string
   }
   source_event_count: number
@@ -261,8 +260,47 @@ export interface PersonaUpdatePayload {
   persona_block?: string
   self_block?: string
   user_block?: string
-  mood_block?: string
   relationship_block?: string
+  style_block?: string
+}
+
+// ─── HTTP · POST /api/admin/persona/style ────────────────────────────────
+
+/**
+ * Three-action write path for the L1 style block (owner-directed
+ * voice / style preferences, plan §6.6). ``set`` soft-deletes any
+ * prior row and writes fresh; ``append`` joins prior content with a
+ * newline; ``clear`` soft-deletes the row (``text`` is ignored).
+ */
+export interface StyleUpdatePayload {
+  action: 'set' | 'append' | 'clear'
+  text: string
+}
+
+export interface StyleUpdateResponse {
+  ok: true
+  action: 'set' | 'append' | 'clear'
+}
+
+// ─── HTTP · POST /api/admin/users/timezone ───────────────────────────────
+
+/**
+ * IANA timezone string for the local owner. Web channel posts this on
+ * first connect from ``Intl.DateTimeFormat().resolvedOptions().timeZone``
+ * so the daemon can render a dual-timezone ``# Right now`` section in
+ * the system prompt. ``override: true`` flips the behaviour from "only
+ * write if currently null" to "always overwrite" — used when the
+ * owner manually picks a different zone from the Admin UI dropdown.
+ */
+export interface UsersTimezonePayload {
+  timezone: string
+  override?: boolean
+}
+
+export interface UsersTimezoneResponse {
+  ok: true
+  timezone: string | null
+  written: boolean
 }
 
 // ─── HTTP · POST /api/admin/persona/voice-toggle ─────────────────────────
@@ -416,11 +454,13 @@ export interface ChatSessionBoundaryData {
 
 /**
  * Emitted by `RuntimeMemoryObserver.on_mood_updated` whenever memory's
- * `update_mood_block` fires its lifecycle hook (e.g. after the
- * consolidate worker reflects on a closed session). `mood_summary`
- * carries the full new mood block text — despite the name, it is not
- * pre-shrunk server-side today. Consumers should treat it as "current
- * mood block text" and render / truncate as they see fit.
+ * `update_episodic_state` fires its lifecycle hook (e.g. after the
+ * consolidate worker closes a session and the extraction LLM returned
+ * a ``session_mood_signal``). ``mood_summary`` is the ``repr()`` of
+ * the new L6 state dict (``{mood, energy, last_user_signal,
+ * updated_at}``); consumers should treat it as opaque display text
+ * and pull structured fields from ``GET /api/admin/persona`` when
+ * needed.
  */
 export interface ChatMoodUpdateData {
   persona_id: string
