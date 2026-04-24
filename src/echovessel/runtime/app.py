@@ -80,6 +80,7 @@ from echovessel.runtime.prompts_wiring import (
     make_extract_fn,
     make_proactive_fn,
     make_reflect_fn,
+    make_slow_cycle_fn,
 )
 from echovessel.runtime.turn_dispatcher import TurnDispatcher
 from echovessel.voice import (
@@ -546,6 +547,19 @@ class Runtime:
 
         extract_fn = make_extract_fn(self.ctx.llm)
         reflect_fn = make_reflect_fn(self.ctx.llm)
+        slow_cycle_fn = (
+            make_slow_cycle_fn(
+                self.ctx.llm,
+                model_role=self.ctx.config.slow_tick.llm_model_role,
+            )
+            if self.ctx.config.slow_tick.enabled
+            else None
+        )
+        slow_tick_transcript_dir = (
+            Path(self.ctx.data_dir) / "slow_tick_transcripts"
+            if hasattr(self.ctx, "data_dir") and self.ctx.data_dir
+            else None
+        )
 
         self._worker = ConsolidateWorker(
             db_factory=_db_factory,
@@ -560,6 +574,14 @@ class Runtime:
             trivial_message_count=self.ctx.config.consolidate.trivial_message_count,
             trivial_token_count=self.ctx.config.consolidate.trivial_token_count,
             reflection_hard_limit_24h=self.ctx.config.consolidate.reflection_hard_gate_24h,
+            slow_cycle_fn=slow_cycle_fn,
+            slow_tick_enabled=self.ctx.config.slow_tick.enabled,
+            slow_tick_cool_down_minutes=self.ctx.config.slow_tick.cool_down_minutes,
+            slow_tick_daily_cap=self.ctx.config.slow_tick.daily_cap,
+            slow_tick_daily_input_token_budget=self.ctx.config.slow_tick.daily_input_token_budget,
+            slow_tick_daily_output_token_budget=self.ctx.config.slow_tick.daily_output_token_budget,
+            slow_tick_input_token_limit=self.ctx.config.slow_tick.input_token_limit,
+            slow_tick_transcript_dir=slow_tick_transcript_dir,
         )
 
         self._scanner = IdleScanner(

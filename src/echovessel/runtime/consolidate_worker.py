@@ -32,6 +32,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 import sqlalchemy.exc
 from sqlmodel import select
@@ -47,7 +48,19 @@ from echovessel.memory.consolidate import (
     ReflectFn,
     consolidate_session,
 )
-from echovessel.memory.models import Session
+from echovessel.memory.models import Persona, Session
+from echovessel.memory.observers import MemoryEventObserver
+from echovessel.memory.slow_cycle import (
+    DEFAULT_COOL_DOWN_MINUTES,
+    DEFAULT_DAILY_CAP,
+    DEFAULT_DAILY_INPUT_TOKEN_BUDGET,
+    DEFAULT_DAILY_OUTPUT_TOKEN_BUDGET,
+    DEFAULT_INPUT_TOKEN_LIMIT,
+    SlowCycleBudgetExceeded,
+    SlowCycleFn,
+    run_slow_cycle,
+    should_run_slow_cycle,
+)
 from echovessel.runtime.llm.errors import LLMPermanentError, LLMTransientError
 
 
@@ -112,6 +125,19 @@ class ConsolidateWorker:
     trivial_message_count: int = TRIVIAL_MESSAGE_COUNT
     trivial_token_count: int = TRIVIAL_TOKEN_COUNT
     reflection_hard_limit_24h: int = REFLECTION_HARD_LIMIT_24H
+    # Slow-tick (plan §7 · Spec 6). When ``slow_cycle_fn`` is None, the G
+    # phase is a no-op — useful for legacy tests that don't care about
+    # reflection between sessions. ``slow_tick_enabled=False`` is the
+    # runtime-facing kill switch surfaced via ``cfg.slow_tick.enabled``.
+    slow_cycle_fn: SlowCycleFn | None = None
+    slow_tick_enabled: bool = True
+    slow_tick_cool_down_minutes: int = DEFAULT_COOL_DOWN_MINUTES
+    slow_tick_daily_cap: int = DEFAULT_DAILY_CAP
+    slow_tick_daily_input_token_budget: int = DEFAULT_DAILY_INPUT_TOKEN_BUDGET
+    slow_tick_daily_output_token_budget: int = DEFAULT_DAILY_OUTPUT_TOKEN_BUDGET
+    slow_tick_input_token_limit: int = DEFAULT_INPUT_TOKEN_LIMIT
+    slow_tick_transcript_dir: Path | str | None = None
+    observer: MemoryEventObserver | None = None
     _queue: list[str] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
@@ -175,6 +201,7 @@ class ConsolidateWorker:
                         return
                     if session.extracted:
                         return  # idempotency (§12)
+                    now = self.now_fn()
                     result = await consolidate_session(
                         db=db,
                         backend=self.backend,
@@ -182,7 +209,7 @@ class ConsolidateWorker:
                         extract_fn=self.extract_fn,
                         reflect_fn=self.reflect_fn,
                         embed_fn=self.embed_fn,
-                        now=self.now_fn(),
+                        now=now,
                         trivial_message_count=self.trivial_message_count,
                         trivial_token_count=self.trivial_token_count,
                         reflection_hard_limit_24h=self.reflection_hard_limit_24h,
@@ -194,6 +221,10 @@ class ConsolidateWorker:
                         len(result.events_created),
                         len(result.thoughts_created),
                     )
+                    # G phase · slow-tick reflection (plan §7.1). Runs
+                    # strictly after F committed ``session.status=CLOSED``,
+                    # so failure here cannot unwind the session close.
+                    await self._maybe_run_slow_cycle(db, session, now)
                 return
             except LLMTransientError as e:
                 retries += 1
@@ -268,6 +299,73 @@ class ConsolidateWorker:
                 db.commit()
         except Exception as e:  # noqa: BLE001
             log.error("failed to mark session %s as FAILED: %s", session_id, e)
+
+    async def _maybe_run_slow_cycle(
+        self, db: object, session: Session, now: datetime
+    ) -> None:
+        """Phase G entry point. Decides + runs the slow-tick cycle.
+
+        No-op when any of:
+          - ``slow_cycle_fn`` is not configured (tests / legacy runtime).
+          - ``slow_tick_enabled=False`` (kill switch).
+          - ``should_run_slow_cycle`` declines the trigger (cool-down
+            active without SHOCK/correction bypass, or session was
+            marked trivial).
+
+        Failure of the cycle is logged at WARNING and swallowed — plan
+        §7.1 is explicit: F has already committed ``status=CLOSED``, so
+        we must not let a broken reflection undo that transition.
+        """
+        if self.slow_cycle_fn is None or not self.slow_tick_enabled:
+            return
+        try:
+            persona = db.exec(  # type: ignore[attr-defined]
+                select(Persona).where(Persona.id == session.persona_id)
+            ).one_or_none()
+            if persona is None:
+                return
+            if not should_run_slow_cycle(
+                db,  # type: ignore[arg-type]
+                persona=persona,
+                session=session,
+                now=now,
+                enabled=self.slow_tick_enabled,
+                cool_down_minutes=self.slow_tick_cool_down_minutes,
+            ):
+                return
+
+            result = await run_slow_cycle(
+                db,  # type: ignore[arg-type]
+                persona_id=session.persona_id,
+                user_id=session.user_id,
+                slow_cycle_fn=self.slow_cycle_fn,
+                now=now,
+                daily_cap=self.slow_tick_daily_cap,
+                daily_input_token_budget=self.slow_tick_daily_input_token_budget,
+                daily_output_token_budget=self.slow_tick_daily_output_token_budget,
+                input_token_limit=self.slow_tick_input_token_limit,
+                transcript_dir=self.slow_tick_transcript_dir,
+                observer=self.observer,
+            )
+            log.info(
+                "slow cycle for session %s: ran=%s thoughts=%d expectations=%d self_appended=%s",
+                session.id,
+                result.ran,
+                len(result.thought_ids),
+                len(result.expectation_ids),
+                result.self_appended,
+            )
+        except SlowCycleBudgetExceeded as e:
+            log.warning(
+                "slow cycle skipped for session %s: %s", session.id, e
+            )
+        except Exception as e:  # noqa: BLE001 — plan §7.1: never bubble
+            log.warning(
+                "slow cycle failed for session %s (session remains CLOSED): %s",
+                session.id,
+                e,
+                exc_info=True,
+            )
 
 
 __all__ = ["ConsolidateWorker"]

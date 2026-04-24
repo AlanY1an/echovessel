@@ -60,6 +60,18 @@ from echovessel.memory.retrieve import (
     list_recall_messages,
     search_concept_nodes,
 )
+from echovessel.memory.slow_cycle import (
+    SlowCycleBudgetExceeded,
+    SlowCycleExpectationInput,
+    SlowCycleFn,
+    SlowCycleOutput,
+    SlowCycleRunResult,
+    SlowCycleThoughtInput,
+    bulk_create_expectations,
+    bulk_create_slow_thoughts,
+    run_slow_cycle,
+    should_run_slow_cycle,
+)
 
 __all__ = [
     # Models
@@ -93,6 +105,17 @@ __all__ = [
     "ImportResult",
     # Episodic state (L6, v0.4)
     "update_episodic_state",
+    # Slow cycle (Spec 6)
+    "SlowCycleBudgetExceeded",
+    "SlowCycleExpectationInput",
+    "SlowCycleFn",
+    "SlowCycleOutput",
+    "SlowCycleRunResult",
+    "SlowCycleThoughtInput",
+    "bulk_create_expectations",
+    "bulk_create_slow_thoughts",
+    "run_slow_cycle",
+    "should_run_slow_cycle",
     # Queries
     "list_recall_messages",
     "list_concept_nodes",

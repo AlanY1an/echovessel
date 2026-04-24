@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import tomllib
@@ -2718,6 +2719,59 @@ def build_admin_router(
             for s in rows
         ]
         return {"count": len(items), "items": items}
+
+    # ---- Slow-tick transcripts (Spec 6 · T11) ------------------------
+
+    def _transcript_dir() -> Path:
+        """Resolve the transcript directory.
+
+        Spec 6 runtime wiring (``app.py``) places transcripts under
+        ``<data_dir>/slow_tick_transcripts``. When ``data_dir`` is
+        missing (tests / lightweight runtimes), we fall back to the
+        plan's repo-level default so dev-time inspection still works.
+        """
+        data_dir = getattr(runtime.ctx, "data_dir", None)
+        if data_dir is not None:
+            return Path(data_dir) / "slow_tick_transcripts"
+        return Path("develop-docs/slow_tick_transcripts")
+
+    @router.get("/api/admin/slow-tick/transcripts")
+    async def list_slow_tick_transcripts(limit: int = 50) -> dict[str, Any]:
+        limit = max(1, min(limit, 500))
+        dir_path = _transcript_dir()
+        if not dir_path.exists():
+            return {"count": 0, "items": []}
+        files = sorted(
+            dir_path.glob("*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )[:limit]
+        items = [
+            {
+                "cycle_id": f.stem,
+                "created_at": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+                "size_bytes": f.stat().st_size,
+            }
+            for f in files
+        ]
+        return {"count": len(items), "items": items}
+
+    @router.get("/api/admin/slow-tick/transcripts/{cycle_id}")
+    async def get_slow_tick_transcript(cycle_id: str) -> dict[str, Any]:
+        # Path-traversal guard: cycle_id comes from the URL so reject
+        # anything that could escape the transcript directory.
+        if "/" in cycle_id or ".." in cycle_id or cycle_id.startswith("."):
+            raise HTTPException(status_code=400, detail="invalid cycle_id")
+        dir_path = _transcript_dir()
+        path = dir_path / f"{cycle_id}.json"
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="transcript not found")
+        try:
+            return json.loads(path.read_text())
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(
+                status_code=500, detail=f"transcript read failed: {e}"
+            ) from e
 
     return router
 

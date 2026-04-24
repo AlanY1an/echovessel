@@ -40,6 +40,12 @@ from echovessel.memory.consolidate import (
     ReflectFn,
 )
 from echovessel.memory.models import ConceptNode, RecallMessage
+from echovessel.memory.slow_cycle import (
+    SlowCycleExpectationInput,
+    SlowCycleFn,
+    SlowCycleOutput,
+    SlowCycleThoughtInput,
+)
 from echovessel.proactive.base import (
     MemorySnapshot,
     ProactiveFn,
@@ -49,16 +55,20 @@ from echovessel.prompts import (
     EXTRACTION_SYSTEM_PROMPT,
     JUDGE_SYSTEM_PROMPT,
     REFLECTION_SYSTEM_PROMPT,
+    SLOW_CYCLE_SYSTEM_PROMPT,
     ExtractionParseError,
     JudgeParseError,
     JudgeVerdict,
     ReflectionParseError,
+    SlowCycleParseError,
     format_extraction_user_prompt,
     format_judge_user_prompt,
     format_reflection_user_prompt,
+    format_slow_cycle_user_prompt,
     parse_extraction_response,
     parse_judge_response,
     parse_reflection_response,
+    parse_slow_cycle_response,
 )
 from echovessel.runtime.llm.base import LLMProvider
 
@@ -249,6 +259,95 @@ def make_reflect_fn(llm: LLMProvider) -> ReflectFn:
         return [ExtractedThought(**asdict(rt)) for rt in parsed.thoughts]
 
     return _reflect
+
+
+def make_slow_cycle_fn(
+    llm: LLMProvider, *, model_role: str = "fast"
+) -> SlowCycleFn:
+    """Build an async ``SlowCycleFn`` that calls the LLM with the
+    slow-cycle prompt and maps the parsed result into memory-layer
+    dataclasses.
+
+    Used by the consolidate worker's G phase (plan §7.1). Never calls
+    itself; the memory layer enforces this invariant by not passing a
+    scheduler handle. Tier defaults to ``fast`` — the reflection is
+    short-output + moderate-input, and proactive is the only call
+    site that justifies the LARGE tier.
+
+    Failure modes:
+      - Parse error → log WARNING, return an empty ``SlowCycleOutput``.
+        The memory writer treats this as "no-op cycle" and still
+        advances ``last_slow_tick_at`` + bumps stats (the LLM call did
+        cost tokens, we account for them).
+      - LLM transient/permanent error → raise to caller. The G phase
+        in consolidate_worker catches and logs.
+    """
+
+    from echovessel.runtime.cost_logger import feature_context
+
+    async def _slow_cycle(input_dict: dict[str, Any]) -> SlowCycleOutput:
+        events = input_dict.get("recent_events") or []
+        input_event_ids: set[int] = {
+            int(e["id"]) for e in events if isinstance(e.get("id"), int)
+        }
+        user_prompt = format_slow_cycle_user_prompt(
+            recent_events=list(events),
+            self_block_text=input_dict.get("self_block_text", "") or "",
+            recent_thoughts=list(input_dict.get("recent_thoughts") or []),
+            elapsed_hours=float(input_dict.get("elapsed_hours") or 0.0),
+            now_iso=input_dict.get("now_iso", ""),
+        )
+
+        with feature_context("slow_cycle"):
+            raw, usage = await llm.complete(
+                system=SLOW_CYCLE_SYSTEM_PROMPT,
+                user=user_prompt,
+                model_role=model_role,
+                max_tokens=1024,
+                temperature=0.5,
+            )
+
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+
+        try:
+            parsed = parse_slow_cycle_response(
+                raw, input_event_ids=input_event_ids
+            )
+        except SlowCycleParseError as e:
+            log.warning("slow_cycle parse error (dropping cycle output): %s", e)
+            return SlowCycleOutput(
+                input_tokens=input_tokens, output_tokens=output_tokens
+            )
+
+        thoughts = [
+            SlowCycleThoughtInput(
+                description=t.description,
+                filling_event_ids=list(t.filling_event_ids),
+                emotional_impact=t.emotional_impact,
+            )
+            for t in parsed.new_thoughts
+        ]
+        expectations = [
+            SlowCycleExpectationInput(
+                about_text=e.about_text,
+                prediction_text=e.prediction_text,
+                due_at=e.due_at,
+                reasoning_event_ids=list(e.reasoning_event_ids),
+                emotional_impact=e.emotional_impact,
+            )
+            for e in parsed.new_expectations
+        ]
+        return SlowCycleOutput(
+            salient_questions=list(parsed.salient_questions),
+            new_thoughts=thoughts,
+            new_expectations=expectations,
+            self_narrative_append=parsed.self_narrative_append,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+    return _slow_cycle
 
 
 def make_judge_fn(llm: LLMProvider) -> JudgeFn:
@@ -529,6 +628,7 @@ def make_proactive_fn(llm: LLMProvider) -> ProactiveFn:
 __all__ = [
     "make_extract_fn",
     "make_reflect_fn",
+    "make_slow_cycle_fn",
     "make_judge_fn",
     "make_proactive_fn",
     "JudgeFn",
