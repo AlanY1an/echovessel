@@ -20,7 +20,6 @@ import {
   postImportUploadText,
   postPersonaAvatar,
   postPersonaExtract,
-  postPersonaUpdate,
 } from '../api/client'
 import { ApiError, EMPTY_PERSONA_FACTS } from '../api/types'
 import type {
@@ -38,23 +37,25 @@ interface OnboardingProps {
   error: string | null
 }
 
-// ─── Static metadata for the 5 core blocks + display name + relationship ──
+// ─── Static metadata for the onboarding fields ──
+//
+// v0.5 onboarding asks 3 prose fields + a name (4 total): display name,
+// the ``persona`` block (who they are), and the ``user`` block (what
+// the persona knows about you). The ``style`` block is owner-curated
+// later from Admin → Persona; ``self`` and ``relationship`` were
+// dropped (now L4 thought[subject='persona'] and L5
+// entities.description respectively).
 //
 // ``accent`` picks the `.field-row.*` colour strip on the right and
 // (informally) pairs with the matching `.hl.*` highlight in the left
 // column. ``kind: 'long'`` renders a multi-line textarea; ``'short'``
 // renders a single-line `.bare` input.
 
-type BlockKey =
-  | 'display_name'
-  | 'persona_block'
-  | 'self_block'
-  | 'user_block'
-  | 'relationship_block'
+type BlockKey = 'display_name' | 'persona_block' | 'user_block'
 
 interface BlockMeta {
   key: BlockKey
-  accent: '' | 'persona' | 'self' | 'user'
+  accent: '' | 'persona' | 'user'
   kind: 'short' | 'long'
   labelKey: string
   placeholderKey: string
@@ -76,24 +77,10 @@ const BLOCK_META: readonly BlockMeta[] = [
     placeholderKey: 'onboarding.long_placeholder',
   },
   {
-    key: 'self_block',
-    accent: 'self',
-    kind: 'long',
-    labelKey: 'onboarding.review_block_self',
-    placeholderKey: 'onboarding.long_placeholder',
-  },
-  {
     key: 'user_block',
     accent: 'user',
     kind: 'long',
     labelKey: 'onboarding.review_block_user',
-    placeholderKey: 'onboarding.long_placeholder',
-  },
-  {
-    key: 'relationship_block',
-    accent: '',
-    kind: 'long',
-    labelKey: 'onboarding.review_block_relationship',
     placeholderKey: 'onboarding.long_placeholder',
   },
 ]
@@ -188,14 +175,13 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
   const [fromUpload, setFromUpload] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
-  // Right-column · the five blocks + 14 facts (v0.4 · mood dropped;
-  // style is owner-curated from the Admin Persona tab after onboarding).
+  // Right-column · the three onboarding fields + 15 facts (v0.5 · ``self``
+  // and ``relationship`` dropped; ``style`` is owner-curated later from
+  // the Admin Persona tab).
   const [values, setValues] = useState<Record<BlockKey, string>>({
     display_name: '',
     persona_block: '',
-    self_block: '',
     user_block: '',
-    relationship_block: '',
   })
   const [facts, setFacts] = useState<PersonaFacts>(EMPTY_PERSONA_FACTS)
   const [submitting, setSubmitting] = useState(false)
@@ -278,10 +264,7 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
     setValues((prev) => ({
       display_name: prev.display_name,
       persona_block: prev.persona_block || res.core_blocks.persona_block,
-      self_block: prev.self_block || res.core_blocks.self_block,
       user_block: prev.user_block || res.core_blocks.user_block,
-      relationship_block:
-        prev.relationship_block || res.core_blocks.relationship_block,
     }))
     setFacts((prev) => mergeFacts(prev, res.facts))
   }
@@ -290,7 +273,6 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
   const required: readonly BlockKey[] = [
     'display_name',
     'persona_block',
-    'self_block',
     'user_block',
   ]
   const missing = required.filter((k) => values[k].trim().length === 0)
@@ -303,21 +285,9 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
       await completeOnboarding({
         display_name: values.display_name.trim(),
         persona_block: values.persona_block.trim(),
-        self_block: values.self_block.trim(),
         user_block: values.user_block.trim(),
         facts,
       })
-      // relationship_block isn't part of the onboarding contract —
-      // PATCH it in afterwards. Best-effort: a failure here still
-      // leaves a usable persona.
-      const rel = values.relationship_block.trim()
-      if (rel.length > 0) {
-        try {
-          await postPersonaUpdate({ relationship_block: rel })
-        } catch {
-          /* swallowed — user can retry from Admin */
-        }
-      }
       // Optional avatar upload. Deferred until after onboarding commits
       // so a failed commit doesn't leave a dangling picture on disk.
       // Swallow errors — the user can re-upload from Admin later.
@@ -661,8 +631,8 @@ function BlockFieldRow({
 }: BlockFieldRowProps) {
   const { t } = useTranslation()
   const empty = value.trim().length === 0
-  const required =
-    meta.key !== 'relationship_block' // relationship is optional
+  // Every onboarding field is required since the v0.5 cut to 4 fields.
+  const required = true
   const cls = `field-row ${meta.accent} ${empty && required ? 'empty' : ''}`.trim()
   const wordCount =
     value.trim().length > 0 ? value.trim().split(/\s+/).length : 0
