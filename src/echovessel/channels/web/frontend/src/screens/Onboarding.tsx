@@ -50,12 +50,11 @@ type BlockKey =
   | 'persona_block'
   | 'self_block'
   | 'user_block'
-  | 'mood_block'
   | 'relationship_block'
 
 interface BlockMeta {
   key: BlockKey
-  accent: '' | 'persona' | 'self' | 'user' | 'mood'
+  accent: '' | 'persona' | 'self' | 'user'
   kind: 'short' | 'long'
   labelKey: string
   placeholderKey: string
@@ -88,13 +87,6 @@ const BLOCK_META: readonly BlockMeta[] = [
     accent: 'user',
     kind: 'long',
     labelKey: 'onboarding.review_block_user',
-    placeholderKey: 'onboarding.long_placeholder',
-  },
-  {
-    key: 'mood_block',
-    accent: 'mood',
-    kind: 'short',
-    labelKey: 'onboarding.review_block_mood',
     placeholderKey: 'onboarding.long_placeholder',
   },
   {
@@ -155,7 +147,11 @@ const FACT_FIELDS: readonly FactMeta[] = [
     kind: 'text',
   },
   { key: 'location', labelKey: 'facts.location', placeholderKey: 'facts.location_placeholder', kind: 'text' },
-  { key: 'timezone', labelKey: 'facts.timezone', placeholderKey: 'facts.timezone_placeholder', kind: 'text' },
+  // ``timezone`` is intentionally absent from onboarding — plan
+  // decision 5: the browser auto-detects ``users.timezone`` on first
+  // connect via ``Intl.DateTimeFormat``, and ``persona.timezone`` stays
+  // null until the owner explicitly picks one from the Admin Persona
+  // tab (where the IANA dropdown lives).
   {
     key: 'relationship_status',
     labelKey: 'facts.relationship_status',
@@ -192,13 +188,13 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
   const [fromUpload, setFromUpload] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
-  // Right-column · the six blocks + 14 facts.
+  // Right-column · the five blocks + 14 facts (v0.4 · mood dropped;
+  // style is owner-curated from the Admin Persona tab after onboarding).
   const [values, setValues] = useState<Record<BlockKey, string>>({
     display_name: '',
     persona_block: '',
     self_block: '',
     user_block: '',
-    mood_block: '',
     relationship_block: '',
   })
   const [facts, setFacts] = useState<PersonaFacts>(EMPTY_PERSONA_FACTS)
@@ -284,7 +280,6 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
       persona_block: prev.persona_block || res.core_blocks.persona_block,
       self_block: prev.self_block || res.core_blocks.self_block,
       user_block: prev.user_block || res.core_blocks.user_block,
-      mood_block: prev.mood_block || res.core_blocks.mood_block,
       relationship_block:
         prev.relationship_block || res.core_blocks.relationship_block,
     }))
@@ -297,7 +292,6 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
     'persona_block',
     'self_block',
     'user_block',
-    'mood_block',
   ]
   const missing = required.filter((k) => values[k].trim().length === 0)
   const canCommit = missing.length === 0 && !submitting
@@ -311,7 +305,6 @@ export function Onboarding({ completeOnboarding, error }: OnboardingProps) {
         persona_block: values.persona_block.trim(),
         self_block: values.self_block.trim(),
         user_block: values.user_block.trim(),
-        mood_block: values.mood_block.trim(),
         facts,
       })
       // relationship_block isn't part of the onboarding contract —

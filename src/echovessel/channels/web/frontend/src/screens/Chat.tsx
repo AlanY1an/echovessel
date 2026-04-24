@@ -11,7 +11,6 @@ import { Avatar, Presence, Wave, fmtT } from '../components/primitives'
 import { LanguageToggle } from '../components/LanguageToggle'
 
 interface ChatProps {
-  moodBlock: string
   displayName: string
   voiceEnabled: boolean
   voiceId: string | null
@@ -22,7 +21,6 @@ interface ChatProps {
 type TFn = (key: string, opts?: Record<string, unknown>) => string
 
 export function Chat({
-  moodBlock,
   displayName,
   voiceEnabled,
   voiceId,
@@ -48,8 +46,6 @@ export function Chat({
   const [journalOpen, setJournalOpen] = useState(false)
   const [journalText, setJournalText] = useState('')
   const logRef = useRef<HTMLDivElement | null>(null)
-
-  const moodSummary = moodBlock.trim().split(/[\n。]/)[0] || t('chat.mood_default')
 
   // Auto-scroll to bottom whenever the timeline grows. Using scrollHeight
   // is sufficient — the log is the flex column owner and its own scroll
@@ -103,14 +99,9 @@ export function Chat({
         </Presence>
         <div className="stack" style={{ gap: 0 }}>
           <div className="name">{displayName}</div>
-          <div className="sub">
-            {t('chat.persona_sub', { mood: moodSummary })}
-          </div>
+          <div className="sub">{t('chat.persona_sub_plain')}</div>
         </div>
         <div className="flex1" />
-        <span className="chip">
-          {t('chat.chip_mood', { mood: moodSummary })}
-        </span>
         <span className="chip">{t('chat.chip_session')}</span>
         <LanguageToggle />
         <button

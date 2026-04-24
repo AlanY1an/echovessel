@@ -97,12 +97,17 @@ export function usePersona(): UsePersonaResult {
     void refresh()
   }, [refresh])
 
-  // Cross-tab + runtime-driven sync. Three events funnel into persona
+  // Cross-tab + runtime-driven sync. One event funnels into persona
   // state here:
   //
   //   • chat.settings.updated  — voice_enabled toggled from another tab
-  //   • chat.mood.update       — memory's update_mood_block hook fired
-  //                              (consolidate worker, explicit edit, ...)
+  //
+  // v0.4 ``chat.mood.update`` is still emitted by the backend when the
+  // extraction LLM's ``session_mood_signal`` writes L6 episodic_state,
+  // but it no longer maps to a core_blocks row — it's a
+  // ``personas.episodic_state`` JSON update surfaced server-side in the
+  // ``# How you feel right now`` section of the next system prompt. No
+  // UI consumer reads it yet, so we drop the payload on the client.
   //
   // Each handler is a no-op if the persona hasn't loaded yet; the next
   // refresh() picks up the correct value.
@@ -117,23 +122,6 @@ export function usePersona(): UsePersonaResult {
           prev === null
             ? prev
             : { ...prev, persona: { ...prev.persona, voice_enabled: next } },
-        )
-        return
-      }
-
-      if (event.event === 'chat.mood.update') {
-        // The server sends the full new mood block text as `mood_summary`.
-        // Splice it into core_blocks.mood so any consumer reading persona
-        // (Chat.tsx's top-bar moodBlock prop, Admin's mood editor) picks
-        // the new value up on the next render without a manual refresh.
-        const nextMood = event.data.mood_summary
-        setPersona((prev) =>
-          prev === null
-            ? prev
-            : {
-                ...prev,
-                core_blocks: { ...prev.core_blocks, mood: nextMood },
-              },
         )
         return
       }

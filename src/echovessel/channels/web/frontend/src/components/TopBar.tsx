@@ -6,12 +6,11 @@ interface TopBarAction {
 }
 
 interface TopBarProps {
-  mood?: string
   primary?: TopBarAction // right-side primary action
   back?: TopBarAction // optional back button on the left
 }
 
-export function TopBar({ mood, primary, back }: TopBarProps) {
+export function TopBar({ primary, back }: TopBarProps) {
   return (
     <header className="bar">
       <div className="bar-inner">
@@ -23,10 +22,6 @@ export function TopBar({ mood, primary, back }: TopBarProps) {
         <div className="brand">
           Echo<span className="brand-dot" />
           <span className="brand-suffix">Vessel</span>
-        </div>
-        <div className="mood">
-          <span className="mood-rule" />
-          <span>{mood ?? '—'}</span>
         </div>
         <LanguageToggle />
         {primary && (
