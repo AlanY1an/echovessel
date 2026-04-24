@@ -147,7 +147,7 @@
 
 <!-- ─── Diagram ─── -->
 <div class="diagram-wrap">
-<svg viewBox="0 0 1000 720" xmlns="http://www.w3.org/2000/svg" style="width:100%; height:auto;">
+<svg viewBox="0 0 1000 900" xmlns="http://www.w3.org/2000/svg" style="width:100%; height:auto;">
   <defs>
     <!-- arrow markers -->
     <marker id="arr-write" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
@@ -270,20 +270,58 @@
   <text x="320" y="390" font-family="JetBrains Mono, monospace" font-size="10" fill="#0f766e">retrieve</text>
   <text x="640" y="390" font-family="JetBrains Mono, monospace" font-size="10" fill="#0f766e">retrieve</text>
 
+  <!-- L5 (bottom left, entities + aliases) -->
+  <g>
+    <rect x="40" y="620" width="260" height="140" rx="12" fill="#f0fdfa" stroke="#14b8a6" stroke-width="2"/>
+    <text x="60" y="648" font-family="JetBrains Mono, monospace" font-size="14" font-weight="700" fill="#0f766e">L5</text>
+    <text x="110" y="648" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#0f766e">entities + aliases</text>
+    <text x="60" y="668" font-family="Inter, sans-serif" font-size="11" fill="#14b8a6" font-weight="500">entities · entity_aliases · junction</text>
+    <text x="60" y="696" font-family="Inter, sans-serif" font-size="10" fill="#0d9488" font-style="italic">— "Scott" = "黄逸扬" = "Yiyang"</text>
+    <text x="60" y="714" font-family="Inter, sans-serif" font-size="10" fill="#64748b">✍️ extraction · 3-tier dedup · alias / embedding / ask-user</text>
+    <text x="60" y="728" font-family="Inter, sans-serif" font-size="10" fill="#64748b">🧭 alias scan every turn · entity_anchor rerank bonus</text>
+    <text x="60" y="742" font-family="Inter, sans-serif" font-size="10" fill="#64748b">📖 cross-alias events join the candidate pool</text>
+  </g>
+
+  <!-- L6 (bottom right, current affect) -->
+  <g>
+    <rect x="700" y="620" width="260" height="140" rx="12" fill="#fdf2f8" stroke="#ec4899" stroke-width="2"/>
+    <text x="720" y="648" font-family="JetBrains Mono, monospace" font-size="14" font-weight="700" fill="#9d174d">L6</text>
+    <text x="770" y="648" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#9d174d">episodic_state</text>
+    <text x="720" y="668" font-family="Inter, sans-serif" font-size="11" fill="#db2777" font-weight="500">personas.episodic_state · JSON snapshot</text>
+    <text x="720" y="696" font-family="Inter, sans-serif" font-size="10" fill="#be185d" font-style="italic">— "how I feel right now"</text>
+    <text x="720" y="714" font-family="Inter, sans-serif" font-size="10" fill="#64748b">✍️ extraction side-effect · session_mood_signal</text>
+    <text x="720" y="728" font-family="Inter, sans-serif" font-size="10" fill="#64748b">⏱ 12h decay back to neutral on assemble_turn</text>
+    <text x="720" y="742" font-family="Inter, sans-serif" font-size="10" fill="#64748b">📖 # How you feel right now · skipped when neutral</text>
+  </g>
+
+  <!-- L3 extraction → L5 write (same LLM call emits mentioned_entities) -->
+  <line x1="170" y1="580" x2="170" y2="620" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arr-distill)" stroke-dasharray="4,3"/>
+  <text x="180" y="608" font-family="JetBrains Mono, monospace" font-size="10" fill="#7c3aed">mentioned_entities</text>
+
+  <!-- L3 extraction → L6 write (same LLM call emits session_mood_signal) -->
+  <line x1="830" y1="580" x2="830" y2="620" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arr-distill)" stroke-dasharray="4,3"/>
+  <text x="725" y="608" font-family="JetBrains Mono, monospace" font-size="10" fill="#7c3aed">session_mood_signal</text>
+
+  <!-- L5 → prompt (alias anchor read) -->
+  <path d="M 170 620 Q 260 490 395 345" fill="none" stroke="#0f766e" stroke-width="1.5" marker-end="url(#arr-read)" stroke-dasharray="4,3"/>
+
+  <!-- L6 → prompt (episodic read) -->
+  <path d="M 830 620 Q 740 490 605 345" fill="none" stroke="#0f766e" stroke-width="1.5" marker-end="url(#arr-read)" stroke-dasharray="4,3"/>
+
   <!-- Legend box inside the diagram bottom -->
   <g>
-    <rect x="40" y="650" width="920" height="46" rx="8" fill="#fafbfc" stroke="#e2e8f0"/>
-    <line x1="60" y1="673" x2="100" y2="673" stroke="#b45309" stroke-width="2" marker-end="url(#arr-write)"/>
-    <text x="108" y="677" font-family="Inter, sans-serif" font-size="11" fill="#334155">write · 写入 (人 / daemon / LLM)</text>
+    <rect x="40" y="830" width="920" height="46" rx="8" fill="#fafbfc" stroke="#e2e8f0"/>
+    <line x1="60" y1="853" x2="100" y2="853" stroke="#b45309" stroke-width="2" marker-end="url(#arr-write)"/>
+    <text x="108" y="857" font-family="Inter, sans-serif" font-size="11" fill="#334155">write · 写入 (人 / daemon / LLM)</text>
 
-    <line x1="320" y1="673" x2="360" y2="673" stroke="#7c3aed" stroke-width="2" marker-end="url(#arr-distill)"/>
-    <text x="368" y="677" font-family="Inter, sans-serif" font-size="11" fill="#334155">distill · 提炼 (LLM 调用)</text>
+    <line x1="320" y1="853" x2="360" y2="853" stroke="#7c3aed" stroke-width="2" marker-end="url(#arr-distill)"/>
+    <text x="368" y="857" font-family="Inter, sans-serif" font-size="11" fill="#334155">distill · 提炼 (LLM 调用)</text>
 
-    <line x1="560" y1="673" x2="600" y2="673" stroke="#0f766e" stroke-width="2" marker-end="url(#arr-read)" stroke-dasharray="4,3"/>
-    <text x="608" y="677" font-family="Inter, sans-serif" font-size="11" fill="#334155">read · 读入 prompt (每 turn)</text>
+    <line x1="560" y1="853" x2="600" y2="853" stroke="#0f766e" stroke-width="2" marker-end="url(#arr-read)" stroke-dasharray="4,3"/>
+    <text x="608" y="857" font-family="Inter, sans-serif" font-size="11" fill="#334155">read · 读入 prompt (每 turn)</text>
 
-    <line x1="800" y1="673" x2="840" y2="673" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr-filling)" stroke-dasharray="3,3"/>
-    <text x="848" y="677" font-family="Inter, sans-serif" font-size="11" fill="#334155">evidence · 溯源链</text>
+    <line x1="800" y1="853" x2="840" y2="853" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr-filling)" stroke-dasharray="3,3"/>
+    <text x="848" y="857" font-family="Inter, sans-serif" font-size="11" fill="#334155">evidence · 溯源链</text>
   </g>
 </svg>
 </div>
