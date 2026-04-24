@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { avatarUrl, deletePersonaAvatar, postPersonaAvatar } from '../../../api/client'
-import { ApiError } from '../../../api/types'
+import { avatarUrl, deletePersonaAvatar, postPersonaAvatar } from '../../../../api/client'
+import { ApiError } from '../../../../api/types'
 
 /**
  * Profile picture card on the Admin → Persona tab. Self-contained:
