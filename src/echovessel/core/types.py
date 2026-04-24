@@ -55,24 +55,27 @@ class NodeType(StrEnum):
 class BlockLabel(StrEnum):
     """Identifies which core block a row represents.
 
-    Shared blocks (persona/self/style) have user_id = NULL.
-    Per-user blocks (user/relationship) must have a non-null user_id.
+    v0.5 collapsed L1 to three labels (plan §1) — ``self`` and
+    ``relationship`` were dropped. Persona-side reflection now lives on
+    L4.thought[subject='persona'] (written by slow_cycle); third-party
+    descriptions live on L5.entities.description.
+
+    Shared blocks (persona / style) have ``user_id = NULL``.
+    Per-user block (user) must have a non-null ``user_id``.
     """
 
     PERSONA = "persona"
-    SELF = "self"
     USER = "user"
-    RELATIONSHIP = "relationship"
     STYLE = "style"
 
 
 # Blocks that are shared across users for a given persona.
 SHARED_BLOCK_LABELS: frozenset[BlockLabel] = frozenset(
-    {BlockLabel.PERSONA, BlockLabel.SELF, BlockLabel.STYLE}
+    {BlockLabel.PERSONA, BlockLabel.STYLE}
 )
 
 # Blocks that are per-user for a given persona.
-PER_USER_BLOCK_LABELS: frozenset[BlockLabel] = frozenset({BlockLabel.USER, BlockLabel.RELATIONSHIP})
+PER_USER_BLOCK_LABELS: frozenset[BlockLabel] = frozenset({BlockLabel.USER})
 
 
 @dataclass(frozen=True, slots=True)

@@ -427,6 +427,23 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
         if _table_exists(conn, "core_blocks"):
             conn.execute(text("DELETE FROM core_blocks WHERE label = 'mood'"))
 
+        # v0.5 · soft-delete L1.self + L1.relationship rows (plan §1).
+        # The labels are gone from the BlockLabel enum and slow_cycle
+        # no longer writes to them. Existing dogfood data is preserved
+        # via ``deleted_at`` so git-history-style auditing still works
+        # (plan §15: "数据丢失 owner 接受 · git-history 里还在 ·
+        # audit 需要可查"). Idempotent — second run finds no rows
+        # matching ``deleted_at IS NULL`` and is a no-op.
+        if _table_exists(conn, "core_blocks"):
+            conn.execute(
+                text(
+                    "UPDATE core_blocks "
+                    "SET deleted_at = CURRENT_TIMESTAMP "
+                    "WHERE label IN ('self', 'relationship') "
+                    "AND deleted_at IS NULL"
+                )
+            )
+
 
 # ---------------------------------------------------------------------------
 # Inspection helpers
