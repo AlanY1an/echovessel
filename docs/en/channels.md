@@ -4,7 +4,7 @@
 
 > 🧭 **Naming note.** EchoVessel's **channel** (the term used throughout the code and this doc) is what you might call a **stateful message gateway** in API-infrastructure terms. Each channel translates between one external transport's protocol (Discord WebSocket, HTTP POST + SSE for the Web UI, future iMessage webhook, etc.) and the daemon's internal `IncomingTurn` / `OutgoingMessage` format, while carrying the connection-level state that translation needs (debounce timers, in-flight turn tracking, per-user DM routing). "Channel" is the chat-UX-flavoured name for the same concept — we kept it because that's what end users see in Discord / Slack / iMessage. If "gateway" is a clearer mental model for you, substitute freely; the code will keep saying "channel."
 
-**Channels are dumb I/O adapters.** A channel owns a single external transport — the Web UI, Discord, iMessage, WeChat — and its only job is to shuttle text between that transport and the rest of the daemon. Channels do not call the LLM, do not read memory, do not decide what the persona says, do not hold persona state. Every "thought" happens one layer up, in `runtime` + `memory` + the prompt assembler. If a channel implementation is tempted to cache a mood block or run a retrieval query, the design is wrong.
+**Channels are dumb I/O adapters.** A channel owns a single external transport — the Web UI, Discord, iMessage, WeChat — and its only job is to shuttle text between that transport and the rest of the daemon. Channels do not call the LLM, do not read memory, do not decide what the persona says, do not hold persona state. Every "thought" happens one layer up, in `runtime` + `memory` + the prompt assembler. If a channel implementation is tempted to cache a core block or run a retrieval query, the design is wrong.
 
 **One persona, many mouths.** The architectural commitment at the root of the channel system is that a persona is a single continuous identity across every transport it speaks on. When the same user talks to the persona through the Web UI in the morning and through Discord in the evening, the persona remembers the morning conversation word-for-word — not because each channel ships its own memory, but because there is exactly one memory store and it is *never sharded by transport*. Memory retrieval takes no `channel_id` filter and will never accept one. This is the most load-bearing rule in the whole module: if you break it, the illusion of a single persona collapses, and every channel becomes a separate bot.
 
@@ -20,7 +20,7 @@
 
 **`IncomingMessage`** — a single raw user message inside a turn. Carries `channel_id`, `user_id`, `content`, `received_at`, an optional channel-native `external_ref`, and a back-pointer `turn_id` to the enclosing `IncomingTurn`. Memory persists these one-by-one as the leaf units of the L2 recall log.
 
-**`OutgoingMessage`** — what runtime hands to `channel.send()`. Contains only what a dumb I/O adapter needs: `content`, an optional `in_reply_to_turn_id`, a `kind` discriminating normal `"reply"` from autonomous `"proactive"` pushes, and a `delivery` field (`"text"` or `"voice_neutral"` in the current codebase) that tells the channel how to physically deliver the message. Persona state, mood, retrieval results are not in here — they have already been consumed to produce `content`.
+**`OutgoingMessage`** — what runtime hands to `channel.send()`. Contains only what a dumb I/O adapter needs: `content`, an optional `in_reply_to_turn_id`, a `kind` discriminating normal `"reply"` from autonomous `"proactive"` pushes, and a `delivery` field (`"text"` or `"voice_neutral"` in the current codebase) that tells the channel how to physically deliver the message. Persona state, episodic state, retrieval results are not in here — they have already been consumed to produce `content`.
 
 **`in_flight_turn_id`** — channel-side state. Holds the `turn_id` of the turn that runtime is currently processing, or `None` if runtime is idle. This one field is the entire coordination protocol between the channel's debounce machine and the runtime's turn loop. When it is `None`, new user input goes to the current turn and runs the debounce timer. When it is set, new user input goes to the next-turn buffer and waits. Runtime clears it by calling `on_turn_done(turn_id)` from the other end.
 
@@ -418,7 +418,7 @@ For the authoritative source of the Channel Protocol, see `src/echovessel/channe
 
 ## Discord DM channel setup
 
-EchoVessel ships an optional Discord channel so a persona can receive direct messages from allow-listed Discord users. Same persona, same memory, same mood — the only difference from Web is the transport. A persona DMed on Discord still remembers conversations that started on the Web UI, and vice versa, because memory retrieval never filters by channel.
+EchoVessel ships an optional Discord channel so a persona can receive direct messages from allow-listed Discord users. Same persona, same memory, same episodic state — the only difference from Web is the transport. A persona DMed on Discord still remembers conversations that started on the Web UI, and vice versa, because memory retrieval never filters by channel.
 
 Current scope is **DM only**. Guild channels, slash commands, and voice message attachments are not in v1.
 
@@ -471,7 +471,7 @@ Discord only lets a user DM a bot if they share at least one server with it. Cre
 
 ### 6. Start EchoVessel and send a DM
 
-Run the daemon as usual. On a successful startup you should see a log line like `Discord bot connected as YourBot#1234`. Click the bot in your server's member list and send it a direct message — the persona replies on the same DM thread with the same memory and mood it has on the Web UI.
+Run the daemon as usual. On a successful startup you should see a log line like `Discord bot connected as YourBot#1234`. Click the bot in your server's member list and send it a direct message — the persona replies on the same DM thread with the same memory and episodic state it has on the Web UI.
 
 ### Troubleshooting
 
@@ -482,7 +482,7 @@ Run the daemon as usual. On a successful startup you should see a log line like 
 
 ## iMessage channel setup
 
-The iMessage channel lets a persona receive direct messages from allow-listed contacts over Apple's Messages.app. Same persona, same memory, same mood as Web and Discord — the only difference is the transport.
+The iMessage channel lets a persona receive direct messages from allow-listed contacts over Apple's Messages.app. Same persona, same memory, same episodic state as Web and Discord — the only difference is the transport.
 
 The channel does **not** implement the iMessage protocol itself. Apple's IDS / APNs servers only accept genuine Apple devices, so every non-Apple project converges on the same pattern: spawn a small macOS-native helper that speaks iMessage on your behalf. EchoVessel uses [`steipete/imsg`](https://github.com/steipete/imsg) — a Swift CLI that reads `~/Library/Messages/chat.db` for inbound and drives Messages.app via AppleScript for outbound, surfaced over JSON-RPC on stdio. Our channel code spawns one long-lived `imsg rpc` subprocess, subscribes to its `message` notifications, and sends replies by calling its `send` method.
 

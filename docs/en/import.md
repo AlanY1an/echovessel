@@ -21,7 +21,7 @@ This trade has three concrete payoffs:
 The counterweight is that the quality of the import is bounded by the quality of the extraction prompt and the LLM that runs it. The pipeline takes that seriously in four concrete ways:
 
 - Every extracted write carries a verbatim `evidence_quote` that must appear as a substring of the originating chunk. Fabricated quotes are dropped before they reach memory.
-- The extraction prompt enumerates six legal targets and flags `L1.mood_block` explicitly as nonexistent, so the LLM cannot invent a seventh bucket without being caught by the JSON validator.
+- The extraction prompt enumerates six legal targets (`L1.persona_block`, `L1.self_block`, `L1.user_block`, `L1.relationship_block`, `L3.event`, `L4.thought`); any other write target is rejected by the JSON validator.
 - L1 writes below a 0.5 confidence threshold are dropped silently, so low-certainty guesses cannot pollute the persona's core identity blocks.
 - Per-chunk failures are recorded as `DroppedItem`s with a reason string and a payload excerpt, surfaced through the `chunk.error` event, and included in the final `PipelineReport` — nothing is swallowed.
 

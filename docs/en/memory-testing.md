@@ -23,7 +23,7 @@ Unless noted, every file is under `tests/`. All tests live on stub providers by 
 
 ## Stage 1 · L1 core blocks + biographic facts
 
-**What this layer does.** Five prose core blocks (`persona / self / user / mood / relationship`) plus fifteen structured biographic columns on the `personas` row (`full_name`, `gender`, `birth_date`, `timezone`, `occupation`, …). Both are loaded on every turn and injected into the system prompt; only five facts render into the prompt's `# Who you are` section (C-option contract).
+**What this layer does.** Five prose core blocks (`persona / self / user / relationship / style`) plus fifteen structured biographic columns on the `personas` row (`full_name`, `gender`, `birth_date`, `timezone`, `occupation`, …). Both are loaded on every turn and injected into the system prompt; only five facts render into the prompt's `# Who you are` section (C-option contract). Current emotional state is not in L1 — it lives in L6 episodic state (see [`memory.md`](./memory.md)).
 
 **What's tested.**
 
@@ -125,7 +125,7 @@ Reflection reads the last 24 h of events, asks the reflection LLM for higher-ord
 
 - **F10 · no transport identity in prompts** — `assemble_turn` never leaks `channel_id` or a transport-name literal into the system or user prompt, even under mixed history · `tests/runtime/test_f10_no_channel_in_prompt.py`
 - **Cross-channel unified persona** — A Discord session and a Web session for the same `(persona, user)` share memory · events from either surface in the other channel's retrieval · `tests/integration/test_cross_channel_unified_persona.py`
-- **Mood block observer hook** — after a consolidate pass that writes a SHOCK-ish event, the mood block updates via observer · `tests/memory/test_lifecycle_on_mood_updated.py`
+- **L6 episodic state write** — extraction's `session_mood_signal` field flows through consolidate and lands in the `personas.episodic_state` JSON column · `tests/memory/test_episodic_state.py`
 - **Forget + orphan** — deleting an event cascades, orphans, or is cancelled per `DeletionChoice` · `tests/memory/test_forget.py`
 
 ---
@@ -157,10 +157,9 @@ tests/memory_eval/
 | **E4** | User corrects a fact they stated earlier | relational_tag = correction |
 | **E5** | Five seeded events + short new session | TIMER reflect runs · thought is an abstraction, filling ≥ 2 |
 | **E6** | Ten seeded events, query about Mochi | top-3 contains ≥ 2 Mochi / medical events |
-| **E7** | Five sad turns about work | mood block evolves from neutral seed |
 | **E8** | Bilingual session, Chinese majority | extraction output in Chinese |
 
-**Hard invariants** (checked by `harness.check_invariants`): event count bounds, `shock_event_present`, `reflection_triggered`, `must_mention_any` substring match, `must_have_relational_tag_any`, `filling_min`, `top3_relevant_min`, `mood_block_changed`, `output_language`.
+**Hard invariants** (checked by `harness.check_invariants`): event count bounds, `shock_event_present`, `reflection_triggered`, `must_mention_any` substring match, `must_have_relational_tag_any`, `filling_min`, `top3_relevant_min`, `output_language`.
 
 **Soft invariants** (checked by `judge.judge_prompts`): each fixture carries one or more yes/no questions answered by the same LLM on MEDIUM tier with the evidence rendered by `harness.render_evidence`. A "no" fails the test.
 

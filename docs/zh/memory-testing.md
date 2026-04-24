@@ -23,7 +23,7 @@ Memory 是 EchoVessel 里最密集的一层 : 一次写 操作牵涉到 schema /
 
 ## 第 1 层 · L1 core blocks + 生平事实
 
-**这一层做什么。** 五段散文 core blocks(`persona / self / user / mood / relationship`) 加上 `personas` 行上的 15 个结构化生平字段(`full_name` / `gender` / `birth_date` / `timezone` / `occupation` / …)。两者每个 turn 都会被重新载入、拼进 system prompt;15 个 fact 里只有 5 个会渲进 prompt 的 `# Who you are` 段(C 方案契约)。
+**这一层做什么。** 五段散文 core blocks(`persona / self / user / relationship / style`) 加上 `personas` 行上的 15 个结构化生平字段(`full_name` / `gender` / `birth_date` / `timezone` / `occupation` / …)。两者每个 turn 都会被重新载入、拼进 system prompt;15 个 fact 里只有 5 个会渲进 prompt 的 `# Who you are` 段(C 方案契约)。当下情绪状态不在 L1 而在 L6 episodic state(见 [`memory.md`](./memory.md))。
 
 **测试覆盖。**
 
@@ -125,7 +125,7 @@ Memory 是 EchoVessel 里最密集的一层 : 一次写 操作牵涉到 schema /
 
 - **F10 · prompt 不出现任何 transport 身份** — `assemble_turn` 不会把 `channel_id` 或任何 transport 名字泄进 system/user prompt · 混合历史也一样 · `tests/runtime/test_f10_no_channel_in_prompt.py`
 - **跨 channel 统一 persona** — 同一 `(persona, user)` 在 Discord 和 Web 共享记忆 · 任一 channel 的 event 在另一边也被检索到 · `tests/integration/test_cross_channel_unified_persona.py`
-- **Mood block observer hook** — 写完 SHOCK-ish event 后 · observer 会更新 mood block · `tests/memory/test_lifecycle_on_mood_updated.py`
+- **L6 episodic state 写入** — extraction 输出的 `session_mood_signal` 在 consolidate 收尾时 UPDATE `personas.episodic_state` JSON 列 · `tests/memory/test_episodic_state.py`
 - **Forget + orphan** — 删 event 可选 cascade · orphan · cancel · `tests/memory/test_forget.py`
 
 ---
@@ -157,10 +157,9 @@ tests/memory_eval/
 | **E4** | 用户更正之前说错的事实 | relational_tag=correction |
 | **E5** | 5 条 seed event + 短 session | TIMER reflect 跑 · thought 是抽象 · filling ≥ 2 |
 | **E6** | 10 条 seed event · 查 Mochi | top-3 里至少 2 条关于猫 / 医院 |
-| **E7** | 5 turn 重话题 · 工作压力 | mood block 从 seed 开始演化 |
 | **E8** | 中英混讲 · 中文占多 | 抽取输出为中文 |
 
-**硬 invariants**(由 `harness.check_invariants` 检查): event 数区间 / `shock_event_present` / `reflection_triggered` / `must_mention_any` 子串匹配 / `must_have_relational_tag_any` / `filling_min` / `top3_relevant_min` / `mood_block_changed` / `output_language`。
+**硬 invariants**(由 `harness.check_invariants` 检查): event 数区间 / `shock_event_present` / `reflection_triggered` / `must_mention_any` 子串匹配 / `must_have_relational_tag_any` / `filling_min` / `top3_relevant_min` / `output_language`。
 
 **软 invariants**(由 `judge.judge_prompts` 检查): 每条 fixture 带 1+ 个 yes/no 问题,由同一 LLM 在 MEDIUM tier 上读 `harness.render_evidence` 产出的 evidence 回答,回答 no 即算失败。
 
