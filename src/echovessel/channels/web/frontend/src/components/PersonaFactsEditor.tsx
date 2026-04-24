@@ -161,11 +161,9 @@ export function PersonaFactsEditor({
         onPatch={patchField}
       />
 
-      <FreeTextRow
-        field="timezone"
+      <TimezoneRow
         label={t('facts.timezone')}
         value={value.timezone}
-        placeholder={t('facts.timezone_placeholder')}
         disabled={disabled}
         onPatch={patchField}
       />
@@ -288,6 +286,61 @@ function DateRow({ label, hint, value, disabled, onPatch }: DateRowProps) {
         disabled={disabled}
         onChange={(e) => onPatch(e.target.value)}
       />
+    </label>
+  )
+}
+
+// Cached result of ``Intl.supportedValuesOf('timeZone')`` — the browser
+// list is stable per runtime, so we compute it once outside the
+// component. Older browsers that don't expose ``supportedValuesOf``
+// fall back to an empty list; the <select> still renders a single
+// "unknown" option so the user can clear the value.
+const IANA_TIMEZONES: readonly string[] = (() => {
+  try {
+    // ``supportedValuesOf`` landed in Node 18 / Safari 16.4 / Chrome 99;
+    // guard so older runtimes don't hard-fail at module load time.
+    const fn = (Intl as unknown as {
+      supportedValuesOf?: (key: string) => string[]
+    }).supportedValuesOf
+    if (typeof fn === 'function') {
+      return fn('timeZone')
+    }
+  } catch {
+    /* fall through */
+  }
+  return []
+})()
+
+interface TimezoneRowProps {
+  label: string
+  value: string | null
+  disabled: boolean
+  onPatch: (field: FreeTextField, raw: string) => void
+}
+
+function TimezoneRow({ label, value, disabled, onPatch }: TimezoneRowProps) {
+  const { t } = useTranslation()
+  // Include the current value even if it's not in the Intl list — keeps
+  // legacy rows renderable while the list updates with new tzdata.
+  const options = value && !IANA_TIMEZONES.includes(value)
+    ? [value, ...IANA_TIMEZONES]
+    : IANA_TIMEZONES
+  return (
+    <label className="facts-row">
+      <span className="facts-row-label">{label}</span>
+      <select
+        className="facts-row-input"
+        value={value ?? ''}
+        disabled={disabled}
+        onChange={(e) => onPatch('timezone', e.target.value)}
+      >
+        <option value="">{t('facts.unknown_option')}</option>
+        {options.map((zone) => (
+          <option key={zone} value={zone}>
+            {zone}
+          </option>
+        ))}
+      </select>
     </label>
   )
 }
