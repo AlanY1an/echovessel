@@ -160,6 +160,8 @@
   .mem-row .m-level.lv2 { background: #0ea5e9; }
   .mem-row .m-level.lv3 { background: #10b981; }
   .mem-row .m-level.lv4 { background: #f59e0b; }
+  .mem-row .m-level.lv5 { background: #14b8a6; }
+  .mem-row .m-level.lv6 { background: #ec4899; }
   .mem-row .m-name { font-weight: 700; font-size: 14px; margin-bottom: 2px; }
   .mem-row .m-tagline { font-size: 11px; color: #64748b; line-height: 1.4; margin-bottom: 6px; }
   .mem-row .m-table {
@@ -378,12 +380,12 @@
 </div>
 
 <!-- ═══════════ 2. MEMORY (EMPHASIZED) ═══════════ -->
-<h2>2. Memory — the four-layer store</h2>
+<h2>2. Memory — the six-layer store</h2>
 
 <div class="panel" style="border-color:#c4b5fd;background:linear-gradient(180deg,#f5f3ff 0%,#fff 30%);">
   <div class="panel-head">
     <div>
-      <div class="panel-title">L1 → L4 · raw transcripts to reflected insights</div>
+      <div class="panel-title">L1 → L6 · raw transcripts, reflected insights, named entities, current affect</div>
       <div class="panel-sub">One SQLite file · all layers share it · never sharded by channel_id (iron rule D4)</div>
     </div>
     <div class="tag tag-purple">CORE</div>
@@ -405,12 +407,12 @@
             <li><code>self_block</code> — persona's self-narrative (grows by reflection)</li>
             <li><code>user_block</code> — identity-level facts about you</li>
             <li><code>relationship_block</code> — people in your life as persona sees them</li>
-            <li><code>mood_block</code> — transient · auto-refreshed each turn</li>
+            <li><code>style_block</code> — owner-curated style preferences (don't say "haha", etc.)</li>
           </ul>
         </div>
         <div class="m-kind">
           <div class="m-kind-lbl">write path</div>
-          <div>onboarding · admin edit · importer bootstrap · mood observer</div>
+          <div>onboarding · admin edit · importer bootstrap · slow_tick self-narrative append</div>
           <div class="m-kind-lbl" style="margin-top:6px;">read path</div>
           <div>every turn's prompt prefix</div>
         </div>
@@ -470,31 +472,82 @@
       <div class="mem-row">
         <div class="m-level lv4">L4</div>
         <div>
-          <div class="m-name">Thoughts — long-term impressions</div>
-          <div class="m-tagline">"What persona believes about you" · reflection over multiple L3 events.</div>
-          <div class="m-table">table · <code>concept_nodes</code> WHERE type=THOUGHT &nbsp; link · <code>concept_node_filling</code></div>
+          <div class="m-name">Thoughts — long-term impressions + forward-looking expectations</div>
+          <div class="m-tagline">"What persona believes about you" + "what persona expects next" · same table, two sub-types.</div>
+          <div class="m-table">table · <code>concept_nodes</code> WHERE type IN (THOUGHT, INTENTION, EXPECTATION) &nbsp; link · <code>concept_node_filling</code></div>
         </div>
         <div class="m-content">
           <ul>
-            <li><code>description</code> — one durable insight ("you find quiet afternoons grounding")</li>
+            <li><code>type=thought</code> — durable insight from past events ("you find quiet afternoons grounding")</li>
+            <li><code>type=intention</code> — strict commitment with <code>subject='persona'</code> ("I'll text you back tomorrow")</li>
+            <li><code>type=expectation</code> — slow_tick forward prediction with <code>event_time_end</code> as due_at</li>
             <li><code>concept_node_filling</code> · parent=thought, child=event · the evidence chain</li>
             <li>reflection hard-gate · max 3 new thoughts / 24h per persona (configurable)</li>
             <li>skipped entirely for trivial sessions (&lt; 3 messages or &lt; 200 tokens)</li>
-            <li>also embedded in sqlite-vec for semantic recall</li>
+            <li>all sub-types embedded in sqlite-vec for semantic recall</li>
           </ul>
         </div>
         <div class="m-kind">
           <div class="m-kind-lbl">write path</div>
-          <div>consolidate worker <code>reflect_fn</code> · LLM call</div>
+          <div>consolidate worker <code>reflect_fn</code> (fast loop · SHOCK / TIMER) · slow_tick G phase (slow loop · between-session reflection)</div>
           <div class="m-kind-lbl" style="margin-top:6px;">read path</div>
-          <div>retrieval · delete → shows source events to confirm cascade</div>
+          <div>retrieval · pinned <code># About {speaker}</code> · <code># Promises you've made</code> · <code># You've been expecting</code> · delete → shows source events to confirm cascade</div>
+        </div>
+      </div>
+
+      <!-- L5 -->
+      <div class="mem-row">
+        <div class="m-level lv5">L5</div>
+        <div>
+          <div class="m-name">Entities — canonical names + aliases</div>
+          <div class="m-tagline">"Scott" = "黄逸扬" = "Yiyang" — alias join keeps cross-language recall working.</div>
+          <div class="m-table">tables · <code>entities</code> &nbsp; <code>entity_aliases</code> &nbsp; junction · <code>concept_node_entities</code></div>
+        </div>
+        <div class="m-content">
+          <ul>
+            <li><code>entities</code> · canonical name + kind (<code>person | place | org | pet</code>) + tri-state <code>merge_status</code></li>
+            <li><code>entity_aliases</code> · many-to-one alias → entity (case-sensitive, CJK kept whole)</li>
+            <li><code>concept_node_entities</code> · many-to-many junction binding L3 events to L5 entities</li>
+            <li>three-tier dedup at extraction time: alias match → embedding 0.65 / 0.85 thresholds → uncertain branch where the persona naturally asks the user</li>
+            <li>at retrieve time: alias hit pulls every linked ConceptNode into the candidate pool with an <code>entity_anchor</code> rerank bonus</li>
+          </ul>
+        </div>
+        <div class="m-kind">
+          <div class="m-kind-lbl">write path</div>
+          <div>extraction inside consolidate · only path that creates new entities</div>
+          <div class="m-kind-lbl" style="margin-top:6px;">read path</div>
+          <div>every turn's <code>find_query_entities()</code> alias scan · <code># Entity disambiguation pending</code> hint when uncertain</div>
+        </div>
+      </div>
+
+      <!-- L6 -->
+      <div class="mem-row">
+        <div class="m-level lv6">L6</div>
+        <div>
+          <div class="m-name">Episodic state — current affect</div>
+          <div class="m-tagline">"How the persona feels right now" · single-row JSON snapshot · 12h decay back to neutral.</div>
+          <div class="m-table">column · <code>personas.episodic_state</code> JSON</div>
+        </div>
+        <div class="m-content">
+          <ul>
+            <li><code>{mood, energy, last_user_signal, updated_at}</code></li>
+            <li>extraction LLM emits <code>session_mood_signal</code> alongside events; consolidate writes it through · zero extra LLM calls</li>
+            <li><code>assemble_turn</code> entry decays mood back to <code>neutral</code> if the snapshot is older than 12 hours</li>
+            <li>renders as <code># How you feel right now</code> in the system prompt; section is skipped while mood is <code>neutral</code></li>
+          </ul>
+        </div>
+        <div class="m-kind">
+          <div class="m-kind-lbl">write path</div>
+          <div>consolidate side-effect when extraction emits <code>session_mood_signal</code></div>
+          <div class="m-kind-lbl" style="margin-top:6px;">read path</div>
+          <div>every turn's system prompt · 12h decay check on assemble_turn entry</div>
         </div>
       </div>
 
     </div>
 
     <div class="callout">
-      <strong>Consolidate pipeline:</strong> session closes (idle ≥ 30 min OR max length) → worker picks it up → extracts L3 events from L2 messages (stub LLM for trivial cases, SMALL tier otherwise) → runs L4 reflection if the reflection gate allows → writes to <code>concept_nodes</code> with embeddings via sqlite-vec. Four tuning knobs (<code>trivial_message_count</code>, <code>trivial_token_count</code>, <code>reflection_hard_gate_24h</code>, <code>memory.relational_bonus_weight</code>) are live via <code>config.toml</code>.
+      <strong>Consolidate pipeline:</strong> session closes (idle ≥ 30 min OR max length) → worker picks it up → extracts L3 events + L5 entity links from L2 messages (SMALL tier; stub for trivial sessions) → runs L4 reflection if the reflection gate allows → writes everything to <code>concept_nodes</code> + <code>entities</code> with embeddings via sqlite-vec → side-effect updates <code>personas.episodic_state</code> from extraction's <code>session_mood_signal</code> → optional G phase runs <code>slow_cycle</code> for between-session reflection (cool-down + token-wall + daily-cap gates). Four tuning knobs (<code>trivial_message_count</code>, <code>trivial_token_count</code>, <code>reflection_hard_gate_24h</code>, <code>memory.relational_bonus_weight</code>) are live via <code>config.toml</code>; slow_tick has its own <code>[slow_tick]</code> section.
     </div>
   </div>
 </div>
