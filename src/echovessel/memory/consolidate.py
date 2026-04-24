@@ -882,13 +882,36 @@ def _consolidate_entities(
         entity_id_by_ext_idx[ent_idx] = entity_id
 
     # Junction rows: one per (event_id, entity_id) pair.
+    #
+    # Defensive filter: the extraction LLM has been observed to over-link
+    # — when a session mentions Scott in chat but one of the extracted
+    # events is about an unrelated exam, the LLM would sometimes emit
+    # ``in_events=[exam_event_idx]`` for the Scott entity. A wrong link
+    # then poisons alias-anchor retrieval: asking "how's Scott" pulls in
+    # the exam event and the reply drifts into "Scott is busy studying"
+    # even though Scott is not in that event at all. We enforce the rule
+    # the prompt now asks for: the entity's canonical_name or at least
+    # one of its aliases must appear LITERALLY in the event's description
+    # text before we accept the junction row.
     for ent_idx, ext_ent in enumerate(extraction_output.mentioned_entities):
         entity_id = entity_id_by_ext_idx.get(ent_idx)
         if entity_id is None:
             continue
+        surface_forms = [ext_ent.canonical_name, *ext_ent.aliases]
         for ev_idx in ext_ent.in_events:
             node = event_by_ext_idx.get(ev_idx)
             if node is None or node.id is None:
+                continue
+            description = node.description or ""
+            if not any(form and form in description for form in surface_forms):
+                log.info(
+                    "entity-link rejected: %r not in event %s description %r "
+                    "(session %s, prompt under-constrained entity.in_events)",
+                    ext_ent.canonical_name,
+                    node.id,
+                    description[:60],
+                    session.id,
+                )
                 continue
             add_concept_entity_link(db, node_id=node.id, entity_id=entity_id)
     db.commit()

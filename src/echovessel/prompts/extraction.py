@@ -332,9 +332,16 @@ For each entity:
                                        // session (excluding canonical_name)
     "kind": "person",                  // one of: person | place | org | pet | other
     "in_events": [0, 2]                 // indices into the `events` list above
-                                       // where this entity appears; omit or []
-                                       // if the entity came up in chat but is
-                                       // not tied to a specific extracted event
+                                       // where the entity's canonical_name OR
+                                       // one of its aliases appears LITERALLY
+                                       // in that event's `description` text —
+                                       // NOT every event extracted from the
+                                       // same session. If Scott was mentioned
+                                       // in chat but the event describes an
+                                       // unrelated exam, DO NOT include that
+                                       // event's index here. Omit or [] when
+                                       // the entity did not make it into any
+                                       // specific event's description.
   }
 
 GUIDANCE — read carefully:
