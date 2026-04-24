@@ -118,6 +118,14 @@ class ExtractedEvent:
     # event is atemporal ("user likes cats") or the LLM declined to
     # resolve. consolidate writes start/end into ConceptNode columns.
     event_time: EventTime | None = None
+    # v0.4 · R3 first-person attribution (Spec 5 PART C). 'user' is
+    # default; 'persona' is reserved for strict commitments and flips
+    # consolidate's NodeType to INTENTION when paired with event_time.
+    subject: str = "user"
+    # v0.4 · plan §6.2 step 2 supersedes. ConceptNode ids the new event
+    # replaces; consolidate writes ``superseded_by_id = new_node.id`` on
+    # each old node (soft delete — retrieve filters them out).
+    superseded_event_ids: list[int] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -181,6 +189,13 @@ class ExtractionResult:
     mentioned_entities: list[ExtractedEntity] = field(default_factory=list)
     entity_clarification: ExtractedEntityClarification | None = None
     session_mood_signal: ExtractedSessionMoodSignal | None = None
+    # v0.4 · plan §6.2 step 5. One-sentence gist of the session, written
+    # by extraction. Consolidate persists this as a
+    # ConceptNode(type='thought', source_session_id=session.id) tagged
+    # with ``emotion_tags=['session_summary']`` so the runtime can
+    # discover them later for the # Recent sessions prompt section.
+    # Empty string ⇒ skip the write (trivial chat).
+    session_summary: str = ""
 
 
 @dataclass(slots=True)
@@ -439,10 +454,24 @@ async def consolidate_session(
             # AND by a DB CHECK constraint on concept_nodes.
             event_time_start = ev.event_time.start if ev.event_time else None
             event_time_end = ev.event_time.end if ev.event_time else None
+
+            # R3 · PART C strict commitment (Spec 5). subject='persona'
+            # with a resolved event_time is the ONLY path that promotes
+            # the row to NodeType.INTENTION. A persona-tagged event
+            # without time anchor lacks the binding promise structure
+            # ("when am I supposed to do this?") so it stays as
+            # NodeType.EVENT — the prompt steers PART C to drop those
+            # but consolidate also defends the invariant here.
+            if ev.subject == "persona" and ev.event_time is not None:
+                node_type = NodeType.INTENTION
+            else:
+                node_type = NodeType.EVENT
+
             node = ConceptNode(
                 persona_id=session.persona_id,
                 user_id=session.user_id,
-                type=NodeType.EVENT,
+                type=node_type,
+                subject=ev.subject,
                 description=ev.description,
                 emotional_impact=ev.emotional_impact,
                 emotion_tags=ev.emotion_tags,
@@ -463,6 +492,45 @@ async def consolidate_session(
             # INSERT on concept_nodes (SQLite has a single writer).
             vec = embed_fn(ev.description)
             backend.insert_vector(node.id, vec, conn=db.connection())
+
+        # Spec 5 · plan §6.2 step 2 supersedes. For each freshly-written
+        # node that lists ``superseded_event_ids``, set the old node's
+        # ``superseded_by_id`` pointer. Soft delete only — retrieve
+        # filters them via ``superseded_by_id IS NULL``. We do NOT hard
+        # delete because the user may explicitly ask "you said X before"
+        # and a future history API (v2) needs the row intact.
+        for ev_idx, ev in enumerate(extracted_events):
+            new_node = event_by_ext_idx.get(ev_idx)
+            if new_node is None or new_node.id is None or not ev.superseded_event_ids:
+                continue
+            for old_id in ev.superseded_event_ids:
+                if old_id == new_node.id:
+                    log.warning(
+                        "supersedes self-cycle blocked: node %s points at itself",
+                        old_id,
+                    )
+                    continue
+                old = db.exec(select(ConceptNode).where(ConceptNode.id == old_id)).one_or_none()
+                if old is None:
+                    log.warning(
+                        "supersedes target id=%s not found; skipping",
+                        old_id,
+                    )
+                    continue
+                if (
+                    old.persona_id != session.persona_id
+                    or old.user_id != session.user_id
+                ):
+                    log.warning(
+                        "supersedes target id=%s belongs to a different "
+                        "(persona, user) scope; skipping",
+                        old_id,
+                    )
+                    continue
+                if old.deleted_at is not None:
+                    continue
+                old.superseded_by_id = new_node.id
+                db.add(old)
 
         # Atomic: events + the resume-point flag commit together. If this
         # commit fails, neither the nodes nor the flag persist, and the
@@ -504,6 +572,50 @@ async def consolidate_session(
                 extraction_output=extraction_output,
                 event_by_ext_idx=event_by_ext_idx,
             )
+
+        # Spec 5 · plan §6.2 step 5. Persist session_summary as an L4
+        # ConceptNode(type='thought', source_session_id=session.id) so
+        # the runtime can later pull it for the # Recent sessions
+        # prompt section. Tagged via emotion_tags=['session_summary']
+        # because we deliberately don't add a new ConceptNode column —
+        # JSON tag matching is the cheapest discrimination path.
+        if extraction_output.session_summary:
+            try:
+                summary_node = ConceptNode(
+                    persona_id=session.persona_id,
+                    user_id=session.user_id,
+                    type=NodeType.THOUGHT,
+                    description=extraction_output.session_summary,
+                    emotional_impact=0,
+                    emotion_tags=["session_summary"],
+                    relational_tags=[],
+                    source_session_id=session.id,
+                )
+                db.add(summary_node)
+                db.flush()
+                vec = embed_fn(extraction_output.session_summary)
+                backend.insert_vector(summary_node.id, vec, conn=db.connection())
+                db.commit()
+                db.refresh(summary_node)
+                if observer is not None:
+                    try:
+                        observer.on_thought_created(summary_node)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning(
+                            "observer.on_thought_created raised "
+                            "(session_summary thought id=%s): %s",
+                            summary_node.id,
+                            e,
+                        )
+            except Exception as e:  # noqa: BLE001
+                # Summary write is decorative — never let it fail the
+                # session-close transition.
+                log.warning(
+                    "session_summary write failed (session %s): %s",
+                    session.id,
+                    e,
+                )
+                db.rollback()
 
     # --- C. SHOCK trigger ----------------------------------------------
     shock_event: ConceptNode | None = None

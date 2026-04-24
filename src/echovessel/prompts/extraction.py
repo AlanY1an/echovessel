@@ -193,6 +193,90 @@ say so briefly.
 Missing an emotional peak in this self-check is the #1 reason the
 downstream Emotional Peak Retention eval metric fails. Take this seriously.
 
+# PART C · Persona-side commitments (STRICT subset)
+#
+# By default every event has ``subject: "user"`` and describes what the
+# user disclosed. PART C is the ONLY path that lets you write an event
+# whose subject is the persona — and it is intentionally narrow because
+# inventing persona "promises" out of thin air is the single most
+# damaging hallucination this pipeline can ship (the user remembers a
+# made-up commitment forever).
+#
+# Output ``subject: "persona"`` ONLY when ALL THREE conditions are met:
+#
+#   (1) The persona's reply text in the transcript contains an EXPLICIT
+#       commitment verb. Allowed forms include (but are not limited to):
+#         Chinese: "我答应" / "我会" / "下次我..." / "我记得提醒你"
+#         English: "I promise" / "I will" / "I'll remember to..." /
+#                  "I'll let you know..."
+#       Inferred commitments do NOT count. "I think we could meet" is
+#       NOT a commitment. Only literal first-person commitment phrasing.
+#
+#   (2) The SAME turn (persona's reply, not a different one) contains a
+#       parsable time expression — e.g. "今晚 9 点" / "明天" / "周六
+#       下午" / "after lunch tomorrow" / "in two weeks". A commitment
+#       without a time anchor is too vague to bind into ``event_time``;
+#       drop it.
+#
+#   (3) The user did NOT explicitly reject or contradict the commitment
+#       in the same session ("nope, don't bother" / "算了不用"). Implicit
+#       silence is fine — only an explicit retraction blocks extraction.
+#
+# When all three hold, write the event as:
+#
+#   {
+#     "subject": "persona",
+#     "description": "你答应 [user] [content] [when]",   // third-person past
+#     "event_time": { "start": "...", "end": "..." }     // resolved per <<NOW>>
+#     ... (other fields as usual)
+#   }
+#
+# Consolidate sees ``subject == 'persona'`` AND ``event_time != null``
+# AND will write ``type='intention'`` automatically — you do NOT need
+# to set ``type`` yourself.
+#
+# PART C does NOT extract:
+#   - the persona's feelings ("我有点想你")
+#   - the persona's opinions ("我觉得 hiking 很棒")
+#   - inferences about what the persona was thinking
+#   - meta-commentary ("我刚刚那条回复有点重")
+# Those belong to slow_tick reflection (a future spec), not extraction.
+#
+# When in doubt: prefer to drop. A missed commitment is a small cost; a
+# fabricated one corrodes trust permanently. False negative >> false
+# positive on this path.
+
+# PART E · Vocative recognition (cheap fix for "我赢了，欧阳老师！")
+#
+# Before extracting any event where the persona is the apparent subject
+# or object of an action ("user beat persona", "user thanked persona"),
+# ask: is the persona's display name being used as a VOCATIVE — a form
+# of address — rather than as the actual topic of the sentence?
+#
+# Examples:
+#   user: "我赢了，欧阳老师！"
+#       → "欧阳老师" is vocative addressing the persona, NOT the
+#         opponent. The event is "user won [a game / contest]" with
+#         NO persona involvement. Do NOT write "user beat 欧阳老师".
+#
+#   user: "Sage, look at this 🎉"
+#       → "Sage" is vocative. Event is whatever the user pointed at,
+#         not "user pointed something out to Sage".
+#
+#   user: "欧阳老师好厉害"
+#       → "欧阳老师" is the topic; persona is the actual subject of
+#         "好厉害". Event is "user praised 欧阳老师" (which is the
+#         persona — but here the persona genuinely IS the topic, so
+#         the speaker-attribution check still has to pass).
+#
+# Heuristic: if the user line ends with the persona's display name
+# (or a known persona alias) followed by punctuation (! / 。 / ？ /
+# 啊 / ，), treat it as vocative unless the surrounding context makes
+# topical reading the only sensible one.
+#
+# When unsure, drop the persona-as-object reading. A missed mention is
+# cheap; a phantom "user beat persona" event poisons retrieval.
+
 # Time binding (R4 · resolve relative time expressions to absolute)
 
 The user prompt includes a CONTEXT TIMESTAMPS block with a single anchor:
@@ -312,6 +396,41 @@ the user's LAST message, and any explicit gratitude / correction
 expressed. Write from the PERSONA's perspective. Do NOT mirror the
 user's mood — reflect how the persona would come away.
 
+# Session summary (≤200 chars · plan §6.2 step 5)
+
+Alongside the event list, output ONE ``session_summary`` string — a
+single sentence (≤200 characters) capturing the gist of THIS session
+from the persona's perspective. Consolidate writes the summary as a
+``ConceptNode(type='thought', source_session_id=...)`` so the
+``# Recent sessions`` prompt section can later show "what we talked
+about last time" without having to re-parse the L2 transcript.
+
+  - Write in the same language as the conversation.
+  - Anchor on the load-bearing topic, not the small talk
+    ("user shared news about her grad school waitlist outcome",
+    NOT "we chatted for a bit").
+  - When the session is genuinely trivial (two "hi" messages and
+    nothing else) emit ``session_summary: ""`` — consolidate skips
+    writing the thought row in that case.
+
+# Supersedes detection (plan §6.2 step 2)
+
+When an event you are about to extract clearly CONTRADICTS a recently-
+stored event about the same fact (e.g. new event "用户戒咖啡了"
+contradicts old event "用户每天三杯咖啡"), output the offending old
+event ids in ``superseded_event_ids``. The user prompt provides a
+``RECENT EVENTS FOR SUPERSEDE CHECK`` block listing each candidate by
+``id`` and ``description``. Refer to those ids; an empty list (or
+omitted field) is the default.
+
+  - Only mark superseded when the new event is the natural REPLACEMENT
+    for the old one — a state change, a correction the user announced,
+    a fact they updated. A merely related event is NOT a supersede.
+  - Multiple events can supersede a single old one; reference its id
+    once per new event that legitimately replaces it.
+  - If you are not sure, leave the list empty. Spurious supersedes
+    silently hide the wrong memory from retrieval.
+
 # Output format
 
 You MUST output valid JSON matching this exact shape. No commentary, no
@@ -324,9 +443,12 @@ code fences, no explanations outside the JSON:
       "emotional_impact": ...,
       "emotion_tags": ["..."],
       "relational_tags": ["..."],
-      "event_time": { "start": "...", "end": "..." } | null
+      "event_time": { "start": "...", "end": "..." } | null,
+      "subject": "user" | "persona" | "shared",
+      "superseded_event_ids": [123, 124]
     }
   ],
+  "session_summary": "one-sentence gist of this session, ≤200 chars, or empty",
   "mentioned_entities": [
     {
       "canonical_name": "...",
@@ -377,6 +499,9 @@ MAX_EMOTION_TAGS: int = 4
 # ---------------------------------------------------------------------------
 
 
+_EVENT_SUBJECT_VOCABULARY: frozenset[str] = frozenset({"user", "persona", "shared"})
+
+
 @dataclass(frozen=True, slots=True)
 class RawExtractedEvent:
     """A single event parsed from an LLM extraction response.
@@ -395,6 +520,16 @@ class RawExtractedEvent:
     # or when the LLM declined to resolve. Extraction parser enforces:
     # start always present, end optional, both with timezone offset.
     event_time: EventTime | None = None
+    # v0.4 · R3 first-person attribution (PART C). 'user' is the default;
+    # 'persona' is reserved for strict commitment events and is what
+    # consolidate uses to flip ``type='intention'``. 'shared' is for joint
+    # events ("we agreed to meet", "we laughed together").
+    subject: str = "user"
+    # v0.4 · plan §6.2 step 2 supersedes. ConceptNode ids that this new
+    # event replaces. Consolidate writes ``superseded_by_id`` on each
+    # listed old node — soft delete, retrieve filters them out by
+    # default. Empty when the event introduces no contradiction.
+    superseded_event_ids: list[int] = field(default_factory=list)
 
 
 ENTITY_KIND_VOCABULARY: frozenset[str] = frozenset({"person", "place", "org", "pet", "other"})
@@ -458,6 +593,13 @@ class ExtractionParseResult:
     mentioned_entities: list[RawExtractedEntity] = field(default_factory=list)
     entity_clarification: RawEntityClarification | None = None
     session_mood_signal: SessionMoodSignal | None = None
+    # v0.4 · plan §6.2 step 5. One-sentence gist of the session;
+    # consolidate writes it as a ConceptNode(type='thought',
+    # source_session_id) so the # Recent sessions prompt section can
+    # show "what we talked about last time". Empty string means
+    # extraction declined to summarise (trivial chat) and consolidate
+    # skips writing the row.
+    session_summary: str = ""
 
 
 class ExtractionParseError(ValueError):
@@ -613,6 +755,7 @@ def parse_extraction_response(response_text: str) -> ExtractionParseResult:
     )
     entity_clarification = _parse_entity_clarification(data.get("entity_clarification"))
     session_mood_signal = _parse_session_mood_signal(data.get("session_mood_signal"))
+    session_summary = _parse_session_summary(data.get("session_summary"))
 
     return ExtractionParseResult(
         events=parsed_events,
@@ -620,7 +763,41 @@ def parse_extraction_response(response_text: str) -> ExtractionParseResult:
         mentioned_entities=mentioned_entities,
         entity_clarification=entity_clarification,
         session_mood_signal=session_mood_signal,
+        session_summary=session_summary,
     )
+
+
+# Hard cap on session_summary length — the prompt asks for ≤200 chars
+# but the LLM occasionally overruns; truncate rather than reject so a
+# verbose summary still gets persisted.
+SESSION_SUMMARY_MAX_CHARS: int = 200
+
+
+def _parse_session_summary(raw: Any) -> str:
+    """Coerce the optional ``session_summary`` string.
+
+    Missing / null / non-string → empty string (consolidate skips the
+    thought write in that case). Over-length strings are truncated
+    rather than rejected — losing the back half of one summary is
+    cheaper than dropping the whole extraction.
+    """
+    if raw is None:
+        return ""
+    if not isinstance(raw, str):
+        logger.warning(
+            "session_summary: expected string, got %s; coercing to empty",
+            type(raw).__name__,
+        )
+        return ""
+    text = raw.strip()
+    if len(text) > SESSION_SUMMARY_MAX_CHARS:
+        logger.warning(
+            "session_summary length %d > %d; truncating",
+            len(text),
+            SESSION_SUMMARY_MAX_CHARS,
+        )
+        text = text[:SESSION_SUMMARY_MAX_CHARS].rstrip()
+    return text
 
 
 def _parse_session_mood_signal(raw: Any) -> SessionMoodSignal | None:
@@ -690,6 +867,10 @@ def _parse_event(raw: Any, *, index: int) -> RawExtractedEvent:
     emotion_tags = _normalize_emotion_tags(raw.get("emotion_tags", []), index=index)
     relational_tags = _filter_relational_tags(raw.get("relational_tags", []), index=index)
     event_time = _parse_event_time(raw.get("event_time"), index=index)
+    subject = _parse_event_subject(raw.get("subject"), index=index)
+    superseded_event_ids = _parse_superseded_event_ids(
+        raw.get("superseded_event_ids"), index=index
+    )
 
     return RawExtractedEvent(
         description=description.strip(),
@@ -697,7 +878,73 @@ def _parse_event(raw: Any, *, index: int) -> RawExtractedEvent:
         emotion_tags=emotion_tags,
         relational_tags=relational_tags,
         event_time=event_time,
+        subject=subject,
+        superseded_event_ids=superseded_event_ids,
     )
+
+
+def _parse_event_subject(value: Any, *, index: int) -> str:
+    """Coerce ``event.subject`` into the closed vocabulary.
+
+    Missing / unknown values fall back to ``"user"`` — the safest
+    default because writing an unknown-subject event into the persona
+    track (R3) without strict PART C grounding is the failure mode
+    we're guarding against.
+    """
+    if value is None:
+        return "user"
+    if not isinstance(value, str):
+        logger.warning(
+            "events[%d].subject must be a string, got %s; defaulting to 'user'",
+            index,
+            type(value).__name__,
+        )
+        return "user"
+    normalized = value.strip().lower()
+    if normalized not in _EVENT_SUBJECT_VOCABULARY:
+        logger.warning(
+            "events[%d].subject %r not in %s; defaulting to 'user'",
+            index,
+            value,
+            sorted(_EVENT_SUBJECT_VOCABULARY),
+        )
+        return "user"
+    return normalized
+
+
+def _parse_superseded_event_ids(value: Any, *, index: int) -> list[int]:
+    """Coerce ``event.superseded_event_ids`` to a list of positive ints.
+
+    Soft failure: each malformed entry is dropped with a warning. The
+    list is de-duplicated while preserving order. Missing / null /
+    non-list → empty list.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        logger.warning(
+            "events[%d].superseded_event_ids must be a list, got %s; ignoring",
+            index,
+            type(value).__name__,
+        )
+        return []
+    out: list[int] = []
+    seen: set[int] = set()
+    for raw_id in value:
+        if isinstance(raw_id, bool):
+            continue
+        if not isinstance(raw_id, int) or raw_id <= 0:
+            logger.warning(
+                "events[%d].superseded_event_ids has bad entry %r; dropping",
+                index,
+                raw_id,
+            )
+            continue
+        if raw_id in seen:
+            continue
+        seen.add(raw_id)
+        out.append(raw_id)
+    return out
 
 
 def _coerce_emotional_impact(value: Any, *, index: int) -> int:

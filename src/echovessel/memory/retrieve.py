@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from sqlmodel import Session as DbSession
@@ -142,6 +142,13 @@ class RetrievalResult:
     context_messages: list[RecallMessage]
     # L2 FTS fallback hits (if triggered)
     fts_fallback: list[RecallMessage]
+    # Spec 5 · plan §6.3 force-load. Top-N L4 thoughts of the current
+    # speaker, ranked by recency × importance — bypasses query
+    # similarity so the persona always carries some background
+    # awareness of who the speaker is, even when the current message
+    # has no obvious topical anchor. Empty when ``retrieve()`` was
+    # called with the default ``force_load_user_thoughts=0``.
+    pinned_thoughts: list[ConceptNode] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +339,7 @@ def retrieve(
     context_window: int = 3,
     min_relevance: float = DEFAULT_MIN_RELEVANCE,
     relational_bonus_weight: float = WEIGHT_RELATIONAL_BONUS,
+    force_load_user_thoughts: int = 0,
 ) -> RetrievalResult:
     """Full RETRIEVE pipeline per architecture v0.3 §3.2.
 
@@ -399,6 +407,9 @@ def retrieve(
                 select(ConceptNode).where(
                     ConceptNode.id.in_(node_ids),  # type: ignore[union-attr]
                     ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+                    # Spec 5 · plan §6.2 step 2. Soft-deleted via supersede:
+                    # never surface a node a newer one has replaced.
+                    ConceptNode.superseded_by_id.is_(None),  # type: ignore[union-attr]
                 )
             )
         )
@@ -469,11 +480,30 @@ def retrieve(
                 )
             )
 
+    # Spec 5 · plan §6.3 force-load. Bypasses query similarity entirely
+    # — we want the persona to ALWAYS know who it's talking to even
+    # when the current message is "?" or "嗯". Default kwarg=0 leaves
+    # the field empty for callers that don't care.
+    pinned_thoughts: list[ConceptNode] = []
+    if force_load_user_thoughts > 0:
+        # Drop ids that already appear in the rerank result so the
+        # caller doesn't render the same thought twice.
+        already_returned = {sm.node.id for sm in top_memories if sm.node.id is not None}
+        pinned_thoughts = _load_user_thoughts_force(
+            db,
+            persona_id=persona_id,
+            user_id=user_id,
+            limit=force_load_user_thoughts,
+            now=now,
+            exclude_ids=already_returned,
+        )
+
     return RetrievalResult(
         core_blocks=core_blocks,
         memories=top_memories,
         context_messages=context_messages,
         fts_fallback=fts_fallback,
+        pinned_thoughts=pinned_thoughts,
     )
 
 
@@ -837,6 +867,52 @@ def list_concept_nodes(
     total = int(db.exec(total_stmt).one() or 0)
 
     return rows, total
+
+
+# ---------------------------------------------------------------------------
+# Spec 5 · force-load user thoughts (plan §6.3)
+# ---------------------------------------------------------------------------
+
+
+def _load_user_thoughts_force(
+    db: DbSession,
+    *,
+    persona_id: str,
+    user_id: str,
+    limit: int,
+    now: datetime,
+    exclude_ids: set[int] | None = None,
+) -> list[ConceptNode]:
+    """Top-N L4 thoughts for ``user_id``, ranked by recency × importance.
+
+    Bypasses query similarity entirely — this is the force-load path
+    that lives behind ``# About {speaker}`` in the user prompt. The
+    intention is "who is this person, regardless of what they just
+    typed". Filters: not soft-deleted, not superseded, optionally
+    excludes ids already surfaced by the main retrieve rerank.
+    """
+    if limit <= 0:
+        return []
+
+    rows = list(
+        db.exec(
+            select(ConceptNode).where(
+                ConceptNode.persona_id == persona_id,
+                ConceptNode.user_id == user_id,
+                ConceptNode.type == NodeType.THOUGHT.value,
+                ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+                ConceptNode.superseded_by_id.is_(None),  # type: ignore[union-attr]
+            )
+        )
+    )
+    if exclude_ids:
+        rows = [n for n in rows if n.id not in exclude_ids]
+
+    def _score(n: ConceptNode) -> float:
+        return _recency_score(n.created_at, now) * _impact_score(n.emotional_impact)
+
+    rows.sort(key=_score, reverse=True)
+    return rows[:limit]
 
 
 # ---------------------------------------------------------------------------
