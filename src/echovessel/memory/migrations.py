@@ -404,10 +404,9 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
 
         # v0.4 · physical delete of MOOD rows (plan decision 1 · §4.7).
         # L6 episodic_state takes over the "how does the persona feel
-        # right now" job. The BlockLabel.MOOD enum value stays around
-        # until Phase 2 so `mood.py` still parses; any row it creates
-        # after this run will also be swept by the next daemon start,
-        # which is fine — the rename in Phase 2 removes the write path.
+        # right now" job. ``BlockLabel.MOOD`` was removed from the enum
+        # in Phase 2; existing databases still carry rows and need
+        # sweeping on upgrade.
         if _table_exists(conn, "core_blocks"):
             conn.execute(text("DELETE FROM core_blocks WHERE label = 'mood'"))
 

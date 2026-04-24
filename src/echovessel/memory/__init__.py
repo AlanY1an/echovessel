@@ -16,14 +16,15 @@ Public API (import from `echovessel.memory` directly):
         bulk_create_events, bulk_create_thoughts,
         count_events_by_imported_from, count_thoughts_by_imported_from,
         EventInput, ThoughtInput, ImportResult,
-        # Mood update (round 4)
-        update_mood_block,
+        # Episodic state (L6, v0.4)
+        update_episodic_state,
     )
 
 Only depends on `echovessel.core`. Must not import from voice/channels/runtime.
 """
 
 from echovessel.memory.db import create_all_tables, create_engine
+from echovessel.memory.episodic import update_episodic_state
 from echovessel.memory.imports import (
     EventInput,
     ImportResult,
@@ -47,7 +48,6 @@ from echovessel.memory.models import (
     Session,
     User,
 )
-from echovessel.memory.mood import update_mood_block
 from echovessel.memory.observers import (
     MemoryEventObserver,
     NullObserver,
@@ -91,8 +91,8 @@ __all__ = [
     "EventInput",
     "ThoughtInput",
     "ImportResult",
-    # Mood update (round 4)
-    "update_mood_block",
+    # Episodic state (L6, v0.4)
+    "update_episodic_state",
     # Queries
     "list_recall_messages",
     "list_concept_nodes",
