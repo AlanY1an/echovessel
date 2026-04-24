@@ -752,6 +752,184 @@ input.bare::placeholder, textarea.bare::placeholder { color: var(--ink-4); }
   background: var(--accent-soft);
 }
 
+/* ─── Memory Timeline sidebar (Spec 3) ─────────────────────── */
+
+.chat-layout {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  min-height: 0;
+}
+.chat-layout > .chat-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.memory-timeline-panel {
+  width: 320px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--rule);
+  background: var(--paper-2);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  transition: width 300ms ease;
+}
+.memory-timeline-panel.collapsed {
+  width: 40px;
+  align-items: center;
+  justify-content: flex-start;
+  padding-top: 16px;
+}
+.mem-expand-tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--ink-3);
+  font-size: 11px;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  padding: 8px 4px;
+  cursor: pointer;
+  letter-spacing: 0.08em;
+}
+.mem-expand-tab:hover { color: var(--ink); }
+
+.mem-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.mem-head .mem-title {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.mem-head .icbtn.sm {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font-size: 14px;
+}
+
+.mem-filters {
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper);
+  padding: 10px 14px 8px;
+}
+.mem-filters-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.mem-filters-head .label {
+  font-size: 11px;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  flex: 1;
+}
+.mem-filters-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mem-filters-list label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.mem-filters-foot {
+  margin-top: 8px;
+  border-top: 1px dashed var(--rule);
+  padding-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mem-list {
+  list-style: none;
+  padding: 10px 12px 16px;
+  margin: 0;
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mem-empty {
+  padding: 24px 18px;
+  font-size: 12px;
+  color: var(--ink-3);
+  line-height: 1.6;
+}
+.mem-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+}
+.mem-row:hover { background: var(--paper-3); }
+.mem-row .mem-icon {
+  flex-shrink: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  padding-top: 2px;
+}
+.mem-row .mem-body {
+  flex: 1;
+  min-width: 0;
+}
+.mem-row .mem-ts {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.mem-row .mem-text {
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.5;
+  margin-top: 2px;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+.mem-row-session-close {
+  border-top: 1px dashed var(--rule-strong);
+  border-bottom: 1px dashed var(--rule-strong);
+  padding-top: 10px;
+  padding-bottom: 10px;
+  background: var(--paper);
+}
+
+@media (max-width: 1200px) {
+  .memory-timeline-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    box-shadow: var(--shadow-lg);
+  }
+  .memory-timeline-panel.collapsed {
+    width: 32px;
+    box-shadow: none;
+  }
+}
+
 /* ─── Import wizard ───────────────────────────────────────── */
 
 .imp { display: flex; flex-direction: column; height: 100%; }

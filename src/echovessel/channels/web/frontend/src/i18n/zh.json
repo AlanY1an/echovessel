@@ -40,7 +40,58 @@
     "journal_placeholder": "今天发生了什么?",
     "journal_send": "作为日记发送",
     "journal_toggle_aria": "切换日记条目",
-    "voice_input_aria": "语音输入(即将推出)"
+    "voice_input_aria": "语音输入(即将推出)",
+    "timeline": {
+      "title": "记忆动态",
+      "empty": "还没有新记忆 · 继续聊 · 或者等会儿 persona 自己会想起来",
+      "loading": "加载中⋯",
+      "collapse_aria": "收起记忆动态",
+      "expand_aria": "展开记忆动态",
+      "time": {
+        "just_now": "刚刚",
+        "minutes": "{{n}} 分钟前",
+        "hours": "{{n}} 小时前",
+        "today": "今天 {{time}}",
+        "yesterday": "昨天",
+        "days": "{{n}} 天前"
+      },
+      "entity_kind": {
+        "person": "人",
+        "pet": "宠物",
+        "place": "地点",
+        "org": "组织",
+        "other": "事物"
+      },
+      "session": {
+        "duration_unknown": "片刻",
+        "duration_seconds": "{{n}} 秒",
+        "duration_minutes": "{{n}} 分钟"
+      },
+      "filter": {
+        "title": "筛选",
+        "toggle_aria": "切换筛选菜单",
+        "events": "事件",
+        "thoughts": "反思",
+        "slow_tick": "自反(parallel)",
+        "intentions": "承诺",
+        "expectations": "期待",
+        "entities": "人 / 物",
+        "mood": "心情",
+        "session_close": "session 收尾",
+        "clear_cache": "清本地缓存"
+      },
+      "item": {
+        "event_created": "记住了: {{description}}",
+        "thought_slow_tick": "我想到: {{description}}",
+        "thought_reflection": "总结: {{description}}",
+        "intention": "我答应: {{description}}",
+        "expectation": "我期待: {{description}}",
+        "entity_new": "认识了 {{kind}}: {{canonical_name}}",
+        "entity_description_updated": "对 {{canonical_name}} 有了新的理解: {{description}}",
+        "mood_shift": "心情: {{summary}}",
+        "session_close": "那段 {{duration}} 对话我消化完了 · 记住 {{events}} 件事 · 留了 {{thoughts}} 个想法"
+      }
+    }
   },
   "time": {
     "just_now": "刚刚",

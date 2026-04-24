@@ -50,7 +50,7 @@ from echovessel.memory.models import (
     CoreBlock,
     CoreBlockAppend,
 )
-from echovessel.memory.observers import MemoryEventObserver
+from echovessel.memory.observers import MemoryEventObserver, _fire_lifecycle
 
 log = logging.getLogger(__name__)
 
@@ -468,8 +468,8 @@ def bulk_create_events(
     for n in created:
         db.refresh(n)
 
-    if observer is not None:
-        for n in created:
+    for n in created:
+        if observer is not None:
             try:
                 observer.on_event_created(n)
             except Exception as e:  # noqa: BLE001
@@ -478,6 +478,7 @@ def bulk_create_events(
                     n.id,
                     e,
                 )
+        _fire_lifecycle("on_event_created", n)
 
     return ids
 
@@ -525,16 +526,17 @@ def bulk_create_thoughts(
     for n in created:
         db.refresh(n)
 
-    if observer is not None:
-        for n in created:
+    for n in created:
+        if observer is not None:
             try:
-                observer.on_thought_created(n)
+                observer.on_thought_created(n, "import")
             except Exception as e:  # noqa: BLE001
                 log.warning(
                     "observer.on_thought_created raised (thought id=%s): %s",
                     n.id,
                     e,
                 )
+        _fire_lifecycle("on_thought_created", n, "import")
 
     return ids
 

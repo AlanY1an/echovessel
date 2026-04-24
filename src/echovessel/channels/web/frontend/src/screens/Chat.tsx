@@ -9,6 +9,7 @@ import type {
 import { avatarUrl, postVoicePreview } from '../api/client'
 import { Avatar, Presence, Wave, fmtT } from '../components/primitives'
 import { LanguageToggle } from '../components/LanguageToggle'
+import { MemoryTimeline } from './Chat/MemoryTimeline'
 
 interface ChatProps {
   displayName: string
@@ -89,7 +90,8 @@ export function Chat({
   const showLoadMore = hasMoreHistory || historyLoading
 
   return (
-    <div className="chat">
+    <div className="chat-layout">
+    <div className="chat chat-main">
       <div className="chat-top">
         <div className="brand" style={{ paddingBottom: 0, gap: 8 }}>
           <div className="brand-mark" style={{ width: 18, height: 18 }} />
@@ -255,6 +257,8 @@ export function Chat({
           </button>
         </div>
       </div>
+    </div>
+    <MemoryTimeline />
     </div>
   )
 }

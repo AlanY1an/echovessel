@@ -19,20 +19,25 @@ Contract (review M2 / M3):
 
 Two hook flavours live in the same Protocol:
 
-1. **Per-write hooks (round 3)** — `on_message_ingested` /
-   `on_event_created` / `on_thought_created` / `on_core_block_appended`.
+1. **Per-write hooks** — `on_message_ingested` / `on_core_block_appended`.
    Fired per-call via an explicit `observer=` keyword argument passed to
-   the individual write API (`ingest_message`, `bulk_create_events`,
-   `append_to_core_block`, …). Used by import pipeline / tests / callers
-   that only care about their own write's outcome.
+   the individual write API (`ingest_message`, `append_to_core_block`).
+   Used by import pipeline / tests / callers that only care about their
+   own write's outcome.
 
-2. **Lifecycle hooks (round 4)** — `on_new_session_started` /
-   `on_session_closed` / `on_mood_updated`. Fired through the
-   module-level `_observers` registry, which runtime populates once via
-   `register_observer(...)` at daemon startup. These are global-ish
+2. **Lifecycle hooks** — `on_new_session_started` / `on_session_closed` /
+   `on_mood_updated` / `on_event_created` / `on_thought_created` /
+   `on_entity_confirmed` / `on_entity_description_updated`. Fired through
+   the module-level `_observers` registry, which runtime populates once
+   via `register_observer(...)` at daemon startup. These are global-ish
    notifications that any consumer (runtime SSE bridge, tests) can
    subscribe to without needing to thread an `observer=` param through
    every caller.
+
+   `on_event_created` / `on_thought_created` ALSO fire through the
+   explicit `observer=` kwarg on `consolidate_session` / `import_content`
+   when one is passed, so per-call consumers keep their invocation
+   semantics. The lifecycle fan-out is additive.
 
 The two flavours co-exist on one Protocol so a single consumer object
 (typically `RuntimeMemoryObserver` in runtime/memory_observers.py) can
@@ -47,9 +52,21 @@ import logging
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from echovessel.memory.models import ConceptNode, CoreBlockAppend, RecallMessage
+    from echovessel.memory.models import (
+        ConceptNode,
+        CoreBlockAppend,
+        Entity,
+        RecallMessage,
+    )
 
 log = logging.getLogger(__name__)
+
+
+# Valid values for the `source` parameter on thought / entity description
+# hooks. Kept as a module constant so tests and RuntimeMemoryObserver can
+# reuse the same whitelist without string-literal drift.
+THOUGHT_SOURCES: tuple[str, ...] = ("reflection", "slow_tick", "import")
+ENTITY_DESCRIPTION_SOURCES: tuple[str, ...] = ("slow_tick", "owner")
 
 
 @runtime_checkable
@@ -75,11 +92,17 @@ class MemoryEventObserver(Protocol):
         """
         ...
 
-    def on_thought_created(self, thought: ConceptNode) -> None:
-        """Called after a new ConceptNode(type='thought') row commits.
+    def on_thought_created(self, thought: ConceptNode, source: str) -> None:
+        """Called after a new ConceptNode(type='thought'|'intention'|'expectation') row commits.
 
-        Like on_event_created, fired by both consolidate reflection and
-        import pipeline.
+        `source` is one of `THOUGHT_SOURCES` and tells the observer
+        which write path produced this node:
+
+        - `'reflection'` — SHOCK / TIMER reflection path inside
+          `consolidate_session` (fast loop)
+        - `'slow_tick'` — slow_cycle G phase (cross-session, forward-
+          looking reasoning; also the parallel-existing reflection path)
+        - `'import'` — import pipeline `bulk_create_thoughts`
         """
         ...
 
@@ -142,6 +165,32 @@ class MemoryEventObserver(Protocol):
         """
         ...
 
+    # --- L5 entity hooks -------------------------------------------
+
+    def on_entity_confirmed(self, entity: Entity) -> None:
+        """Called after a L5 Entity row is resolved (new, alias-matched,
+        or merged into an existing canonical).
+
+        Fires on every successful path through `resolve_entity` and on
+        the `merged` branch of `apply_entity_clarification`. Consumers
+        that present to user-facing UI should filter on
+        `entity.merge_status == 'confirmed'` — uncertain entities are
+        admin-only per plan §3.1.
+        """
+        ...
+
+    def on_entity_description_updated(self, entity: Entity, source: str) -> None:
+        """Called after an Entity's `description` column is written.
+
+        `source` is one of `ENTITY_DESCRIPTION_SOURCES`:
+
+        - `'slow_tick'` — slow_cycle synthesized a description after
+          `linked_events_count` crossed threshold
+        - `'owner'` — operator wrote via
+          `PATCH /api/admin/memory/entities/{id}` (owner_override=True)
+        """
+        ...
+
 
 class NullObserver:
     """Default no-op observer. Used when a backend is constructed without
@@ -157,7 +206,7 @@ class NullObserver:
     def on_event_created(self, event: ConceptNode) -> None:
         pass
 
-    def on_thought_created(self, thought: ConceptNode) -> None:
+    def on_thought_created(self, thought: ConceptNode, source: str) -> None:
         pass
 
     def on_core_block_appended(self, append: CoreBlockAppend) -> None:
@@ -189,6 +238,14 @@ class NullObserver:
     ) -> None:
         pass
 
+    # --- Entity no-ops ---------------------------------------------
+
+    def on_entity_confirmed(self, entity: Entity) -> None:
+        pass
+
+    def on_entity_description_updated(self, entity: Entity, source: str) -> None:
+        pass
+
 
 # ---------------------------------------------------------------------------
 # Lifecycle observer registry (round 4)
@@ -214,11 +271,12 @@ def register_observer(obs: MemoryEventObserver) -> None:
     """Register a memory event observer.
 
     Lifecycle hooks (`on_new_session_started` / `on_session_closed` /
-    `on_mood_updated`) are fired to every registered observer after the
-    relevant transaction commits. Per-write hooks
-    (`on_message_ingested` etc.) are NOT fired through this registry —
-    they are invoked per-call via explicit `observer=` parameters on
-    individual write APIs.
+    `on_mood_updated` / `on_event_created` / `on_thought_created` /
+    `on_entity_confirmed` / `on_entity_description_updated`) are fired
+    to every registered observer after the relevant transaction commits.
+    Pure per-write hooks (`on_message_ingested` / `on_core_block_appended`)
+    are NOT fired through this registry — they are invoked per-call via
+    explicit `observer=` parameters on individual write APIs.
 
     Thread-unsafe; caller ensures single-threaded registration. In
     practice runtime registers exactly one observer during
@@ -263,8 +321,10 @@ def _fire_lifecycle(method_name: str, *args: object) -> None:
 
 
 __all__ = [
+    "ENTITY_DESCRIPTION_SOURCES",
     "MemoryEventObserver",
     "NullObserver",
+    "THOUGHT_SOURCES",
     "register_observer",
     "unregister_observer",
 ]

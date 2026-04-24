@@ -44,6 +44,7 @@ import type {
   MemorySearchResponse,
   MemorySearchType,
   MemoryThought,
+  MemoryTimelineResponse,
   OnboardingPayload,
   OnboardingResponse,
   PersonaBootstrapRequest,
@@ -502,6 +503,25 @@ export async function getMemoryThoughts(
 ): Promise<MemoryListResponse<MemoryThought>> {
   return fetchJson<MemoryListResponse<MemoryThought>>(
     _memoryListPath('/api/admin/memory/thoughts', limit, offset),
+  )
+}
+
+/**
+ * GET /api/admin/memory/timeline — Spec 3 backfill for the chat
+ * Memory Timeline sidebar. Returns a mixed, DESC-sorted list of
+ * L3 events / L4 thoughts / L5 entities / L6 mood / session closes.
+ * Pass ``since`` (an ISO timestamp — typically the oldest row
+ * currently rendered) to page older.
+ */
+export async function getMemoryTimeline(
+  limit = 50,
+  since: string | null = null,
+): Promise<MemoryTimelineResponse> {
+  const params = new URLSearchParams()
+  params.set('limit', String(limit))
+  if (since !== null) params.set('since', since)
+  return fetchJson<MemoryTimelineResponse>(
+    `/api/admin/memory/timeline?${params.toString()}`,
   )
 }
 

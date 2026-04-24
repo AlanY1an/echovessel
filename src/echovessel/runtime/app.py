@@ -715,6 +715,7 @@ class Runtime:
             self._memory_observer = RuntimeMemoryObserver(
                 registry=self.ctx.registry,
                 loop=self.ctx.loop,
+                engine=self.ctx.engine,
             )
             register_observer(self._memory_observer)
             log.info("memory observer: registered")

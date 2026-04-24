@@ -50,6 +50,7 @@ from echovessel.memory.models import (
     Entity,
     EntityAlias,
 )
+from echovessel.memory.observers import ENTITY_DESCRIPTION_SOURCES, _fire_lifecycle
 
 log = logging.getLogger(__name__)
 
@@ -131,6 +132,7 @@ def resolve_entity(
         matched = _find_entity_by_alias(db, alias=name, persona_id=persona_id, user_id=user_id)
         if matched is not None:
             _add_aliases(db, entity_id=matched.id, new_aliases=all_names)
+            _fire_lifecycle("on_entity_confirmed", matched)
             return matched.id, "alias_match"
 
     # ------------------------------------------------------------------
@@ -158,6 +160,9 @@ def resolve_entity(
     if best_candidate_id is not None and best_cosine > EMBEDDING_MERGE_THRESHOLD_HIGH:
         # High confidence — merge into existing, add new aliases.
         _add_aliases(db, entity_id=best_candidate_id, new_aliases=all_names)
+        matched = db.get(Entity, best_candidate_id)
+        if matched is not None:
+            _fire_lifecycle("on_entity_confirmed", matched)
         return best_candidate_id, "embedding_high"
 
     if best_candidate_id is not None and best_cosine > EMBEDDING_MERGE_THRESHOLD_LOW:
@@ -174,6 +179,7 @@ def resolve_entity(
         )
         backend.insert_entity_vector(entity.id, new_embedding, conn=db.connection())
         _add_aliases(db, entity_id=entity.id, new_aliases=all_names)
+        _fire_lifecycle("on_entity_confirmed", entity)
         return entity.id, "embedding_low"
 
     # ------------------------------------------------------------------
@@ -191,6 +197,7 @@ def resolve_entity(
     )
     backend.insert_entity_vector(entity.id, new_embedding, conn=db.connection())
     _add_aliases(db, entity_id=entity.id, new_aliases=all_names)
+    _fire_lifecycle("on_entity_confirmed", entity)
     return entity.id, "new"
 
 
@@ -460,6 +467,8 @@ def apply_entity_clarification(
         db.add(winner)
         db.add(loser)
         db.commit()
+        db.refresh(winner)
+        _fire_lifecycle("on_entity_confirmed", winner)
         return winner.id, "merged"
 
     # Not the same — split cleanly.
@@ -468,6 +477,39 @@ def apply_entity_clarification(
     db.add(loser)
     db.commit()
     return loser.id, "disambiguated"
+
+
+def update_entity_description(
+    db: DbSession,
+    *,
+    entity_id: int,
+    description: str,
+    source: str,
+) -> Entity | None:
+    """Write `description` to an Entity row, commit, fire hook.
+
+    `source` is one of `ENTITY_DESCRIPTION_SOURCES` — `'slow_tick'` for
+    the slow_cycle synthesizer (plan §2.2 · triggers when
+    `linked_events_count` crosses threshold) or `'owner'` for operator
+    writes via `PATCH /api/admin/memory/entities/{id}`.
+
+    Returns the refreshed Entity, or None if the id does not exist or
+    is soft-deleted. The observer hook fires only on a successful write.
+    """
+    if source not in ENTITY_DESCRIPTION_SOURCES:
+        raise ValueError(
+            f"update_entity_description: source must be one of "
+            f"{ENTITY_DESCRIPTION_SOURCES!r}, got {source!r}"
+        )
+    entity = db.get(Entity, entity_id)
+    if entity is None or entity.deleted_at is not None:
+        return None
+    entity.description = description
+    db.add(entity)
+    db.commit()
+    db.refresh(entity)
+    _fire_lifecycle("on_entity_description_updated", entity, source)
+    return entity
 
 
 __all__ = [
@@ -480,4 +522,5 @@ __all__ = [
     "apply_entity_clarification",
     "detect_mention_dedup",
     "resolve_entity",
+    "update_entity_description",
 ]

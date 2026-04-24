@@ -32,7 +32,7 @@ from echovessel.memory.models import (
     RecallMessage,
     Session,
 )
-from echovessel.memory.observers import MemoryEventObserver
+from echovessel.memory.observers import MemoryEventObserver, _fire_lifecycle
 from echovessel.memory.sessions import (
     drain_and_fire_pending_lifecycle_events,
     track_pending_session_closed,
@@ -545,16 +545,18 @@ async def consolidate_session(
         # Post-commit observer notifications for created events — only on
         # the fresh-extraction path; the skip branch already fired these
         # on the prior attempt.
-        if observer is not None and created_events:
+        if created_events:
             for n in created_events:
-                try:
-                    observer.on_event_created(n)
-                except Exception as e:  # noqa: BLE001
-                    log.warning(
-                        "observer.on_event_created raised (event id=%s): %s",
-                        n.id,
-                        e,
-                    )
+                if observer is not None:
+                    try:
+                        observer.on_event_created(n)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning(
+                            "observer.on_event_created raised (event id=%s): %s",
+                            n.id,
+                            e,
+                        )
+                _fire_lifecycle("on_event_created", n)
 
         # L5 · write_entities + junction (plan §6.2 step 1 · decision 4).
         # Happens post-event-commit so every ConceptNode.id we reference
@@ -599,7 +601,7 @@ async def consolidate_session(
                 db.refresh(summary_node)
                 if observer is not None:
                     try:
-                        observer.on_thought_created(summary_node)
+                        observer.on_thought_created(summary_node, "reflection")
                     except Exception as e:  # noqa: BLE001
                         log.warning(
                             "observer.on_thought_created raised "
@@ -607,6 +609,7 @@ async def consolidate_session(
                             summary_node.id,
                             e,
                         )
+                _fire_lifecycle("on_thought_created", summary_node, "reflection")
             except Exception as e:  # noqa: BLE001
                 # Summary write is decorative — never let it fail the
                 # session-close transition.
@@ -680,16 +683,17 @@ async def consolidate_session(
                     db.refresh(t)
 
                 # Post-commit observer notifications for thoughts
-                if observer is not None:
-                    for t in created_thoughts:
+                for t in created_thoughts:
+                    if observer is not None:
                         try:
-                            observer.on_thought_created(t)
+                            observer.on_thought_created(t, "reflection")
                         except Exception as e:  # noqa: BLE001
                             log.warning(
                                 "observer.on_thought_created raised (thought id=%s): %s",
                                 t.id,
                                 e,
                             )
+                    _fire_lifecycle("on_thought_created", t, "reflection")
 
     # --- F-pre. L6 episodic_state update (plan §6.2 step 6) -------------
     # Reuse the extraction LLM's ``session_mood_signal`` output — zero

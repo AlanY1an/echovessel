@@ -87,6 +87,7 @@ from echovessel.memory.models import (
     ConceptNode,
     ConceptNodeFilling,
     CoreBlockAppend,
+    Entity,
     RecallMessage,
     User,
 )
@@ -1819,6 +1820,207 @@ def build_admin_router(
             "offset": offset,
             "total": total,
             "items": items,
+        }
+
+    # ---- GET /api/admin/memory/timeline (Spec 3) -----------------------
+    #
+    # Backfill endpoint for the chat Memory Timeline sidebar. The hook
+    # calls this once on mount, then switches to live SSE subscription
+    # (`memory.event.created` / `memory.thought.created` / …) for
+    # subsequent updates. ``since`` acts as a pagination cursor: pass
+    # the oldest `timestamp` currently rendered to fetch the next older
+    # page. Omit it for the initial fetch.
+
+    @router.get("/api/admin/memory/timeline")
+    async def get_memory_timeline(
+        since: Annotated[datetime | None, Query()] = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> dict[str, Any]:
+        persona_id = _persona_id()
+
+        with _open_db() as db:
+            items: list[dict[str, Any]] = []
+
+            # --- L3 / L4 nodes (events + thoughts/intentions/expectations) ---
+            node_stmt = select(ConceptNode).where(
+                ConceptNode.persona_id == persona_id,
+                ConceptNode.user_id == user_id,
+                ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+            )
+            if since is not None:
+                node_stmt = node_stmt.where(ConceptNode.created_at < since)
+            # Cap at limit per source so a burst of events doesn't starve
+            # the other kinds. We re-slice after merge.
+            node_stmt = node_stmt.order_by(ConceptNode.created_at.desc()).limit(limit)  # type: ignore[union-attr]
+            for node in db.exec(node_stmt).all():
+                node_type = getattr(node.type, "value", node.type)
+                kind = "event" if node_type == "event" else "thought"
+                items.append(
+                    {
+                        "kind": kind,
+                        "timestamp": node.created_at.isoformat() if node.created_at else None,
+                        "data": {
+                            "node_id": node.id,
+                            "type": node_type,
+                            "subject": node.subject,
+                            "description": node.description,
+                            "emotional_impact": int(node.emotional_impact),
+                            "session_id": node.source_session_id,
+                        },
+                    }
+                )
+
+            # --- L5 entities (confirmed only; uncertain stays admin-only) ---
+            ent_stmt = select(Entity).where(
+                Entity.persona_id == persona_id,
+                Entity.user_id == user_id,
+                Entity.deleted_at.is_(None),  # type: ignore[union-attr]
+                Entity.merge_status != "uncertain",
+            )
+            if since is not None:
+                ent_stmt = ent_stmt.where(Entity.created_at < since)
+            ent_stmt = ent_stmt.order_by(Entity.created_at.desc()).limit(limit)  # type: ignore[union-attr]
+            for ent in db.exec(ent_stmt).all():
+                items.append(
+                    {
+                        "kind": "entity",
+                        "timestamp": ent.created_at.isoformat() if ent.created_at else None,
+                        "data": {
+                            "entity_id": ent.id,
+                            "canonical_name": ent.canonical_name,
+                            "kind": ent.kind,
+                            "merge_status": ent.merge_status,
+                        },
+                    }
+                )
+                # Separate `entity_description` row if the description
+                # was set after creation. Picks up slow_tick / owner
+                # writes in the backfill.
+                if (
+                    ent.description
+                    and ent.updated_at
+                    and ent.created_at
+                    and ent.updated_at > ent.created_at
+                ):
+                    items.append(
+                        {
+                            "kind": "entity_description",
+                            "timestamp": ent.updated_at.isoformat(),
+                            "data": {
+                                "entity_id": ent.id,
+                                "canonical_name": ent.canonical_name,
+                                "kind": ent.kind,
+                                "description": ent.description,
+                                # Backfill source is opaque — we can't
+                                # distinguish slow_tick vs owner from the
+                                # stored row. Report 'unknown' rather
+                                # than guessing.
+                                "source": "unknown",
+                            },
+                        }
+                    )
+
+            # --- Session closes (extracted sessions) ----------------------
+            sess_stmt = select(RecallSession).where(
+                RecallSession.persona_id == persona_id,
+                RecallSession.user_id == user_id,
+                RecallSession.deleted_at.is_(None),  # type: ignore[union-attr]
+                RecallSession.status == SessionStatus.CLOSED,
+                RecallSession.extracted_at.is_not(None),  # type: ignore[union-attr]
+            )
+            if since is not None:
+                sess_stmt = sess_stmt.where(RecallSession.extracted_at < since)
+            sess_stmt = sess_stmt.order_by(
+                RecallSession.extracted_at.desc()  # type: ignore[union-attr]
+            ).limit(limit)
+            for sess in db.exec(sess_stmt).all():
+                # Quick counts for this session's outputs.
+                events_count = int(
+                    db.exec(
+                        select(func.count(ConceptNode.id)).where(
+                            ConceptNode.source_session_id == sess.id,
+                            ConceptNode.type == "event",
+                            ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+                        )
+                    ).one()
+                    or 0
+                )
+                thoughts_count = int(
+                    db.exec(
+                        select(func.count(ConceptNode.id)).where(
+                            ConceptNode.source_session_id == sess.id,
+                            ConceptNode.type.in_(  # type: ignore[union-attr]
+                                ("thought", "intention", "expectation")
+                            ),
+                            ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+                        )
+                    ).one()
+                    or 0
+                )
+                duration_seconds = None
+                if sess.closed_at and sess.started_at:
+                    duration_seconds = int(
+                        (sess.closed_at - sess.started_at).total_seconds()
+                    )
+                items.append(
+                    {
+                        "kind": "session_close",
+                        "timestamp": sess.extracted_at.isoformat()
+                        if sess.extracted_at
+                        else None,
+                        "data": {
+                            "session_id": sess.id,
+                            "channel_id": sess.channel_id,
+                            "events_count": events_count,
+                            "thoughts_count": thoughts_count,
+                            "duration_seconds": duration_seconds,
+                            "trivial": bool(sess.trivial),
+                        },
+                    }
+                )
+
+            # --- L6 episodic mood (single row, current state) ------------
+            persona_row = db.get(Persona, persona_id)
+            if persona_row is not None:
+                ep_state = persona_row.episodic_state or {}
+                updated_at_raw = ep_state.get("updated_at")
+                mood_val = ep_state.get("mood")
+                if updated_at_raw and mood_val:
+                    try:
+                        updated_at = datetime.fromisoformat(updated_at_raw)
+                    except (TypeError, ValueError):
+                        updated_at = None
+                    include = updated_at is not None and (
+                        since is None or updated_at < since
+                    )
+                    if include:
+                        items.append(
+                            {
+                                "kind": "mood",
+                                "timestamp": updated_at_raw,
+                                "data": {
+                                    "mood": mood_val,
+                                    "energy": ep_state.get("energy"),
+                                    "last_user_signal": ep_state.get(
+                                        "last_user_signal"
+                                    ),
+                                },
+                            }
+                        )
+
+        # Merge + sort DESC by timestamp, drop rows with a null timestamp
+        # so the cursor contract stays well-defined.
+        items.sort(
+            key=lambda it: (it.get("timestamp") is None, it.get("timestamp") or ""),
+            reverse=True,
+        )
+        items = [it for it in items if it.get("timestamp") is not None][:limit]
+
+        oldest_timestamp: str | None = items[-1]["timestamp"] if items else None
+        return {
+            "items": items,
+            "oldest_timestamp": oldest_timestamp,
+            "limit": limit,
         }
 
     # ---- GET /api/admin/memory/search ----------------------------------
