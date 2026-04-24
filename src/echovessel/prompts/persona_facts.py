@@ -155,7 +155,12 @@ Fact fields and their value rules:
                            "software_engineer") | null
 - occupation_field       · free-form (e.g. "literature", "fintech") | null
 - location               · free-form (e.g. "沈阳", "Bay Area") | null
-- timezone               · IANA tz (e.g. "Asia/Shanghai") | null
+- timezone               · ALWAYS emit null. Timezone is set via admin UI
+                           dropdown (Intl.supportedValuesOf('timeZone'))
+                           because LLM-extracted strings like "Taiwan" or
+                           "台北" are not valid IANA names and get rejected
+                           by the backend validator. Do not attempt to
+                           extract this field even if obvious.
 - relationship_status         · one of: single | married | widowed | divorced | null
 - life_stage             · one of: student | working | retired | new_parent |
                            between_jobs | null

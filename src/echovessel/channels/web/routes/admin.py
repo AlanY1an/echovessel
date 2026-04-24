@@ -172,6 +172,28 @@ class PersonaFactsPayload(BaseModel):
     def _validate_gender(cls, v: str | None) -> str | None:
         return _enum_or_none(v, ENUM_GENDER)
 
+    @field_validator("timezone")
+    @classmethod
+    def _validate_timezone_iana(cls, v: str | None) -> str | None:
+        """Reject non-IANA timezone strings.
+
+        Frontend will pull the dropdown from ``Intl.supportedValuesOf('timeZone')``
+        so admin writes are guaranteed IANA. LLM extraction (persona_facts.py)
+        used to write free-text like "Taiwan" / "台北" — those are rejected here
+        so they can only enter the system via the admin dropdown path.
+        """
+        if v is None or v == "":
+            return None
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as e:
+            raise ValueError(
+                f"timezone must be an IANA name (e.g. 'Asia/Taipei'); got {v!r}"
+            ) from e
+        return v
+
     @field_validator("education_level")
     @classmethod
     def _validate_education_level(cls, v: str | None) -> str | None:
