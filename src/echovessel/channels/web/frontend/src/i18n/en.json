@@ -40,7 +40,58 @@
     "journal_placeholder": "what happened today?",
     "journal_send": "send as journal",
     "journal_toggle_aria": "Toggle journal entry",
-    "voice_input_aria": "Voice input (coming soon)"
+    "voice_input_aria": "Voice input (coming soon)",
+    "timeline": {
+      "title": "Memory",
+      "empty": "No new memories yet · keep chatting · or give the persona a moment",
+      "loading": "Loading⋯",
+      "collapse_aria": "Collapse memory timeline",
+      "expand_aria": "Expand memory timeline",
+      "time": {
+        "just_now": "just now",
+        "minutes": "{{n}}m ago",
+        "hours": "{{n}}h ago",
+        "today": "today {{time}}",
+        "yesterday": "yesterday",
+        "days": "{{n}}d ago"
+      },
+      "entity_kind": {
+        "person": "person",
+        "pet": "pet",
+        "place": "place",
+        "org": "organization",
+        "other": "thing"
+      },
+      "session": {
+        "duration_unknown": "a moment",
+        "duration_seconds": "{{n}}s",
+        "duration_minutes": "{{n}}m"
+      },
+      "filter": {
+        "title": "Filter",
+        "toggle_aria": "Toggle filter menu",
+        "events": "Events",
+        "thoughts": "Reflections",
+        "slow_tick": "Self-reflections (parallel)",
+        "intentions": "Promises",
+        "expectations": "Expectations",
+        "entities": "People / things",
+        "mood": "Mood",
+        "session_close": "Session close",
+        "clear_cache": "Clear local cache"
+      },
+      "item": {
+        "event_created": "Remembered: {{description}}",
+        "thought_slow_tick": "I thought: {{description}}",
+        "thought_reflection": "Summary: {{description}}",
+        "intention": "I promised: {{description}}",
+        "expectation": "I'm expecting: {{description}}",
+        "entity_new": "Met a new {{kind}}: {{canonical_name}}",
+        "entity_description_updated": "Learned more about {{canonical_name}}: {{description}}",
+        "mood_shift": "Mood: {{summary}}",
+        "session_close": "That {{duration}} chat has been digested · remembered {{events}} things · left {{thoughts}} thoughts"
+      }
+    }
   },
   "time": {
     "just_now": "just now",
