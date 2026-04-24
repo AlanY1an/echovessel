@@ -41,6 +41,10 @@ from sqlmodel import Session as DbSession
 from sqlmodel import select
 
 from echovessel.core.types import BlockLabel, NodeType
+from echovessel.memory.consolidate_tracer import (
+    ConsolidateTracer,
+    NullConsolidateTracer,
+)
 from echovessel.memory.imports import append_to_core_block
 from echovessel.memory.models import (
     ConceptNode,
@@ -776,6 +780,7 @@ async def run_slow_cycle(
     recent_thoughts_limit: int = 5,
     transcript_dir: Path | str | None = None,
     observer: MemoryEventObserver | None = None,
+    tracer: ConsolidateTracer | NullConsolidateTracer | None = None,
 ) -> SlowCycleRunResult:
     """Run a single slow cycle for ``(persona_id, user_id)``.
 
@@ -796,15 +801,24 @@ async def run_slow_cycle(
       8. Best-effort: save a transcript for admin debugging.
     """
     persona = db.exec(select(Persona).where(Persona.id == persona_id)).one()
+    tracer = tracer if tracer is not None else NullConsolidateTracer()
 
     # 1. Budget gate.
     stats = get_daily_slow_cycle_stats(db, persona_id=persona_id, now=now)
-    _check_daily_budget(
-        stats,
-        daily_cap=daily_cap,
-        daily_input_token_budget=daily_input_token_budget,
-        daily_output_token_budget=daily_output_token_budget,
-    )
+    try:
+        _check_daily_budget(
+            stats,
+            daily_cap=daily_cap,
+            daily_input_token_budget=daily_input_token_budget,
+            daily_output_token_budget=daily_output_token_budget,
+        )
+    except SlowCycleBudgetExceeded as e:
+        tracer.record_phase_g(
+            ran=False,
+            cool_down_ok=True,
+            budget_check=str(e),
+        )
+        raise
 
     # 2. Collect inputs.
     since = persona.last_slow_tick_at or (
@@ -814,6 +828,9 @@ async def run_slow_cycle(
         db, persona_id=persona_id, user_id=user_id, since=since
     )
     if not recent_events:
+        tracer.record_phase_g(
+            ran=False, cool_down_ok=True, budget_check="ok", slow_cycle_prompt=None
+        )
         return SlowCycleRunResult(ran=False, skipped_reason="no_new_events")
 
     self_block_text = _load_self_block_text(db, persona_id=persona_id)
@@ -942,6 +959,21 @@ async def run_slow_cycle(
             input_payload=input_payload,
             output_payload=output_payload,
         )
+
+    nodes_written: list[dict] = [
+        {"kind": "thought", "id": tid} for tid in thought_ids
+    ] + [
+        {"kind": "expectation", "id": eid} for eid in expectation_ids
+    ]
+    tracer.record_phase_g(
+        ran=True,
+        cool_down_ok=True,
+        budget_check="ok",
+        slow_cycle_prompt=None,
+        slow_cycle_response_raw=None,
+        nodes_written=nodes_written,
+        self_append_attempted=bool(output.self_narrative_append),
+    )
 
     return SlowCycleRunResult(
         ran=True,
