@@ -167,7 +167,7 @@ slow_tick does not run inside runtime — it lives as the G phase appended to `c
 
 ### Memory observer wiring
 
-`RuntimeMemoryObserver` (in `src/echovessel/runtime/memory_observers.py`) implements every lifecycle hook on the memory `MemoryEventObserver` Protocol and converts each into an SSE topic broadcast to every channel that exposes `push_sse`. Today only the Web channel exposes it; non-web channels (Discord, etc.) are silently skipped.
+`RuntimeMemoryObserver` (in `src/echovessel/runtime/wiring/memory_observer.py`) implements every lifecycle hook on the memory `MemoryEventObserver` Protocol and converts each into an SSE topic broadcast to every channel that exposes `push_sse`. Today only the Web channel exposes it; non-web channels (Discord, etc.) are silently skipped.
 
 Memory's lifecycle hooks are defined as **sync** methods on the Protocol — memory cannot import asyncio because its write path is synchronous and runs inside SQLite's single-writer lock. Runtime's observer implementation is also sync, which means its methods return immediately; the real work of broadcasting the event to channels is scheduled onto the runtime event loop via `asyncio.run_coroutine_threadsafe(self._broadcast(...), self._loop)`.
 

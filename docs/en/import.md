@@ -143,7 +143,7 @@ Because the facade fan-outs every event to every subscriber queue, a late subscr
 
 ### Runtime integration
 
-The import pipeline and the runtime are sibling layers in the five-module architecture, and the layering contract forbids sibling-to-sibling imports: `channels.web` cannot import from `import_.pipeline` directly. The mediator is `src/echovessel/runtime/importer_facade.py`, which exposes the four methods any caller needs:
+The import pipeline and the runtime are sibling layers in the five-module architecture, and the layering contract forbids sibling-to-sibling imports: `channels.web` cannot import from `import_.pipeline` directly. The mediator is `src/echovessel/runtime/wiring/importer.py`, which exposes the four methods any caller needs:
 
 - `start_pipeline(upload_id, *, raw_bytes, suffix, persona_id, user_id, ...) -> pipeline_id` — allocates a pipeline id, builds a `ProgressSnapshot`, and spawns `asyncio.create_task(run_pipeline(...))`. Emits a `pipeline.registered` event immediately so subscribers know the id is live.
 - `cancel_pipeline(pipeline_id)` — marks the pipeline cancelled and calls `task.cancel()`. The pipeline's `asyncio.CancelledError` handler writes the progress snapshot so a later resume is possible.
@@ -254,4 +254,4 @@ Two common mistakes to avoid when writing such a hook. First, do not mutate the 
 
 ---
 
-The authoritative sources for everything above are the files under `src/echovessel/import_/` and `src/echovessel/runtime/importer_facade.py`; the code carries the same invariants as this document and, when the two disagree, the code wins. The test suite under `tests/import_/` is the executable specification and is the fastest way to verify any extension you make.
+The authoritative sources for everything above are the files under `src/echovessel/import_/` and `src/echovessel/runtime/wiring/importer.py`; the code carries the same invariants as this document and, when the two disagree, the code wins. The test suite under `tests/import_/` is the executable specification and is the fastest way to verify any extension you make.
