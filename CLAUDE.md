@@ -31,23 +31,37 @@ Local-first Python daemon that runs a digital persona with long-term memory, voi
 ```
 src/echovessel/
 ├── core/            shared primitives, no upward deps
-├── memory/          L1–L4 memory: ingest, retrieve, consolidate, forget
-├── voice/           TTS / STT abstractions
+├── memory/          L1–L4 memory: ingest / retrieve/ / consolidate/ / forget
+│   ├── retrieve/    core + scoring + search (D1)
+│   └── consolidate/ core + phase_a + phase_bce + tracer (D2)
+├── voice/           TTS / STT abstractions; types.py for value objects
 ├── channels/        web / discord / imessage / wechat adapters
+│   └── web/routes/admin/   models + helpers split out (E1a)
 ├── proactive/       idle-trigger worker
+│   ├── core/        Protocols, value types, config, errors
+│   ├── engines/     decision logic (policy + generator)
+│   └── execution/   delivery (scheduler / queue / delivery / audit)
 ├── prompts/         prompt templates + reflection/judge prompts
 ├── import_/         external conversation import pipeline
-├── runtime/         daemon, TurnDispatcher, scheduler, launcher, CLI
+├── runtime/         daemon, launcher, CLI, app.py orchestration
+│   ├── llm/         provider abstractions
+│   ├── turn/        per-turn pipeline (coordinator, prompt_assembly, dispatcher, tracer)
+│   ├── loops/       background asyncio tick loops (consolidate_worker, idle_scanner)
+│   └── wiring/      DI composition root (memory / importer / prompts / observers)
 └── resources/       bundled config.toml.sample + env.sample
 ```
 
-**Layered architecture — enforced by `import-linter`:**
+**Layered architecture — enforced by `import-linter` (4 contracts):**
 
 ```
 runtime  →  channels | proactive  →  memory | voice  →  core
 ```
 
-Plus a forbidden contract: **`proactive` MUST NOT import `runtime` or `prompts`.**
+Plus three forbidden / sub-package contracts:
+
+- **`proactive` MUST NOT import `runtime` or `prompts`.**
+- **`proactive` sub-packages layer execution → engines → core.** A reverse import is a regression — core is foundational, engines decide before execution delivers.
+- **`runtime.wiring` MUST NOT import `runtime.turn` or `runtime.loops`.** Wiring is the composition root (build once, hand out everywhere); coupling it to per-turn or background-loop code breaks that model.
 
 Any PR that crosses these layers fails `uv run lint-imports`. Don't add a shim to bypass — redesign the call path.
 
