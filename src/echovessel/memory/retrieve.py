@@ -837,6 +837,7 @@ def list_concept_nodes(
     node_type: NodeType,
     limit: int = 20,
     offset: int = 0,
+    subject: str | None = None,
 ) -> tuple[list[ConceptNode], int]:
     """Pure ConceptNode timeline query for the admin Memory tabs.
 
@@ -861,6 +862,11 @@ def list_concept_nodes(
         offset: Number of rows to skip from the head of the DESC order
             (i.e. "page through older entries"). Negative values are
             clamped to 0.
+        subject: v0.5 hotfix · optional filter on ``ConceptNode.subject``
+            (``'user'`` / ``'persona'`` / ``'shared'``). ``None`` keeps
+            the legacy behaviour (no filter). Used by the admin
+            Persona tab to surface only ``subject='persona'`` thoughts
+            for the Reflection section.
 
     Returns:
         ``(rows, total)`` where ``rows`` is a list of ConceptNode in
@@ -871,12 +877,14 @@ def list_concept_nodes(
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
 
-    base_filters = (
+    base_filters: tuple = (
         ConceptNode.persona_id == persona_id,
         ConceptNode.user_id == user_id,
         ConceptNode.type == node_type,
         ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
     )
+    if subject is not None:
+        base_filters = (*base_filters, ConceptNode.subject == subject)
 
     page_stmt = (
         select(ConceptNode)

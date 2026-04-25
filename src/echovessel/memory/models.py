@@ -25,6 +25,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -609,6 +610,19 @@ class Entity(SQLModel, table=True):
     # Three-tier dedup state (plan decision 4).
     merge_status: str = Field(default="confirmed")  # confirmed|uncertain|disambiguated
     merge_target_id: int | None = Field(default=None, foreign_key="entities.id")
+
+    # v0.5 · once an owner edits a description through the admin UI,
+    # ``owner_override`` flips to True and the slow_cycle synthesizer
+    # must skip this entity (plan §2.2 protects manual edits from being
+    # overwritten by automated description generation).
+    owner_override: bool = Field(
+        default=False,
+        sa_column=Column(
+            Boolean,
+            nullable=False,
+            server_default=text("0"),
+        ),
+    )
 
     created_at: datetime = Field(
         sa_column=Column(DateTime, nullable=False, server_default=func.now())

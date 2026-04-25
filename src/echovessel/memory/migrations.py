@@ -185,6 +185,20 @@ _V0_4_USER_COLUMNS: tuple[_ColumnSpec, ...] = (
 )
 
 
+# v0.5 hotfix · admin Persona tab Social Graph section needs a flag
+# that tells the slow_cycle description synthesizer "owner edited this
+# manually, leave it alone" (plan §2.2 protects manual edits from
+# being clobbered by automated description generation). Defaults to
+# 0 so legacy rows behave as if untouched.
+_V0_5_ENTITY_COLUMNS: tuple[_ColumnSpec, ...] = (
+    _ColumnSpec(
+        table="entities",
+        column="owner_override",
+        sql_type="BOOLEAN NOT NULL DEFAULT 0",
+    ),
+)
+
+
 # Three new tables for the L5 entity family. `entities_vec` is a
 # virtual table created from `db.py::create_all_tables` (same pattern
 # as `concept_nodes_vec`), not listed here.
@@ -379,6 +393,7 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
             *_PERSONA_FACTS_COLUMNS,
             *_LLM_CALLS_COLUMNS,
             *_V0_4_CONCEPT_NODE_COLUMNS,
+            *_V0_5_ENTITY_COLUMNS,
             *_V0_4_PERSONA_COLUMNS,
             *_V0_4_USER_COLUMNS,
         ):
