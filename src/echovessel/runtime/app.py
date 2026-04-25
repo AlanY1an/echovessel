@@ -61,10 +61,10 @@ from echovessel.proactive import (
 )
 from echovessel.runtime.channel_registry import ChannelRegistry
 from echovessel.runtime.config import Config, load_config
-from echovessel.runtime.consolidate_worker import ConsolidateWorker
-from echovessel.runtime.idle_scanner import IdleScanner
 from echovessel.runtime.importer_facade import ImporterFacade
 from echovessel.runtime.llm import LLMProvider, build_llm_provider
+from echovessel.runtime.loops.consolidate_worker import ConsolidateWorker
+from echovessel.runtime.loops.idle_scanner import IdleScanner
 from echovessel.runtime.memory_facade import (
     MemoryFacade,
     ProactiveChannelRegistry,

@@ -43,8 +43,8 @@ from echovessel.memory.consolidate import (
 )
 from echovessel.memory.ingest import ingest_message
 from echovessel.memory.models import ConceptNode
-from echovessel.runtime.consolidate_worker import ConsolidateWorker
 from echovessel.runtime.llm.errors import LLMTransientError
+from echovessel.runtime.loops.consolidate_worker import ConsolidateWorker
 
 
 def _seed(db: DbSession) -> None:

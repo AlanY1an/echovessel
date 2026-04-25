@@ -14,7 +14,7 @@ from echovessel.memory import (
     create_all_tables,
     create_engine,
 )
-from echovessel.runtime.idle_scanner import IdleScanner
+from echovessel.runtime.loops.idle_scanner import IdleScanner
 
 
 def _seed(engine) -> None:

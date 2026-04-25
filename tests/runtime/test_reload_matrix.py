@@ -146,7 +146,7 @@ class TestReloadMatrixConsolidate:
         rt, toml = _build(tmp_path)
         # Stand in a minimal worker for the test (Runtime.build doesn't
         # construct one — that's Runtime.start's job).
-        from echovessel.runtime.consolidate_worker import ConsolidateWorker
+        from echovessel.runtime.loops.consolidate_worker import ConsolidateWorker
 
         rt._worker = ConsolidateWorker(
             db_factory=lambda: None,  # type: ignore[arg-type]
@@ -171,7 +171,7 @@ class TestReloadMatrixConsolidate:
 
     async def test_trivial_token_count_mirrors_to_worker(self, tmp_path, monkeypatch):
         rt, toml = _build(tmp_path)
-        from echovessel.runtime.consolidate_worker import ConsolidateWorker
+        from echovessel.runtime.loops.consolidate_worker import ConsolidateWorker
 
         rt._worker = ConsolidateWorker(
             db_factory=lambda: None,  # type: ignore[arg-type]
@@ -196,7 +196,7 @@ class TestReloadMatrixConsolidate:
 
     async def test_reflection_hard_gate_mirrors_to_worker(self, tmp_path, monkeypatch):
         rt, toml = _build(tmp_path)
-        from echovessel.runtime.consolidate_worker import ConsolidateWorker
+        from echovessel.runtime.loops.consolidate_worker import ConsolidateWorker
 
         rt._worker = ConsolidateWorker(
             db_factory=lambda: None,  # type: ignore[arg-type]
