@@ -70,7 +70,7 @@ Register channels with the channel registry. Any channel instance passed into `R
 
 Start all channels. `await registry.start_all()` runs each channel's `start()` concurrently. A channel that fails to start logs an error and is left unregistered; the daemon keeps booting so the other subsystems stay available.
 
-Construct and register the runtime memory observer. `RuntimeMemoryObserver(registry, loop)` is created and passed to `register_observer(...)` from the memory module. From this point on, whenever memory commits a session close, a new session start, or a mood update, the observer fans the event out to every channel in the registry that exposes a `push_sse()` capability.
+Construct and register the runtime memory observer. `RuntimeMemoryObserver(registry, loop, engine)` is created and passed to `register_observer(...)` from the memory module. From this point on, whenever memory commits a lifecycle event — event creation, thought creation, entity confirmation, entity description update, session open / close, mood change — the observer fans it out to every channel in the registry that exposes a `push_sse()` capability. Web is currently the only consumer: its chat-page Memory Timeline panel subscribes to these topics for real-time updates. See [Cross-Channel SSE topic catalog](#cross-channel-sse-topic-catalog) below.
 
 Populate `ctx.persona.voice_enabled` from config. The bool from `[persona].voice_enabled` is copied into the mutable `RuntimePersonaContext` so that interaction and proactive both read the same in-memory value at turn time.
 
@@ -139,19 +139,21 @@ The persona reply is written to memory **before** the channel is told to send. I
 2. `# Right now` — dual-timezone. Line one is the user's local wall-clock (`IncomingMessage.received_at`, with tz). When `personas.timezone` carries an IANA zone, line two appends the persona's "conceptually based" time. Both lines render so the persona can answer "isn't it afternoon for you?" in user-local terms while still tracking its own implied location.
 3. `# Who you are` — seven biographic facts from `PersonaFactsView`: `Name / Gender / Born / Nationality / Based in / Occupation / Native language`. Each `None` field skips its bullet; an all-`None` view skips the whole section. `timezone` is on the view but only feeds the dual-tz renderer in `# Right now`, never a bullet.
 4. `# How you feel right now` — L6 episodic state. Skipped entirely while mood is the default `neutral` (keeps the prompt terse). Otherwise renders `mood`, `energy /10`, and (when present) a `last sense from them` line.
-5. L1 core blocks in this order: `# Persona` / `# About yourself (private self-narrative)` / `# About the user` / `# Relationship` / `# Style preferences`. Missing blocks are silently skipped.
-6. `# Entity disambiguation pending` — injected by retrieve only when the current query alias-matches an entity with `merge_status='uncertain'`. Describes the ambiguity and asks the LLM to clarify with the user mid-flow.
-7. `STYLE_INSTRUCTIONS` — hardcoded · always last. Carries the F10 transport-name ban, the competence-boundary lines ("我刚才说错了" / "I got that wrong" · do not retrofit · do not invent), and the negative few-shot block lifted from `prompts/judge.py` anti-patterns (formulaic opener / generic affect label / empty reassurance / strategy lock, etc).
+5. L1 core blocks in this order (3 sections total): `# Persona` / `# About the user` / `# Style preferences`. Missing blocks are silently skipped. Every L1 block is human-authored — onboarding, the admin UI, or import bootstrap; code paths never auto-update them.
+6. `# About {canonical_name}` — injected by retrieve when an entity-anchor hit lands on a `merge_status='confirmed'` entity that has a non-empty `description`. One section per matched entity. The description text is either slow_tick-synthesized or owner-edited via `PATCH /api/admin/memory/entities/{id}`.
+7. `# Entity disambiguation pending` — injected by retrieve only when the current query alias-matches an entity with `merge_status='uncertain'`. Describes the ambiguity and asks the LLM to clarify with the user mid-flow.
+8. `STYLE_INSTRUCTIONS` — hardcoded · always last. Carries the F10 transport-name ban, the competence-boundary lines ("我刚才说错了" / "I got that wrong" · do not retrofit · do not invent), and the negative few-shot block lifted from `prompts/judge.py` anti-patterns (formulaic opener / generic affect label / empty reassurance / strategy lock, etc).
 
 **User prompt (`build_user_prompt`)** — section order, walking older context first:
 
 1. `# Recent sessions` — up to five most-recent `session_summary` L4 thoughts (each session-close yields one as a side-effect of the extraction LLM). Each line carries a day-bucket prefix (`[Older] / [Earlier this week] / [Yesterday] / [Earlier today] / [Just now]`). Skipped when empty.
 2. `# Recent thoughts you've had about this person` — descriptions of `type='thought'` rows from the retrieve rerank top_k. Skipped when empty.
 3. `# About {speaker}` — pinned L4 thoughts from `force_load_user_thoughts=10` (ranked by recency × importance, bypassing query similarity). IDs already returned by the previous section are excluded at the retrieve layer so there's no duplication. `{speaker}` is `User.display_name`, falling back to `them`.
-4. `# Recent things you remember happened` — `type='event'` rows from the rerank top_k, each appended with the R4 day-precision delta phrase (`· event 2026-04-26~2026-05-02 · status=active (3 days in)`). Atemporal events render without a phrase.
-5. `# Promises you've made` — currently active persona-side intentions (`subject='persona'` AND `type='intention'` AND `event_time_end >= now` or NULL). Each line also carries a delta phrase.
-6. `# Our recent conversation` — the L2 ~20-message tail grouped under day-bucket headers, OLDER → NEWER (`## Older` → `## Just now`). Each line is `them:` / `me:` rather than the literal `user:` / `persona:`. Conversational pronouns keep the tone consistent and never expose the internal role labels.
-7. `# What they just said` — what the user typed this turn (a multi-message burst is joined with newlines).
+4. `# How you see yourself lately` — pinned L4 thoughts from `force_load_persona_thoughts=5` (`subject='persona'`, ranked by recency, bypassing query similarity). This is where the persona's accumulating self-image is rendered into the prompt — L1.persona is the human-authored static identity, while this section is the slow_tick-grown current self-reflection. Skipped when empty.
+5. `# Recent things you remember happened` — `type='event'` rows from the rerank top_k, each appended with the R4 day-precision delta phrase (`· event 2026-04-26~2026-05-02 · status=active (3 days in)`). Atemporal events render without a phrase.
+6. `# Promises you've made` — currently active persona-side intentions (`subject='persona'` AND `type='intention'` AND `event_time_end >= now` or NULL). Each line also carries a delta phrase.
+7. `# Our recent conversation` — the L2 ~20-message tail grouped under day-bucket headers, OLDER → NEWER (`## Older` → `## Just now`). Each line is `them:` / `me:` rather than the literal `user:` / `persona:`. Conversational pronouns keep the tone consistent and never expose the internal role labels.
+8. `# What they just said` — what the user typed this turn (a multi-message burst is joined with newlines).
 
 The auxiliary data needed to render the ConceptNode-backed sections (speaker_display, active_intentions, recent_session_summaries) is fetched up-front in `assemble_turn` and threaded into `build_turn_user_prompt`, so `build_user_prompt` stays a pure renderer with no DB session.
 
@@ -165,9 +167,48 @@ slow_tick does not run inside runtime — it lives as the G phase appended to `c
 
 ### Memory observer wiring
 
-Memory's lifecycle hooks (`on_session_closed`, `on_new_session_started`, `on_mood_updated`) are defined as **sync** methods on the `MemoryEventObserver` Protocol — memory cannot import asyncio because its write path is synchronous and runs inside SQLite's single-writer lock. Runtime's observer implementation is also sync, which means its methods return immediately; the real work of broadcasting the event to channels is scheduled onto the runtime event loop via `asyncio.run_coroutine_threadsafe(self._broadcast(...), self._loop)`.
+`RuntimeMemoryObserver` (in `src/echovessel/runtime/memory_observers.py`) implements every lifecycle hook on the memory `MemoryEventObserver` Protocol and converts each into an SSE topic broadcast to every channel that exposes `push_sse`. Today only the Web channel exposes it; non-web channels (Discord, etc.) are silently skipped.
+
+Memory's lifecycle hooks are defined as **sync** methods on the Protocol — memory cannot import asyncio because its write path is synchronous and runs inside SQLite's single-writer lock. Runtime's observer implementation is also sync, which means its methods return immediately; the real work of broadcasting the event to channels is scheduled onto the runtime event loop via `asyncio.run_coroutine_threadsafe(self._broadcast(...), self._loop)`.
 
 The effect is a clean separation: memory fires a sync hook after a successful commit, the hook returns in microseconds, and the async broadcast runs concurrently on the loop, iterating the channel registry and calling `await channel.push_sse(event, payload)` on any channel that exposes that capability. Per-channel push failures are caught and logged; one bad channel cannot poison another channel's broadcast, and the memory write is already committed no matter what the observer does. If the loop is unavailable (observer fired during shutdown), the coroutine is closed cleanly and a warning is logged — there is nothing to do about a dropped broadcast because the memory state is already on disk.
+
+#### Cross-Channel SSE topic catalog
+
+Each lifecycle hook maps to one wire-format-stable SSE topic. The Web frontend subscribes to these topics to drive the chat-page Memory Timeline panel and every other piece of real-time UI outside the dev-mode trace drawer. Topic names follow `{namespace}.{noun}.{verb}`, with `memory` for memory-internal state changes and `chat` for channel-level UI signals.
+
+| Hook | SSE topic | Key payload fields | Notes |
+|---|---|---|---|
+| `on_event_created` | `memory.event.created` | `event_id` · `description` · `emotional_impact` · `session_id` | Broadcast for every L3 event regardless of fast vs slow loop origin |
+| `on_thought_created` | `memory.thought.created` | `thought_id` · `type` · `subject` · `description` · `source` · `filling_event_ids` | `source` ∈ {`reflection`, `slow_tick`, `import`}; `subject='persona'` rows feed the user prompt's `# How you see yourself lately` |
+| `on_entity_confirmed` | `memory.entity.confirmed` | `entity_id` · `canonical_name` · `kind` · `merge_status` | The observer filters `merge_status='uncertain'` at source — those are admin-only |
+| `on_entity_description_updated` | `memory.entity.description_updated` | `entity_id` · `canonical_name` · `description` · `source` | `source` ∈ {`slow_tick`, `owner`} |
+| `on_session_closed` / `on_new_session_started` | `chat.session.boundary` | `closed_session_id` · `new_session_id` · `events_count` · `thoughts_count` | Both hooks share one topic; the unused side is null. `events_count` / `thoughts_count` only carried on the close edge |
+| `on_mood_updated` | `chat.mood.update` | `persona_id` · `user_id` · `mood_summary` | Mood actually lives in L6 episodic state; the topic name is unchanged so the frontend contract is stable |
+
+The four `memory.*` topics drive the Memory Timeline real-time panel; `chat.session.boundary` was enriched with events / thoughts counts on the close edge so timeline can render a session-close summary row. `chat.settings.updated` (voice toggle and other admin runtime settings) is unrelated to memory observers — see the voice_enabled toggle section above.
+
+### Dev-mode turn traces
+
+Dev-mode lets every persona reply expose its internal 18-stage execution as a clickable drawer, so during dogfood you do not need to grep daemon logs to chase down retrieve misses, prompt drift, or which consolidate phase choked. Two switches turn it on: the URL query `?dev=1` (and `?dev=0` to clear) or the localStorage flag `echovessel_dev_mode=1`. Visiting `?dev=1` writes the flag into localStorage so the toggle is sticky across reloads.
+
+When enabled, a small `▸ trace` glyph appears in the top-right corner of every persona bubble; clicking it opens a drawer rendering the turn's full 18 stages — 12 fast-loop stages (`debounce / ingest_user / l1_load / l6_decay / l5_alias_scan / vector_retrieve / pinned_thoughts_load / build_system_prompt / build_user_prompt / llm_stream / ingest_persona / on_turn_done`) plus 6 consolidate phases (A trivial / B extract / C shock / D timer / E reflect / F status / G slow_tick). Each stage shows duration plus an expandable detail JSON; the retrieval table breaks down recency / relevance / impact / relational / entity_anchor / total per node; system and user prompts each get a full-text view with a copy button.
+
+Data lands in two tables (kept in `memory.db` alongside the rest of persistence):
+
+```
+turn_traces      (turn_id PK · persona_id · user_id · channel_id · started_at · finished_at
+                  · system_prompt · user_prompt · retrieval JSON · pinned_thoughts JSON
+                  · entity_alias_hits JSON · episodic_state JSON · llm_model · input_tokens
+                  · output_tokens · first_token_ms · duration_ms · steps JSON)
+session_traces   (session_id PK · phase_a..phase_g JSON · finished_at)
+```
+
+Trace writes go through two tracers runtime owns: `TurnTracer` pairs `stage_start` / `stage_end` calls inside `assemble_turn`, and `ConsolidateTracer` records each phase inside the worker's `_process_one`. With `cfg.dev_trace.enabled = false` (the default), runtime injects a `NullTurnTracer` whose `stage_start` / `stage_end` calls collapse into bytecode no-ops and zero overhead; no row is written, and `session_traces` is not touched. With `enabled = true`, every turn writes a row and `session_traces` is filled in once the matching session closes.
+
+Three admin routes serve the trace data to the frontend: `GET /api/admin/turns?persona_id=&user_id=&limit=` returns a paginated list, `GET /api/admin/turns/{turn_id}` returns the full turn payload, and `GET /api/admin/sessions/{session_id}/consolidate-trace` returns the 6/7 consolidate phases. None of them go through SSE — the dev-mode drawer is a pure REST pull (one fetch when the drawer opens, no re-fetch unless the trace data changes).
+
+The default TTL is 14 days, enforced by `scripts/purge_old_traces.py --days <n>`. The script is a CLI; the owner can crontab it or run it during idle windows. The idle scanner does not call it automatically so the worker call path stays single-purpose. Configuration lives under `[dev_trace]` in `configuration.md`.
 
 ### The `voice_enabled` toggle
 
