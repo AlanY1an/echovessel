@@ -38,9 +38,9 @@
 
 **L6 episodic state** — persona 当下情绪状态的单行 snapshot，住在 `personas.episodic_state` 这一列 JSON 里：`{mood, energy, last_user_signal, updated_at}`。session 关闭时由 extraction LLM 输出的 `session_mood_signal` 字段顺便写入（不调额外 LLM 也不开新 round-trip），所以 L6 的更新成本是 0。`assemble_turn` 入口会做 12h decay 检查——超过 12h 没更新就把 mood 拍回 `neutral`，避免一段长安静期之后用陈旧情绪打开下一轮。渲染成 system prompt 的 `# How you feel right now` 段；mood 仍是 `neutral` 时这一段被略过，prompt 保持简短。
 
-**Consolidate** — session 关闭时跑的 pipeline。它把 session 的 L2 消息一次性读进来，调用注入进来的 extraction 函数生成零条或多条 L3 events，给每条 event 算 embedding，按需触发一次 reflection pass 产生 L4 thoughts，然后把 session 标记为 `CLOSED`。入口是 `src/echovessel/memory/consolidate.py` 里的 `consolidate_session`。
+**Consolidate** — session 关闭时跑的 pipeline。它把 session 的 L2 消息一次性读进来，调用注入进来的 extraction 函数生成零条或多条 L3 events，给每条 event 算 embedding，按需触发一次 reflection pass 产生 L4 thoughts，然后把 session 标记为 `CLOSED`。入口是 `src/echovessel/memory/consolidate/core.py` 里的 `consolidate_session`。
 
-**Retrieve** — persona 说话前跑的 pipeline。它把所有 L1 core block 加载进来，让 storage backend 在 `concept_nodes` 上跑一次向量检索，用四项因子对候选做 rerank，用一个最低 relevance floor 抑制正交匹配，再按需给每个命中扩展附近的 L2 消息。如果向量索引返回的命中数不够，L2 上的 FTS fallback 会补刀。入口是 `src/echovessel/memory/retrieve.py` 里的 `retrieve`。
+**Retrieve** — persona 说话前跑的 pipeline。它把所有 L1 core block 加载进来，让 storage backend 在 `concept_nodes` 上跑一次向量检索，用四项因子对候选做 rerank，用一个最低 relevance floor 抑制正交匹配，再按需给每个命中扩展附近的 L2 消息。如果向量索引返回的命中数不够，L2 上的 FTS fallback 会补刀。入口是 `src/echovessel/memory/retrieve/core.py` 里的 `retrieve`。
 
 **Observer** — 一份住在 `src/echovessel/memory/observers.py` 的 Protocol，上层实现它之后就能对记忆写入做出反应。记忆从不 import runtime 或 channels；相反，runtime 在启动时注册一个 `MemoryEventObserver`，记忆在每次成功 commit 之后往里面触发 hook。observer 抛出的异常被捕获并 log，绝不会回滚到记忆写入里。
 
@@ -230,9 +230,9 @@ on_session_closed 通过生命周期队列触发
 | L2 → (关 session) | idle 超时 | `memory/sessions.py` | `SESSION_IDLE_MINUTES = 30` |
 | L2 → (关 session) | 长度上限 | `memory/sessions.py` | `SESSION_MAX_MESSAGES = 200` · `SESSION_MAX_TOKENS = 20_000` |
 | L2 → (关 session) | runtime 生命周期 | channels / catchup | — |
-| L3 → L4 | SHOCK — 新 event 撞到 impact 地板 | `memory/consolidate.py` | `SHOCK_IMPACT_THRESHOLD = 8`(取绝对值) |
-| L3 → L4 | TIMER — 最近没有 reflection | `memory/consolidate.py` | `TIMER_REFLECTION_HOURS = 24` |
-| L3 → L4(闸门) | 24h 反思上限 | `memory/consolidate.py` | `REFLECTION_HARD_LIMIT_24H = 3` |
+| L3 → L4 | SHOCK — 新 event 撞到 impact 地板 | `memory/consolidate/phase_bce.py` | `SHOCK_IMPACT_THRESHOLD = 8`(取绝对值) |
+| L3 → L4 | TIMER — 最近没有 reflection | `memory/consolidate/phase_bce.py` | `TIMER_REFLECTION_HOURS = 24` |
+| L3 → L4(闸门) | 24h 反思上限 | `memory/consolidate/phase_bce.py` | `REFLECTION_HARD_LIMIT_24H = 3` |
 
 两个新读者常绊的点:
 
@@ -445,7 +445,7 @@ MemoryEventObserver  (Protocol · 源真相在 observers.py)
 
 生命周期事件流经 `sessions.py` 里一个很小的队列。修改 `session.status` 的那条代码路径把一个待决事件入队，提交完成的调用方在 `db.commit()` 返回之后立刻 drain 这个队列。这让一次 commit 能在一轮里 dispatch 好几个生命周期 hook，而不需要每个函数都知道哪个 hook 该触发。Entity hooks（`on_entity_confirmed` / `on_entity_description_updated`）则在 `entities.resolve_entity` / `entities.apply_entity_clarification` / `update_entity_description` 提交后直接 `_fire_lifecycle(...)`，不走 session 队列——它们和 session 边界无关。
 
-runtime 侧的 `RuntimeMemoryObserver`（住在 `src/echovessel/runtime/memory_observers.py`）实现了上述全部 lifecycle hook，把每条变成一条 SSE topic 广播给所有暴露 `push_sse` 的 channel——具体 topic 名见 `docs/zh/runtime.md § Cross-Channel SSE` 与 `docs/zh/channels.md § Web channel`。
+runtime 侧的 `RuntimeMemoryObserver`（住在 `src/echovessel/runtime/wiring/memory_observer.py`）实现了上述全部 lifecycle hook，把每条变成一条 SSE topic 广播给所有暴露 `push_sse` 的 channel——具体 topic 名见 `docs/zh/runtime.md § Cross-Channel SSE` 与 `docs/zh/channels.md § Web channel`。
 
 ---
 

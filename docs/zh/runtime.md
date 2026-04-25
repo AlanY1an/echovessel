@@ -167,7 +167,7 @@ slow_tick 不在 runtime 里跑——它住在 `consolidate_worker._process_one`
 
 ### Memory observer 接线
 
-`RuntimeMemoryObserver`(住在 `src/echovessel/runtime/memory_observers.py`)实现了 memory 的 `MemoryEventObserver` Protocol 的全部 7 个 lifecycle hook,并把每条变成一条 SSE topic 广播给 registry 里所有暴露 `push_sse` 的 channel——目前只有 Web channel 暴露,Discord 等非 web channel 自然 no-op 跳过。
+`RuntimeMemoryObserver`(住在 `src/echovessel/runtime/wiring/memory_observer.py`)实现了 memory 的 `MemoryEventObserver` Protocol 的全部 7 个 lifecycle hook,并把每条变成一条 SSE topic 广播给 registry 里所有暴露 `push_sse` 的 channel——目前只有 Web channel 暴露,Discord 等非 web channel 自然 no-op 跳过。
 
 Memory 的 lifecycle hook 在 Protocol 里定义为**同步**方法——memory 没法 import asyncio,因为它的写入路径是同步的,跑在 SQLite 单写入者的锁里面。Runtime 的 observer 实现也是同步的,所以它的方法立即返回;把事件广播到 channel 这个真正的工作被通过 `asyncio.run_coroutine_threadsafe(self._broadcast(...), self._loop)` 调度到 runtime 的 event loop 上。
 
