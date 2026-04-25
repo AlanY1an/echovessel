@@ -18,7 +18,9 @@
 
 ## Core Concepts
 
-**L1 core blocks** — 短小、稳定的文本段，无条件注入每次 prompt。`core_blocks` 表里住着五个 label：`persona`、`self`、`user`、`relationship`、`style`。`persona` / `self` / `style` 跨用户共享（persona 是一个角色，它的自我形象和 owner 钦定的风格指令不因用户不同而 fork）。`user` / `relationship` 按用户分份，key 是 `(persona_id, user_id)`。每个 block 上限 5000 字符，并且在 `core_block_appends` 里有一份 append-only 审计日志。情绪状态不在 L1——当下心境归 L6 episodic state 管。
+**L1 core blocks** — 短小、稳定的文本段，无条件注入每次 prompt。`core_blocks` 表里住着三个 label：`persona`、`user`、`style`。`persona` / `style` 跨用户共享（persona 是一个角色，它的画像和 owner 钦定的风格指令不因用户不同而 fork）。`user` 按用户分份，key 是 `(persona_id, user_id)`。每个 block 上限 5000 字符，并且在 `core_block_appends` 里有一份 append-only 审计日志。情绪状态不在 L1——当下心境归 L6 episodic state 管。
+
+**L1 是"人写的身份层"——永远不被代码自动改写。** 三个写入入口全是 human-driven：onboarding bootstrap、admin UI（`POST /api/admin/persona` 与 `POST /api/admin/persona/style`）、import pipeline 的 `bootstrap_from_material`。`slow_tick` / `consolidate` / extraction 内部的代码路径**不允许**写 `core_blocks`——这条不变律由 `tests/memory/test_slow_cycle.py` 的 "L1-never-auto-update invariant" 测试钉死。Persona 的 reflection 自动生长进 L4 thought（`subject='persona'`），不进 L1；persona 对第三方人/地/组织的描述自动生长进 L5 `entities.description`，也不进 L1。
 
 **生平事实**(Biographic facts)— 跟 core blocks 并排住在 `personas` 行本身的十五个结构化身份列(`full_name`、`gender`、`birth_date`、`nationality`、`native_language`、`timezone`、`occupation`、`relationship_status`、…)。这些字段之所以跟散文 block 分开放,是因为代码想知道"她是什么时区"或"她是哪年生的"时可以直接查列,不用重新解析 persona block 里那段散文。十五个全部可空 — onboarding 时 LLM 抽取能填什么就填什么,用户在 review 页面校对剩下的。其中五个(姓名 / 性别 / 出生年 / 职业 / 母语)会在每个 turn 渲进系统 prompt 的 "# Who you are" 段;另外十个只供系统代码使用。
 
@@ -28,7 +30,11 @@
 
 **L4 thoughts** — 从很多 events 里蒸馏出来的更长程的观察。和 L3 同一张表，用 `type='thought'` 区分。每条 thought 带一条 `filling` 证据链（通过 `concept_node_filling`），记录它是从哪些 events 生成的，这样当用户删掉源头 events 时可以选择把 thought 保留为孤儿。Thoughts 由两条路径写入：consolidate 内部的 SHOCK / TIMER reflection（fast loop），以及 session 之间跑的 slow_tick reflection phase（slow loop · forward-looking 推理）。slow_tick 还会在合适时机产 `type='expectation'` 子类节点（"她下周可能会更新 grad school 进度"），这些 expectation 在 fast loop 里被 embedding 相似度匹配 user 的下一条消息，命中标 `fulfilled`，超期标 `expired`。
 
-**L5 entities** — 第三方人物 / 地点 / 组织 / 宠物的 canonical 身份。三张表：`entities`（canonical name + kind + 三态 merge_status）· `entity_aliases`（多对一 alias → entity）· `concept_node_entities`（L3 event ↔ L5 entity 的多对多 junction）。Extraction 抽到新人名时建 entity，已知 entity 出现新别名时只 append 别名行。检索时 query 文本里的任何 alias 命中都会让该 entity 关联的所有 ConceptNode 一并进候选并加分，这是跨语种 / 跨别名召回的工程基础——光靠向量距离没法把 "Scott" 和 "黄逸扬" 拉到一起。三层 dedup（alias 精确匹配 → embedding 0.65/0.85 阈值 → uncertain 时 persona 自然问 user）写在 `memory/entities.py`。
+每条 thought 带一个 `subject` 列：`subject='user'` 是 persona 对 *user* 的判断（"她最近压力比较大"），`subject='persona'` 是 persona 对 *自己* 的反思（"我最近回得太短了"）。`subject='persona'` 是 slow_tick G phase 自动产出的——这是 persona 自我画像随时间累积的唯一物理路径（L1 的 `persona` block 永远不被代码触碰）。prompt 渲染时按 recency 取近 5 条挂在 user prompt 的 `# How you see yourself lately` 段，由 `retrieve.force_load_persona_thoughts(top_n=5)` 直接旁路 query embedding。
+
+**L5 entities** — 第三方人物 / 地点 / 组织 / 宠物的 canonical 身份。三张表：`entities`（canonical name + kind + 三态 merge_status + 一段 `description` prose 列）· `entity_aliases`（多对一 alias → entity）· `concept_node_entities`（L3 event ↔ L5 entity 的多对多 junction）。Extraction 抽到新人名时建 entity，已知 entity 出现新别名时只 append 别名行。检索时 query 文本里的任何 alias 命中都会让该 entity 关联的所有 ConceptNode 一并进候选并加分，这是跨语种 / 跨别名召回的工程基础——光靠向量距离没法把 "Scott" 和 "黄逸扬" 拉到一起。三层 dedup（alias 精确匹配 → embedding 0.65/0.85 阈值 → uncertain 时 persona 自然问 user）写在 `memory/entities.py`。
+
+`entities.description` 是 entity 的散文画像列：由 slow_tick 在 entity 的 `linked_events_count` 越过阈值（默认 ≥ 3）时合成写入；也可以由 owner 通过 `PATCH /api/admin/memory/entities/{id}` 显式覆盖（写 `owner_override=true` 后 slow_tick 不再覆盖）。两条写路径都走同一个 `update_entity_description(db, *, entity_id, description, source)` 原语，`source` 取值 `'slow_tick'` 或 `'owner'`。命中 alias anchor 的 entity 会在 system prompt 里渲一段 `# About {canonical_name}`——一行一个 entity，cardinality 与 entity 行严格 1:1。
 
 **L6 episodic state** — persona 当下情绪状态的单行 snapshot，住在 `personas.episodic_state` 这一列 JSON 里：`{mood, energy, last_user_signal, updated_at}`。session 关闭时由 extraction LLM 输出的 `session_mood_signal` 字段顺便写入（不调额外 LLM 也不开新 round-trip），所以 L6 的更新成本是 0。`assemble_turn` 入口会做 12h decay 检查——超过 12h 没更新就把 mood 拍回 `neutral`，避免一段长安静期之后用陈旧情绪打开下一轮。渲染成 system prompt 的 `# How you feel right now` 段；mood 仍是 `neutral` 时这一段被略过，prompt 保持简短。
 
@@ -90,7 +96,7 @@ drain_and_fire_pending_lifecycle_events()  <--+
 observer.on_message_ingested(msg)   (per-call hook)
 ```
 
-每次写入都是先 commit、再触发任何 hook。`sessions.py` 里的生命周期队列把 "new session" / "session closed" 事件做了批处理，这样一次 commit 可以在一次 drain 里 dispatch 多个 hook。Per-write hook 走 `ingest_message`、`bulk_create_events`、`append_to_core_block` 上的显式 `observer=` 参数；生命周期 hook 走模块级别的 `_observers` 注册表——这个注册表由 `register_observer(...)` 调一次即可。
+每次写入都是先 commit、再触发任何 hook。`sessions.py` 里的生命周期队列把 "new session" / "session closed" 事件做了批处理，这样一次 commit 可以在一次 drain 里 dispatch 多个 hook。`ingest_message` / `append_to_core_block` 这两个调用走的是显式 `observer=` 参数（per-write 通知），其他大多数 hook（event/thought/entity/session/mood）从模块级 `_observers` 注册表 fan-out——这个注册表由 `register_observer(...)` 在 daemon 启动时调一次即可。
 
 当一个 session 跨过 `SESSION_MAX_MESSAGES` 或 `SESSION_MAX_TOKENS` 时，它被标记为正在关闭，下一次 `ingest_message` 调用会在同一 channel 里打开一个新的 session。用户对此毫无感知——这个切分只是一个内部的 extraction 边界。Idle session（超过 30 分钟没新消息）和来自 runtime 的生命周期信号（daemon 关闭、persona 切换）关闭 session 的方式是一样的。
 
@@ -159,9 +165,9 @@ drop rows where relevance < min_relevance (默认 0.4)
 | 4 | 矛盾信息 | extraction 输出 `superseded_event_ids` · consolidate 把老节点的 `superseded_by_id` 指向新节点（soft delete · row 不删）· retrieve 默认过 `superseded_by_id IS NULL` |
 | 5 | user 风格纠正 | owner 走 `POST /api/admin/persona/style` 显式写 `STYLE` block · 不做 NLP 关键词自动检测 |
 | 6 | 安静期（无 user 消息）| `idle_scanner` 关 stale session（既有）· `assemble_turn` 入口的 12h decay 把 episodic_state mood 拍回 neutral · 没新 inbox material 时 slow_tick 不 fire |
-| 7 | 主动回想（slow_tick 自发）| consolidate_worker `_process_one` 末尾的 G phase 在合适条件下跑 slow_cycle LLM · 产 `type='thought'` + `type='expectation'` 节点 · 下次 fast loop retrieve 大概率召回（这是"persona 在你不说话时也想到你"的物理实现）|
+| 7 | 主动回想（slow_tick 自发）| consolidate_worker `_process_one` 末尾的 G phase 在合适条件下跑 slow_cycle LLM · 产 `type='thought'` + `type='expectation'` 节点 · 下次 fast loop retrieve 大概率召回（这是"persona 在你不说话时也想到你"的物理实现）· 产出的 thought 会立刻通过 `on_thought_created` 广播 SSE topic `memory.thought.created` · Web chat 的 Memory Timeline 实时看到 |
 
-时间介入只在三处合法兜底：L6 episodic 12h decay · `consolidate_worker` 5s polling · L1.self TIMER reflection（超 N 天无 reflect 强制 1 次）。其它一切"每周二 X / 每月初 Y"类调度模式被明确禁止——记忆模块只接 event-driven 触发。
+时间介入只在三处合法兜底：L6 episodic 12h decay · `consolidate_worker` 5s polling · TIMER reflection（超 24h 无 thought 强制走一次 reflect）。其它一切"每周二 X / 每月初 Y"类调度模式被明确禁止——记忆模块只接 event-driven 触发。
 
 ### Slow_tick consolidate phase（L4 forward-looking）
 
@@ -171,14 +177,16 @@ slow_tick **不是独立 worker**——它是 `consolidate_worker._process_one` 
 - `now - persona.last_slow_tick_at < cool_down_minutes`（默认 30）AND 本 session 无 SHOCK → skip
 - 否则跑
 
-跑的时候做一次 `slow_cycle_llm` 调用，输入是过去 cool-down 周期内的 cross-session material（events + 已有 thoughts + 上次 slow_tick 留的 salient_questions），输出 5 个子任务合并：`new_thoughts` / `new_expectations` / `self_block_append` / `salient_questions` / `revisit_decisions`。然后：
+跑的时候做一次 `slow_cycle_llm` 调用，输入是过去 cool-down 周期内的 cross-session material（events + 已有 thoughts + 上次 slow_tick 留的 salient_questions），输出三块合一：`new_thoughts`（含 `subject='persona'` 自我反思和 `subject='user'` 对用户的判断）/ `new_expectations` / `salient_questions`（下次 slow_tick 的种子问题，写回 personas 表）。然后：
 
-- `bulk_create_thoughts(new_thoughts)` 落 L4 thought 节点 + filling chain
+- `bulk_create_thoughts(new_thoughts)` 落 L4 thought 节点 + filling chain · `subject='persona'` 的那些就是 persona 对自己的反思，挂在 user prompt 的 `# How you see yourself lately` 段
 - 写 `type='expectation'` 节点（带 `event_time_end` 作 due_at）· fast loop 在每条新 user message 上 embed-similarity 比 expectation.description · 命中标 fulfilled · 超期标 expired
-- 如果 `self_block_append` 非空 · `append_to_core_block(BlockLabel.SELF, ...)` · 受 ≤ 20% edit-distance invariant 守
+- 顺便：扫每个 entity 的 `linked_events_count` · 越过阈值（默认 ≥ 3）就调 `update_entity_description(...)` 合成一段 description（slow_tick 永远走 source='slow_tick' · 受 `owner_override=true` 阻止）
 - `personas.last_slow_tick_at = now`
 
-护栏（不可越界 invariant）：单 cycle token wall（input ≤ 8k · output ≤ 1k）· 每天 36 cycles + 150k input + 30k output · `cfg.slow_tick.enabled = false` 全局 kill switch · 每个 event 被 reflect 次数 ≤ 3。slow_tick 不能：创建无原话证据的 intention · 自己 schedule 下次 · 改 in-place 已有节点 · 调外部 API · 创新的 NodeType / BlockLabel · 递归自触发 · 跳 token budget。封闭 tool 枚举 + schema 拒写守这些 invariant。Transcript 落盘到 `develop-docs/slow_tick_transcripts/<cycle_id>.json`，admin tab 有 `GET /api/admin/slow-tick/transcripts` 翻历史。
+**slow_tick 不写 L1 core_blocks · 一行都不写。** persona 的自我反思走 L4 thought[subject='persona']；persona 对人/地/组织的描述走 L5 entities.description。`BlockLabel` enum 只有 `persona` / `user` / `style` 三个值，`append_to_core_block` 不在 slow_tick 的执行链里——这条不变律由 `tests/memory/test_slow_cycle.py` 的 "L1-never-auto-update invariant" 测试钉死。
+
+护栏（不可越界 invariant）：单 cycle token wall（input ≤ 8k · output ≤ 1k）· 每天 36 cycles + 150k input + 30k output · `cfg.slow_tick.enabled = false` 全局 kill switch · 每个 event 被 reflect 次数 ≤ 3。slow_tick 不能：写 L1 任何 block · 创建无原话证据的 intention · 自己 schedule 下次 · 改 in-place 已有节点 · 调外部 API · 创新的 NodeType / BlockLabel · 递归自触发 · 跳 token budget。封闭 tool 枚举 + schema 拒写守这些 invariant。Transcript 落盘到 `develop-docs/slow_tick_transcripts/<cycle_id>.json`，admin tab 有 `GET /api/admin/slow-tick/transcripts` 翻历史。
 
 ### 一个 persona 跨越所有 channel
 
@@ -259,7 +267,7 @@ t = 0s             用户在 Web 频道打 "hi"
 t ≈ 0.1s           runtime 准备回复
                    ↓
 ┌─ memory.load_core_blocks(persona, user)
-│    → 5 行(persona / self / style [共享] + user / relationship [per-user])
+│    → 3 行(persona / style [共享] + user [per-user])
 │
 ├─ assemble_turn 入口检查 L6 episodic_state · 12h 没更新就 decay 回 neutral
 │
@@ -282,12 +290,13 @@ t ≈ 0.1s           runtime 准备回复
 │    详见 docs/zh/runtime.md § Prompt 段顺序。
 │    system_prompt = opener + # Right now (双 TZ) + # Who you are (7 facts)
 │                    + # How you feel right now (L6 episodic) + L1 core blocks
-│                    + # Style preferences + # Entity disambiguation pending
-│                    + STYLE_INSTRUCTIONS
+│                    + # Style preferences + # About {canonical_name} (alias 命中)
+│                    + # Entity disambiguation pending + STYLE_INSTRUCTIONS
 │    user_prompt   = # Recent sessions (day-bucket) + retrieved thoughts/events
-│                    + # About {speaker} (pinned) + # Promises you've made
-│                    + # You've been expecting + # Our recent conversation
-│                    + # What they just said
+│                    + # About {speaker} (pinned user-thoughts)
+│                    + # How you see yourself lately (pinned persona-thoughts)
+│                    + # Promises you've made + # You've been expecting
+│                    + # Our recent conversation + # What they just said
 │
 └─ 流式 token → channel · 累积的 reply 再通过 ingest_message(PERSONA) 回写
 
@@ -350,10 +359,15 @@ t ≈ 30-60min + 5s  consolidate_worker 轮询(默认每 5s)
 │  [G] slow_tick consolidate phase — 仅在 should_run_slow_cycle 判 OK 时跑
 │      (cool_down + non-trivial + daily-cap / token-wall 都没触顶):
 │        run_slow_cycle(persona, recent_events, recent_thoughts, ...)
-│          → typed ConceptNode 输出 · subject='persona' · type IN ('thought','expectation')
+│          → typed ConceptNode 输出 · type IN ('thought','expectation')
+│          → thought 带 subject='user' 或 subject='persona'
+│            · subject='persona' 是 persona 自我反思的存放处
+│              · 之后渲入 user prompt 的 # How you see yourself lately
 │          → 每条带 filling_event_ids · expectation 强制非空 reasoning_event_ids
-│          → 可选 self_block append(edit distance ≤ 20%)
+│          → 顺便扫每个 entity 的 linked_events_count · 越阈值则
+│            update_entity_description(source='slow_tick') 合成一段 description
 │          → personas.last_slow_tick_at = now
+│      slow_tick 不写 L1 · 不调 append_to_core_block
 │      失败不回滚 session([F] 已 commit) · 只 log warning
 │
 │  · session_mood_signal(由 [B] 抽取 LLM 顺便输出)在 [B]/[F] 之间已 UPDATE
@@ -407,22 +421,31 @@ UPDATE sessions
 
 ### Observer 契约
 
-Observer 是 fire-and-forget 的 post-commit 通知。Protocol 住在 `observers.py`：
+Observer 是 fire-and-forget 的 post-commit 通知。Protocol 住在 `observers.py`，里面有 9 个 hook，按触发路径分两类——纯 per-write 和 lifecycle：
 
 ```
-MemoryEventObserver
-  on_message_ingested(msg)        per-call，通过 observer= 参数
-  on_event_created(event)         per-call，通过 observer= 参数
-  on_thought_created(thought)     per-call，通过 observer= 参数
-  on_core_block_appended(append)  per-call，通过 observer= 参数
-  on_new_session_started(...)     生命周期，通过 _observers 注册表
-  on_session_closed(...)          生命周期，通过 _observers 注册表
-  on_mood_updated(...)            生命周期，通过 _observers 注册表
+MemoryEventObserver  (Protocol · 源真相在 observers.py)
+  # 纯 per-write hook · 只在调用方显式传 observer= 时触发
+  on_message_ingested(msg)
+  on_core_block_appended(append)
+
+  # 7 个 lifecycle hook · 自动通过 _observers 注册表 fan-out
+  on_event_created(event)
+  on_thought_created(thought, source)        # source ∈ {reflection, slow_tick, import}
+  on_entity_confirmed(entity)                # uncertain entity 不广播 · 见 plan §3.1
+  on_entity_description_updated(entity, source)  # source ∈ {slow_tick, owner}
+  on_new_session_started(session_id, persona_id, user_id)
+  on_session_closed(session_id, persona_id, user_id)
+  on_mood_updated(persona_id, user_id, new_mood_text)  # mood 实际住在 L6 · 不再写 L1
 ```
+
+`on_event_created` / `on_thought_created` 是**两条路径都触发**的——既走 lifecycle 注册表（让 `RuntimeMemoryObserver` 看到），也接受 `consolidate_session` / `import_content` 的 `observer=` per-call 参数（让导入 pipeline / 测试拿自己的回调）。这条 fan-out 是 v0.5 加的 additive 改动；老的 per-call 调用语义没变。
 
 所有方法都是同步 `def`（不是 `async def`）。Hook 抛出的异常在记忆边界被捕获，通过模块 logger 记成 log；触发这个 hook 的那次记忆写入在此时**已经 commit**，绝不会被回滚。只实现了部分 hook 的消费者依赖结构化 subtyping——`NullObserver` 作为一个 no-op 基类提供给继承使用。
 
-生命周期事件流经 `sessions.py` 里一个很小的队列。修改 `session.status` 的那条代码路径把一个待决事件入队，提交完成的调用方在 `db.commit()` 返回之后立刻 drain 这个队列。这让一次 commit 能在一轮里 dispatch 好几个生命周期 hook，而不需要每个函数都知道哪个 hook 该触发。
+生命周期事件流经 `sessions.py` 里一个很小的队列。修改 `session.status` 的那条代码路径把一个待决事件入队，提交完成的调用方在 `db.commit()` 返回之后立刻 drain 这个队列。这让一次 commit 能在一轮里 dispatch 好几个生命周期 hook，而不需要每个函数都知道哪个 hook 该触发。Entity hooks（`on_entity_confirmed` / `on_entity_description_updated`）则在 `entities.resolve_entity` / `entities.apply_entity_clarification` / `update_entity_description` 提交后直接 `_fire_lifecycle(...)`，不走 session 队列——它们和 session 边界无关。
+
+runtime 侧的 `RuntimeMemoryObserver`（住在 `src/echovessel/runtime/memory_observers.py`）实现了上述全部 lifecycle hook，把每条变成一条 SSE topic 广播给所有暴露 `push_sse` 的 channel——具体 topic 名见 `docs/zh/runtime.md § Cross-Channel SSE` 与 `docs/zh/channels.md § Web channel`。
 
 ---
 
@@ -464,12 +487,13 @@ class EventLogger(NullObserver):
 
 
 logger = EventLogger()
-register_observer(logger)  # 注册后生命周期 hook 自动触发
-# Per-write hook（on_event_created 等）只在调用方把
-# observer=logger 传进 consolidate_session / bulk_create_events 时才会触发。
+register_observer(logger)
+# 注册后所有 lifecycle hook 自动触发（包括 on_event_created 与
+# on_thought_created）。on_message_ingested / on_core_block_appended
+# 仍然只在 caller 显式传 observer=logger 时触发。
 ```
 
-生命周期 hook（`on_new_session_started`、`on_session_closed`、`on_mood_updated`）在 observer 注册之后就自动触发。Per-write hook（`on_event_created`、`on_thought_created`、`on_message_ingested`、`on_core_block_appended`）只在调用方显式把 `observer=...` 传进对应写 API 时才触发。结构化 subtyping 意味着你只需要实现你在乎的那些 hook。
+注册后，所有 lifecycle hook（`on_new_session_started` / `on_session_closed` / `on_mood_updated` / `on_event_created` / `on_thought_created` / `on_entity_confirmed` / `on_entity_description_updated`）都会自动触发——不需要每个 caller 都显式传 `observer=`。纯 per-write hook（`on_message_ingested` / `on_core_block_appended`）依然只在调用方把 `observer=...` 传进 `ingest_message` / `append_to_core_block` 时才触发。`on_event_created` / `on_thought_created` 是双触发的：lifecycle 注册表 fan-out **加上** `consolidate_session` / `import_content` 接受的 per-call `observer=` 参数（让导入 pipeline / 测试拿自己的回调）。结构化 subtyping 意味着你只需要实现你在乎的那些 hook。
 
 ### 2. 加一个新的 retrieve scorer
 
