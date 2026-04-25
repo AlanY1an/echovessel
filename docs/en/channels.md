@@ -196,14 +196,49 @@ Runtime's `ChannelRegistry` owns the lifecycle (`start_all` / `stop_all`) and me
 
 The Web channel is fully wired end-to-end. A FastAPI `WebChannel` under `src/echovessel/channels/web/` exposes `POST /api/chat/send`, streams `chat.message.*` events over SSE via `GET /api/chat/events`, implements the debounce state machine described above, and talks to runtime through the Channel Protocol. The React + Vite + TypeScript frontend under `src/echovessel/channels/web/frontend/` is built via `npm run build` into `channels/web/static/` and served by the same daemon at `http://127.0.0.1:7777/` — end users never touch Node.js. Contributors who want to hack on the UI can run `npm run dev` against a live daemon (the dev server proxies to the FastAPI process).
 
+#### Memory Timeline panel
+
+The chat page exposes a right-hand **Memory Timeline** sidebar — open by default, collapses to a 40 px vertical tab, and turns into an overlay drawer below 1200 px. It is the SSE-driven real-time view of the persona's growing memory: every new L3 event / L4 thought / L5 entity / L6 mood / session-close prepends a row, reverse-chronologically, with `icon + relative time ("just now" / "30 min ago") + one-line summary`, and an expand affordance for details. The `…` menu offers per-kind filters (events only, thoughts only, etc.) and a "clear local cache" action that re-runs backfill.
+
+Two backend paths feed it. Cold start: `GET /api/admin/memory/timeline?since=<iso>&limit=50` returns a paginated, reverse-chronological merge of L3 / L4 / L5 / L6 / session-close items. Uncertain entities are filtered server-side; entity-description edits whose `updated_at > created_at` show up as their own "description" rows on backfill so historical owner overrides surface. Warm path: subscribe to six `memory.*` / `chat.*` SSE topics (catalog below) and prepend on hit, with the client-side store deduping, sorting, and capping at 200 rows.
+
+```
+useMemoryTimeline()          src/echovessel/channels/web/frontend/src/screens/Chat/timeline/
+  ├─ initial backfill       GET /api/admin/memory/timeline
+  └─ live subscription      6 SSE topics (see catalog below)
+```
+
+The active filter set and the panel-collapsed flag persist in `localStorage` (`echovessel.timeline.filters` / `echovessel.timeline.collapsed`) so a new tab continues with the same view.
+
+#### SSE topic catalog (everything the Web channel subscribes to)
+
+The Web channel is currently the only channel that exposes `push_sse`, so it consumes both its own `chat.message.*` turn stream and the memory / cross-channel topics broadcast by the runtime memory observer. Full topic table:
+
+| Topic | Producer | Key payload fields | Consumer |
+|---|---|---|---|
+| `chat.message.user_appended` | web channel's own turn pipeline | `turn_id` · `messages` | main bubble column |
+| `chat.message.typing_started` | web channel at LLM-stream start | `turn_id` | main bubble column ("Typing…" placeholder) |
+| `chat.message.done` | runtime broadcaster mirroring any channel's turn completion | `turn_id` · `source_channel_id` · `content` | main bubble column (cross-channel mirror) |
+| `chat.message.voice_ready` | voice service after async synthesis | `turn_id` · `audio_url` | bubble's playback control |
+| `chat.session.boundary` | runtime memory observer | `closed_session_id` · `new_session_id` · `events_count` · `thoughts_count` | timeline session-close summary row |
+| `chat.mood.update` | runtime memory observer | `persona_id` · `user_id` · `mood_summary` | timeline mood-shift row |
+| `chat.settings.updated` | runtime voice / admin runtime settings change | `voice_enabled`, etc. | settings UI |
+| `memory.event.created` | runtime memory observer | `event_id` · `description` · `emotional_impact` · `session_id` | timeline event row |
+| `memory.thought.created` | runtime memory observer | `thought_id` · `type` · `subject` · `description` · `source` · `filling_event_ids` | timeline thought / intention / expectation row |
+| `memory.entity.confirmed` | runtime memory observer | `entity_id` · `canonical_name` · `kind` · `merge_status` | timeline entity row (uncertain entities pre-filtered by the observer) |
+| `memory.entity.description_updated` | runtime memory observer | `entity_id` · `canonical_name` · `description` · `source` | timeline entity-description row |
+
+The four `memory.*` topics are driven by `RuntimeMemoryObserver`; see `runtime.md § Cross-Channel SSE topic catalog` for the producer side. `chat.session.boundary` is shared between the close and open hooks — the unused side is null; only the close edge carries `events_count` and `thoughts_count`. Discord and iMessage do not expose `push_sse`, so the observer simply skips them — they still feed their own turn stream into runtime, and cross-channel real-time mirroring is what the broadcaster handles for them on the Web side.
+
 ### Cross-channel unified timeline (runtime-owned SSE broadcaster)
 
-EchoVessel's architectural promise is "one persona across every channel." The memory layer has always guaranteed this at the storage level (iron rule D4: retrieval never filters by `channel_id`). As of 2026-04-16 the **live view** is unified too:
+EchoVessel's architectural promise is "one persona across every channel." The memory layer guarantees this at the storage level (iron rule D4: retrieval never filters by `channel_id`), and the live view is unified the same way:
 
 - `SSEBroadcaster` is owned by the runtime, not by any single channel.
 - Every channel's turn events (`chat.message.user_appended` / `chat.message.typing_started` / `chat.message.done` / `chat.message.voice_ready`) are mirrored through the broadcaster with a `source_channel_id` field identifying where the turn came from. `chat.message.typing_started` fires once per turn right before the LLM stream begins — the browser renders it as a "Typing…" bubble until `chat.message.done` arrives with the full reply.
+- The same SSE stream also carries the memory write events from `RuntimeMemoryObserver` (`memory.event.created` / `memory.thought.created` / `memory.entity.confirmed` / `memory.entity.description_updated`) and the cross-channel-shared `chat.session.boundary` / `chat.mood.update`. The Web chat's Memory Timeline panel is the consumer; this is why memory produced by a Discord DM appears in the Web tab's timeline in real time, on the same SSE that mirrors the message into the main bubble column. Full topic table in [SSE topic catalog](#sse-topic-catalog-everything-the-web-channel-subscribes-to) above.
 - The Web chat timeline subscribes to the shared SSE stream, so Discord DMs appear inline in real time with a `📱 Discord` pill in the timestamp. iMessage and future channels inherit the behaviour — **no frontend change needed** when a new channel is added, as long as the channel implements the Channel Protocol and turns flow through `runtime.assemble_turn()`.
-- A paired `GET /api/chat/history?limit=50&before=<turn_id>` endpoint returns cross-channel history (still D4-unfiltered) so a fresh browser session backfills past Discord conversations alongside past Web conversations.
+- A paired `GET /api/chat/history?limit=50&before=<turn_id>` endpoint returns cross-channel history (still D4-unfiltered) so a fresh browser session backfills past Discord conversations alongside past Web conversations. Memory Timeline uses a different backfill: `GET /api/admin/memory/timeline?since=<iso>&limit=50` returns a cross-kind merge of L3 / L4 / L5 / L6 memory events — also D4-unfiltered.
 - Turn serialisation still holds: the `TurnDispatcher` processes one turn at a time across the entire process, so the "one persona one brain" invariant is unchanged. Parallel Web + Discord requests simply queue.
 
 The publish path is failure-isolated: if the broadcaster raises, a `log.warning` fires and the originating channel's `send()` still completes. Likewise, if `send()` raises, `chat.message.done` is **not** mirrored — a failed Discord DM will not tell the Web tab the turn succeeded.
