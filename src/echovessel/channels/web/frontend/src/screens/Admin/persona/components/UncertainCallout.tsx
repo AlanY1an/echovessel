@@ -6,24 +6,35 @@ import type { EntityRow as EntityRowData } from '../../../../api/types'
  * Top-of-section callout listing every entity in ``merge_status='uncertain'``.
  *
  * Each row asks "X ↔ Y · same person?" with two buttons:
- *   是 · merge   → POST /api/admin/memory/entities/{id}/merge
- *   不是 · 分开  → flips merge_status to 'confirmed'
+ *   是 · merge   → POST /api/admin/memory/entities/{id}/merge { target_id }
+ *   不是 · 分开  → POST /api/admin/memory/entities/{id}/confirm-separate { other_id }
  *
- * Day-1 skeleton: renders the list + handlers but the parent section
- * only fans out the click events. Real arbitration endpoints land
- * once Worker A merges the contract.
+ * Both ids come from the row itself: the daemon writes
+ * ``merge_target_id`` on the uncertain row pointing at the proposed
+ * partner. We look the partner's display name up via ``findEntityById``
+ * (provided by the parent so we don't double-fetch). Rows whose
+ * partner can't be resolved (deleted, race) fall back to "id #N" so
+ * the owner can still arbitrate.
  */
 export function UncertainCallout({
   uncertain,
+  findEntityById,
   onMerge,
   onSeparate,
 }: {
   uncertain: EntityRowData[]
-  onMerge: (entityId: number) => void
-  onSeparate: (entityId: number) => void
+  findEntityById: (id: number) => EntityRowData | undefined
+  onMerge: (entityId: number, targetId: number) => void
+  onSeparate: (entityId: number, otherId: number) => void
 }) {
   const { t } = useTranslation()
-  if (uncertain.length === 0) return null
+  // Drop rows without a partner pointer — they can't be arbitrated
+  // without a second id.
+  const arbitratable = uncertain.filter(
+    (e): e is EntityRowData & { merge_target_id: number } =>
+      e.merge_target_id !== null,
+  )
+  if (arbitratable.length === 0) return null
   return (
     <div
       className="card"
@@ -39,48 +50,53 @@ export function UncertainCallout({
         <span className="label" style={{ color: 'var(--accent)' }}>
           {t('admin.persona.entities.uncertain_title')}
         </span>
-        <span className="chip">{uncertain.length}</span>
+        <span className="chip">{arbitratable.length}</span>
       </div>
-      {uncertain.map((entity) => (
-        <div
-          key={entity.id}
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 8,
-            paddingLeft: 4,
-          }}
-        >
+      {arbitratable.map((entity) => {
+        const target = findEntityById(entity.merge_target_id)
+        const targetLabel =
+          target?.canonical_name ?? `#${entity.merge_target_id}`
+        return (
           <div
+            key={entity.id}
             style={{
-              fontFamily: 'var(--serif)',
-              fontSize: 14,
-              color: 'var(--ink-2)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              paddingLeft: 4,
             }}
           >
-            {t('admin.persona.entities.uncertain_question', {
-              name: entity.canonical_name,
-              aliases: entity.aliases.slice(0, 2).join(' / ') || '?',
-            })}
-          </div>
-          <div className="row g-2">
-            <button
-              type="button"
-              className="btn sm"
-              onClick={() => onMerge(entity.id)}
+            <div
+              style={{
+                fontFamily: 'var(--serif)',
+                fontSize: 14,
+                color: 'var(--ink-2)',
+              }}
             >
-              {t('admin.persona.entities.merge_same')}
-            </button>
-            <button
-              type="button"
-              className="btn ghost sm"
-              onClick={() => onSeparate(entity.id)}
-            >
-              {t('admin.persona.entities.separate')}
-            </button>
+              {t('admin.persona.entities.uncertain_question', {
+                name: entity.canonical_name,
+                other: targetLabel,
+              })}
+            </div>
+            <div className="row g-2">
+              <button
+                type="button"
+                className="btn sm"
+                onClick={() => onMerge(entity.id, entity.merge_target_id)}
+              >
+                {t('admin.persona.entities.merge_same')}
+              </button>
+              <button
+                type="button"
+                className="btn ghost sm"
+                onClick={() => onSeparate(entity.id, entity.merge_target_id)}
+              >
+                {t('admin.persona.entities.separate')}
+              </button>
+            </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

@@ -799,11 +799,33 @@ export interface EntityRow {
   canonical_name: string
   kind: 'person' | 'place' | 'org' | 'pet' | 'other'
   merge_status: 'confirmed' | 'uncertain' | 'pending'
+  /** When ``merge_status='uncertain'``, the candidate match id the
+   *  owner is being asked to arbitrate. Null on confirmed / pending
+   *  rows. */
+  merge_target_id: number | null
   description: string | null
   owner_override: boolean
   linked_events_count: number
   last_mentioned_at: string | null
   aliases: string[]
+}
+
+/** Body for ``POST /api/admin/memory/entities`` (manual add). */
+export interface EntityCreatePayload {
+  canonical_name: string
+  kind: EntityRow['kind']
+  description?: string | null
+  aliases?: string[]
+}
+
+/** Body for ``POST /api/admin/memory/entities/{id}/merge``. */
+export interface EntityMergePayload {
+  target_id: number
+}
+
+/** Body for ``POST /api/admin/memory/entities/{id}/confirm-separate``. */
+export interface EntitySeparatePayload {
+  other_id: number
 }
 
 /**

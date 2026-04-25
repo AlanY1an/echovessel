@@ -1,24 +1,21 @@
-import { useMemo } from 'react'
+import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { EntityRow as EntityRowData } from '../../../api/types'
+import { useEntities } from '../../../hooks/useEntities'
 import { EntityRow } from './components/EntityRow'
+import { ManualEntityDialog } from './components/ManualEntityDialog'
 import { UncertainCallout } from './components/UncertainCallout'
 
 /**
  * Persona-tab section 3 · SOCIAL GRAPH (extraction writes name,
  * slow_tick writes description, owner can override).
  *
- * Renders the L5 entities the daemon has linked through conversation
- * (people / pets / places / orgs), grouped by ``kind``. Uncertain
- * merge candidates float to the top in an ``UncertainCallout``;
- * confirmed rows can have their description edited inline (the
- * server stamps ``owner_override=true`` on PATCH).
- *
- * Day-1 skeleton — no real fetch yet. The lists will fill from
- * ``GET /api/admin/memory/entities`` once Worker A merges. The
- * ``entities`` const stays empty for now; the empty-state placeholder
- * stands in for the live grid.
+ * Hits ``GET /api/admin/memory/entities`` once on mount and refetches
+ * after every mutation. Uncertain rows float to a top callout for
+ * arbitration; confirmed rows group by kind and expose inline
+ * description editing (server stamps ``owner_override=true`` so the
+ * synthesizer leaves the prose alone after that).
  */
 const KIND_ORDER: EntityRowData['kind'][] = [
   'person',
@@ -30,66 +27,84 @@ const KIND_ORDER: EntityRowData['kind'][] = [
 
 export function SocialGraphSection() {
   const { t } = useTranslation()
-  const entities: EntityRowData[] = []
+  const {
+    entities,
+    uncertain,
+    byKind,
+    loading,
+    error,
+    saveDescription,
+    mergeOne,
+    separateOne,
+    createManual,
+  } = useEntities()
+  const [manualOpen, setManualOpen] = useState(false)
 
-  const { uncertain, byKind } = useMemo(() => {
-    const uncertainList: EntityRowData[] = []
-    const groups = new Map<EntityRowData['kind'], EntityRowData[]>()
-    for (const e of entities) {
-      if (e.merge_status === 'uncertain') {
-        uncertainList.push(e)
-        continue
-      }
-      const arr = groups.get(e.kind) ?? []
-      arr.push(e)
-      groups.set(e.kind, arr)
-    }
-    for (const arr of groups.values()) {
-      arr.sort((a, b) => {
-        const aT = a.last_mentioned_at ?? ''
-        const bT = b.last_mentioned_at ?? ''
-        return bT.localeCompare(aT)
-      })
-    }
-    return { uncertain: uncertainList, byKind: groups }
-  }, [entities])
+  const findEntityById = useCallback(
+    (id: number): EntityRowData | undefined =>
+      entities.find((e) => e.id === id),
+    [entities],
+  )
 
-  const handleMerge = (_id: number) => {
-    /* Day 4 · POST /api/admin/memory/entities/{id}/merge */
-  }
-  const handleSeparate = (_id: number) => {
-    /* Day 4 · flip merge_status='confirmed' */
-  }
-  const handleSaveDescription = async (
-    _entityId: number,
-    _description: string,
-  ): Promise<void> => {
-    /* Day 4 · PATCH /api/admin/memory/entities/{id} (server sets owner_override) */
-  }
-  const handleAddManual = () => {
-    /* Day 4 · POST /api/admin/memory/entities  (Worker A endpoint) */
-  }
+  const confirmedCount = Array.from(byKind.values()).reduce(
+    (sum, list) => sum + list.length,
+    0,
+  )
+  const totalCount = confirmedCount + uncertain.length
 
   return (
     <section className="stack g-3">
       <div className="row g-2" style={{ alignItems: 'baseline' }}>
         <h2 className="title">{t('admin.persona.sections.social_graph')}</h2>
         <span className="chip">
-          {t('admin.persona.entities.count', { count: entities.length })}
+          {t('admin.persona.entities.count', { count: totalCount })}
         </span>
         <div className="flex1" />
-        <button type="button" className="btn ghost sm" onClick={handleAddManual}>
+        <button
+          type="button"
+          className="btn ghost sm"
+          onClick={() => setManualOpen(true)}
+        >
           {t('admin.persona.entities.add_manual')}
         </button>
       </div>
 
+      {error !== null && (
+        <div
+          className="card"
+          style={{
+            padding: 12,
+            color: 'var(--accent)',
+            fontSize: 12,
+            fontFamily: 'var(--mono)',
+          }}
+        >
+          ⚠ {error}
+        </div>
+      )}
+
       <UncertainCallout
         uncertain={uncertain}
-        onMerge={handleMerge}
-        onSeparate={handleSeparate}
+        findEntityById={findEntityById}
+        onMerge={(id, target) => void mergeOne(id, target)}
+        onSeparate={(id, other) => void separateOne(id, other)}
       />
 
-      {entities.length === 0 && (
+      {loading && totalCount === 0 && (
+        <div
+          className="card"
+          style={{
+            padding: 18,
+            color: 'var(--ink-3)',
+            fontSize: 13,
+            textAlign: 'center',
+          }}
+        >
+          {t('admin.common.loading')}
+        </div>
+      )}
+
+      {!loading && totalCount === 0 && (
         <div
           className="card"
           style={{
@@ -114,11 +129,17 @@ export function SocialGraphSection() {
             <EntityRow
               key={entity.id}
               entity={entity}
-              onSaveDescription={handleSaveDescription}
+              onSaveDescription={saveDescription}
             />
           ))}
         </div>
       ))}
+
+      <ManualEntityDialog
+        open={manualOpen}
+        onClose={() => setManualOpen(false)}
+        onSubmit={createManual}
+      />
     </section>
   )
 }

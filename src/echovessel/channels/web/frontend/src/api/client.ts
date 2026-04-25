@@ -30,6 +30,10 @@ import type {
   DaemonState,
   DeleteChoice,
   DeleteResponse,
+  EntityCreatePayload,
+  EntityMergePayload,
+  EntityRow,
+  EntitySeparatePayload,
   EventDependentsResponse,
   FailedSessionsResponse,
   ImportCancelPayload,
@@ -641,6 +645,77 @@ export async function getEventDependents(
 ): Promise<EventDependentsResponse> {
   return fetchJson<EventDependentsResponse>(
     `/api/admin/memory/events/${nodeId}/dependents`,
+  )
+}
+
+// ─── L5 entity endpoints (Spec 2 · Social Graph section) ────────────────
+
+/**
+ * GET /api/admin/memory/entities — every entity for the configured
+ * persona / user, server-sorted with ``merge_status='uncertain'`` rows
+ * floated to the top so the admin UI can render the arbitration
+ * callout without re-sorting client-side.
+ */
+export async function getEntities(): Promise<{ entities: EntityRow[] }> {
+  return fetchJson<{ entities: EntityRow[] }>('/api/admin/memory/entities')
+}
+
+/**
+ * PATCH /api/admin/memory/entities/{id} — owner-edited description.
+ * The server stamps ``owner_override=true`` automatically; the client
+ * MUST NOT send the flag.
+ */
+export async function patchEntityDescription(
+  entityId: number,
+  description: string,
+): Promise<EntityRow> {
+  return fetchJson<EntityRow>(`/api/admin/memory/entities/${entityId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ description }),
+  })
+}
+
+/**
+ * POST /api/admin/memory/entities — manual create. Sets
+ * ``merge_status='confirmed'`` and ``owner_override`` whenever a
+ * non-empty description is supplied.
+ */
+export async function createEntity(
+  payload: EntityCreatePayload,
+): Promise<EntityRow> {
+  return fetchJson<EntityRow>('/api/admin/memory/entities', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/**
+ * POST /api/admin/memory/entities/{id}/merge — owner confirms an
+ * uncertain pair as the same person; folds ``id`` into ``target_id``.
+ */
+export async function mergeEntities(
+  entityId: number,
+  payload: EntityMergePayload,
+): Promise<{ ok: true; merged_into: number }> {
+  return fetchJson<{ ok: true; merged_into: number }>(
+    `/api/admin/memory/entities/${entityId}/merge`,
+    { method: 'POST', body: JSON.stringify(payload) },
+  )
+}
+
+/**
+ * POST /api/admin/memory/entities/{id}/confirm-separate — owner
+ * confirms an uncertain pair as different people; both rows promote
+ * to ``merge_status='confirmed'`` and the daemon stops proposing the
+ * merge.
+ */
+export async function confirmSeparateEntities(
+  entityId: number,
+  payload: EntitySeparatePayload,
+): Promise<{ ok: true }> {
+  return fetchJson<{ ok: true }>(
+    `/api/admin/memory/entities/${entityId}/confirm-separate`,
+    { method: 'POST', body: JSON.stringify(payload) },
   )
 }
 
