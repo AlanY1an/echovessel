@@ -17,7 +17,7 @@ from echovessel.memory import (
     create_engine,
 )
 from echovessel.memory.models import Entity, EntityAlias
-from echovessel.runtime.turn.coordinator import _render_entity_disambiguation_hint
+from echovessel.runtime.turn.prompt_assembly import _render_entity_disambiguation_hint
 
 
 def _seed(engine) -> None:

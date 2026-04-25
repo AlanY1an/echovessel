@@ -20,9 +20,9 @@ from echovessel.memory import (
 from echovessel.memory.models import ConceptNode
 from echovessel.runtime.turn.coordinator import (
     EXPECTATION_MATCH_COSINE_THRESHOLD,
-    build_system_prompt,
     check_pending_expectations,
 )
+from echovessel.runtime.turn.prompt_assembly import build_system_prompt
 
 
 def _seed(engine) -> None:

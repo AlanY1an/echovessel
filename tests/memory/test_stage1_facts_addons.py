@@ -36,7 +36,7 @@ from echovessel.runtime import (
     load_config_from_str,
 )
 from echovessel.runtime.llm import StubProvider
-from echovessel.runtime.turn.coordinator import (
+from echovessel.runtime.turn.prompt_assembly import (
     PersonaFactsView,
     build_system_prompt,
 )

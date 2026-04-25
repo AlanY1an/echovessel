@@ -18,7 +18,7 @@ from datetime import datetime
 
 from echovessel.core.types import NodeType
 from echovessel.memory.models import ConceptNode
-from echovessel.runtime.turn.coordinator import build_user_prompt
+from echovessel.runtime.turn.prompt_assembly import build_user_prompt
 
 
 @dataclass
