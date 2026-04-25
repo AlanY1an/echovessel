@@ -85,6 +85,12 @@ def test_fresh_db_carries_all_v04_shape():
     # Partial unique index for single-self invariant
     assert _index_exists(engine, "uq_entities_single_self")
 
+    # v0.5 hotfix · entities.owner_override flag (admin Persona tab
+    # Social Graph protects manual edits from the slow_cycle
+    # description synthesizer).
+    entity_cols = _cols(engine, "entities")
+    assert "owner_override" in entity_cols, "missing entities.owner_override"
+
 
 # ---------------------------------------------------------------------------
 # Case 2 · legacy v0.3 DB (no v0.4 columns) upgrades cleanly
@@ -348,6 +354,64 @@ def test_source_turn_ids_backfill():
     assert rows["with-turn"] == ("T1", '["T1"]')
     # Rows with NULL scalar keep the empty list default.
     assert rows["without-turn"] == (None, "[]")
+
+
+# ---------------------------------------------------------------------------
+# Case 5b · v0.5 hotfix · legacy entities table gains owner_override
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_entities_table_gains_owner_override_column():
+    """A legacy ``entities`` table (created with the original v0.4
+    DDL, no ``owner_override`` column) gets the new flag added by
+    ``ensure_schema_up_to_date``. Default is ``0`` so existing rows
+    behave as if untouched.
+    """
+    engine = create_engine(":memory:")
+    # Hand-craft the v0.4-shaped entities table without ``owner_override``.
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE entities (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    persona_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    canonical_name TEXT NOT NULL,
+                    kind TEXT NOT NULL DEFAULT 'person',
+                    description TEXT,
+                    merge_status TEXT NOT NULL DEFAULT 'confirmed',
+                    merge_target_id INTEGER,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted_at DATETIME
+                )
+                """
+            )
+        )
+        # Seed a legacy row so we can verify the default after ALTER.
+        conn.execute(
+            text(
+                "INSERT INTO entities "
+                "(persona_id, user_id, canonical_name, kind) "
+                "VALUES ('p', 'self', 'Mochi', 'pet')"
+            )
+        )
+
+    assert "owner_override" not in _cols(engine, "entities")
+    ensure_schema_up_to_date(engine)
+    assert "owner_override" in _cols(engine, "entities")
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT canonical_name, owner_override FROM entities")
+        ).one()
+    assert row[0] == "Mochi"
+    assert int(row[1]) == 0  # default
+
+    # Idempotent — second run is a no-op.
+    ensure_schema_up_to_date(engine)
+    assert "owner_override" in _cols(engine, "entities")
 
 
 # ---------------------------------------------------------------------------
