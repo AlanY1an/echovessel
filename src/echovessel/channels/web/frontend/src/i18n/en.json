@@ -279,6 +279,13 @@
         "reflection_hint": "The persona writes these · you can delete",
         "social_graph": "People around you"
       },
+      "voice_chip": {
+        "aria": "Voice settings · adjust in Voice tab",
+        "label": "voice",
+        "cloned": "cloned",
+        "default": "default",
+        "off": "off"
+      },
       "blocks": {
         "persona_label": "Who this persona is",
         "persona_hint": "Editing this re-tunes the persona's core character. Takes effect on the next message.",

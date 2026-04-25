@@ -49,10 +49,12 @@ export function IdentitySection({
   persona,
   updatePersona,
   updateFacts,
+  onOpenVoiceTab,
 }: {
   persona: PersonaStateApi
   updatePersona: (payload: PersonaUpdatePayload) => Promise<void>
   updateFacts: (facts: Partial<PersonaFacts>) => Promise<void>
+  onOpenVoiceTab: () => void
 }) {
   const { t } = useTranslation()
 
@@ -101,6 +103,17 @@ export function IdentitySection({
     })
   }
 
+  // Read-only voice status chip in the section header. Source of truth
+  // is the Voice tab (clone wizard, voice_id picker); this is just a
+  // display + jump-link so the owner sees current state without leaving
+  // the persona view.
+  const voiceChipText = !persona.voice_enabled
+    ? t('admin.persona.voice_chip.off')
+    : persona.voice_id !== null
+      ? t('admin.persona.voice_chip.cloned')
+      : t('admin.persona.voice_chip.default')
+  const voiceChipIcon = persona.voice_enabled ? '🔊' : '🔇'
+
   return (
     <section className="stack g-3">
       <div className="row g-2" style={{ alignItems: 'baseline' }}>
@@ -114,6 +127,17 @@ export function IdentitySection({
         >
           {t('admin.persona.sections.identity_hint')}
         </span>
+        <div className="flex1" />
+        <button
+          type="button"
+          className="chip"
+          onClick={onOpenVoiceTab}
+          title={t('admin.persona.voice_chip.aria')}
+          aria-label={t('admin.persona.voice_chip.aria')}
+          style={{ cursor: 'pointer' }}
+        >
+          {voiceChipIcon} {t('admin.persona.voice_chip.label')} · {voiceChipText} ↗
+        </button>
       </div>
 
       <AvatarCard

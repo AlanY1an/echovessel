@@ -31,10 +31,12 @@ export function AdmPersona({
   persona,
   updatePersona,
   updateFacts,
+  onOpenVoiceTab,
 }: {
   persona: PersonaStateApi
   updatePersona: (payload: PersonaUpdatePayload) => Promise<void>
   updateFacts: (facts: Partial<PersonaFacts>) => Promise<void>
+  onOpenVoiceTab: () => void
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -75,6 +77,7 @@ export function AdmPersona({
         persona={persona}
         updatePersona={updatePersona}
         updateFacts={updateFacts}
+        onOpenVoiceTab={onOpenVoiceTab}
       />
 
       <hr style={{ border: 0, borderTop: '1px solid var(--rule)' }} />

@@ -279,6 +279,13 @@
         "reflection_hint": "persona 自己写 · 你可以删",
         "social_graph": "身边的人"
       },
+      "voice_chip": {
+        "aria": "声音设置 · 在 Voice tab 调整",
+        "label": "声音",
+        "cloned": "已克隆",
+        "default": "默认音",
+        "off": "已关闭"
+      },
       "blocks": {
         "persona_label": "这个 persona 是谁",
         "persona_hint": "改这里 = 调整 persona 的人格基调。下一条消息开始生效。",
