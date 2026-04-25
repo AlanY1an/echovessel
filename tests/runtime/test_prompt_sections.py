@@ -16,7 +16,7 @@ from datetime import datetime
 
 from echovessel.core.types import BlockLabel, NodeType
 from echovessel.memory.models import ConceptNode, CoreBlock
-from echovessel.runtime.interaction import (
+from echovessel.runtime.turn.coordinator import (
     build_system_prompt,
     build_user_prompt,
 )

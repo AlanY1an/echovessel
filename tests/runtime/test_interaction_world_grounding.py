@@ -16,7 +16,7 @@ from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from echovessel.memory.models import Persona
-from echovessel.runtime.interaction import (
+from echovessel.runtime.turn.coordinator import (
     PersonaFactsView,
     _format_episodic_state_section,
     _format_now_section,

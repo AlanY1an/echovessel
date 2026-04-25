@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from echovessel.runtime.channel_registry import ChannelRegistry
-from echovessel.runtime.interaction import IncomingMessage, IncomingTurn
+from echovessel.runtime.turn.coordinator import IncomingMessage, IncomingTurn
 
 log = logging.getLogger(__name__)
 

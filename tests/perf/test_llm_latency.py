@@ -88,7 +88,7 @@ def _seed_persona(engine):
 def _build_turn_context(rt):
     from sqlmodel import Session
 
-    from echovessel.runtime.interaction import TurnContext
+    from echovessel.runtime.turn.coordinator import TurnContext
 
     db = Session(rt.ctx.engine)
     return db, TurnContext(
@@ -128,7 +128,7 @@ async def runtime():
 
 async def test_single_turn_latency(runtime):
     """Single turn: TTFT + total time + tokens/sec."""
-    from echovessel.runtime.interaction import assemble_turn
+    from echovessel.runtime.turn.coordinator import assemble_turn
 
     rt = runtime
     db, ctx = _build_turn_context(rt)
@@ -173,7 +173,7 @@ async def test_single_turn_latency(runtime):
 
 async def test_multi_turn_latency(runtime):
     """3 consecutive turns: does context accumulation degrade latency?"""
-    from echovessel.runtime.interaction import assemble_turn
+    from echovessel.runtime.turn.coordinator import assemble_turn
 
     rt = runtime
     prompts = [
@@ -221,7 +221,7 @@ async def test_multi_turn_latency(runtime):
 
 async def test_model_comparison(runtime):
     """gpt-4o-mini vs gpt-4o: compare TTFT and throughput."""
-    from echovessel.runtime.interaction import assemble_turn
+    from echovessel.runtime.turn.coordinator import assemble_turn
 
     rt = runtime
     models = ["gpt-4o-mini", "gpt-4o"]

@@ -259,7 +259,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
-from echovessel.runtime.interaction import IncomingMessage, IncomingTurn
+from echovessel.runtime.turn.coordinator import IncomingMessage, IncomingTurn
 
 
 class MyTransformChannel:

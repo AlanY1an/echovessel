@@ -35,11 +35,11 @@ from echovessel.runtime import (
     build_zero_embedder,
     load_config_from_str,
 )
-from echovessel.runtime.interaction import (
+from echovessel.runtime.llm import StubProvider
+from echovessel.runtime.turn.coordinator import (
     PersonaFactsView,
     build_system_prompt,
 )
-from echovessel.runtime.llm import StubProvider
 
 
 def _toml(data_dir: str) -> str:
