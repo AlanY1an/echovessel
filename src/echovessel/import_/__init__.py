@@ -3,7 +3,7 @@
 Layer 2 subsystem. Depends only on ``echovessel.memory`` and
 ``echovessel.core``. Does **not** import from ``runtime`` / ``channels`` /
 ``proactive`` — the runtime glue lives in
-``echovessel.runtime.importer_facade`` and injects every cross-layer
+``echovessel.runtime.wiring.importer`` and injects every cross-layer
 collaborator by parameter.
 
 Public surface:

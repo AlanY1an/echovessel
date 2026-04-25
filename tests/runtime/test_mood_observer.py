@@ -20,7 +20,7 @@ import asyncio
 import pytest
 
 from echovessel.runtime.channel_registry import ChannelRegistry
-from echovessel.runtime.memory_observers import RuntimeMemoryObserver
+from echovessel.runtime.wiring.memory_observer import RuntimeMemoryObserver
 
 
 class _FakeChannel:

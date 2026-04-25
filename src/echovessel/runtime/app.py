@@ -61,21 +61,9 @@ from echovessel.proactive import (
 )
 from echovessel.runtime.channel_registry import ChannelRegistry
 from echovessel.runtime.config import Config, load_config
-from echovessel.runtime.importer_facade import ImporterFacade
 from echovessel.runtime.llm import LLMProvider, build_llm_provider
 from echovessel.runtime.loops.consolidate_worker import ConsolidateWorker
 from echovessel.runtime.loops.idle_scanner import IdleScanner
-from echovessel.runtime.memory_facade import (
-    MemoryFacade,
-    ProactiveChannelRegistry,
-)
-from echovessel.runtime.memory_observers import RuntimeMemoryObserver
-from echovessel.runtime.prompts_wiring import (
-    make_extract_fn,
-    make_proactive_fn,
-    make_reflect_fn,
-    make_slow_cycle_fn,
-)
 from echovessel.runtime.turn.coordinator import (
     AssembledTurn,
     IncomingTurn,
@@ -83,6 +71,18 @@ from echovessel.runtime.turn.coordinator import (
     assemble_turn,
 )
 from echovessel.runtime.turn.dispatcher import TurnDispatcher
+from echovessel.runtime.wiring.importer import ImporterFacade
+from echovessel.runtime.wiring.memory import (
+    MemoryFacade,
+    ProactiveChannelRegistry,
+)
+from echovessel.runtime.wiring.memory_observer import RuntimeMemoryObserver
+from echovessel.runtime.wiring.prompts import (
+    make_extract_fn,
+    make_proactive_fn,
+    make_reflect_fn,
+    make_slow_cycle_fn,
+)
 from echovessel.voice import (
     VoiceService,
     VoiceServiceConfig,

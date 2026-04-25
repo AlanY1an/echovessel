@@ -102,7 +102,7 @@ class ImporterFacade:
         - ``voice_service`` — optional; MVP import pipeline does not
           use voice, but the spec reserves the slot so v1.0 can
           re-ingest voice memos.
-        - ``memory_api`` — the :class:`echovessel.runtime.memory_facade.MemoryFacade`
+        - ``memory_api`` — the :class:`echovessel.runtime.wiring.memory.MemoryFacade`
           instance. We duck-type it for attributes the pipeline needs
           (``_db_factory``, optional ``embed_fn`` / ``vector_writer``)
           so tests can supply a bare stub.

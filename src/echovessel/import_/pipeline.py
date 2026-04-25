@@ -68,7 +68,7 @@ class PipelineEventLike:
     """Minimal structural event used by the orchestrator.
 
     Matches the shape of
-    ``echovessel.runtime.importer_facade.PipelineEvent`` so the
+    ``echovessel.runtime.wiring.importer.PipelineEvent`` so the
     facade can translate back-and-forth without a dependency from this
     module up to runtime.
     """

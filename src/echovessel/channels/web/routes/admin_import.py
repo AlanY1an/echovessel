@@ -212,7 +212,7 @@ def build_admin_import_router(
         ``ctx.config.runtime.data_dir``, ``ctx.persona.id``,
         ``ctx.embed_fn``, and ``ctx.backend``.
     importer_facade
-        Live :class:`echovessel.runtime.importer_facade.ImporterFacade`.
+        Live :class:`echovessel.runtime.wiring.importer.ImporterFacade`.
         Typed as ``Any`` to avoid a channel→runtime import chain that
         would violate the layered-architecture contract.
     """

@@ -46,7 +46,7 @@ from echovessel.memory.sessions import mark_session_closing
 from echovessel.runtime.config import load_config
 from echovessel.runtime.llm.base import LLMProvider
 from echovessel.runtime.llm.factory import build_llm_provider
-from echovessel.runtime.prompts_wiring import make_extract_fn, make_reflect_fn
+from echovessel.runtime.wiring.prompts import make_extract_fn, make_reflect_fn
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures"
 REAL_CONFIG_PATH = Path.home() / ".echovessel" / "config.toml"
