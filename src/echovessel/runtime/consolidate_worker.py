@@ -48,7 +48,7 @@ from echovessel.memory.consolidate import (
     ReflectFn,
     consolidate_session,
 )
-from echovessel.memory.consolidate_tracer import (
+from echovessel.memory.consolidate.tracer import (
     ConsolidateTracer,
     NullConsolidateTracer,
     make_consolidate_tracer,

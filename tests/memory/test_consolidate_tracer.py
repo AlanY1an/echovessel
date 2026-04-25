@@ -6,7 +6,7 @@ from sqlalchemy import text
 from sqlmodel import Session as DbSession
 
 from echovessel.memory import create_all_tables, create_engine
-from echovessel.memory.consolidate_tracer import (
+from echovessel.memory.consolidate.tracer import (
     ConsolidateTracer,
     NullConsolidateTracer,
     make_consolidate_tracer,

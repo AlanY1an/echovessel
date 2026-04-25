@@ -26,7 +26,7 @@ from sqlmodel import select
 
 from echovessel.core.types import EventTime, NodeType, SessionStatus
 from echovessel.memory.backend import StorageBackend
-from echovessel.memory.consolidate_tracer import (
+from echovessel.memory.consolidate.tracer import (
     ConsolidateTracer,
     NullConsolidateTracer,
 )
