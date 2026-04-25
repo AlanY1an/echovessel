@@ -499,13 +499,28 @@ export async function getMemoryEvents(
   )
 }
 
-/** GET /api/admin/memory/thoughts — paginated L4 list for the admin Thoughts tab. */
+/**
+ * GET /api/admin/memory/thoughts — paginated L4 list for the admin
+ * Thoughts tab.
+ *
+ * ``subject`` (v0.5 hotfix) scopes the list to one subject value
+ * ("persona" / "user" / "shared"); omit for the legacy "all
+ * subjects" behaviour. The Admin Persona tab Reflection section
+ * passes ``subject: 'persona'`` to surface only the persona-authored
+ * introspection rows.
+ */
 export async function getMemoryThoughts(
   limit = 20,
   offset = 0,
+  subject?: 'persona' | 'user' | 'shared',
 ): Promise<MemoryListResponse<MemoryThought>> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  })
+  if (subject !== undefined) params.set('subject', subject)
   return fetchJson<MemoryListResponse<MemoryThought>>(
-    _memoryListPath('/api/admin/memory/thoughts', limit, offset),
+    `/api/admin/memory/thoughts?${params.toString()}`,
   )
 }
 

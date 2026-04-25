@@ -300,10 +300,12 @@
         "empty": "No self-reflections yet · keep chatting and the persona will start writing notes about itself",
         "see_filling": "see filling chain ({{count}})",
         "delete_aria": "Delete this reflection",
+        "delete_confirm": "Delete this reflection?\n\n{{preview}}\n\nslow_tick won't bring it back.",
         "source_slow_tick": "slow_tick",
         "source_reflection": "reflection",
         "filling_modal_title": "Source events",
-        "filling_modal_pending": "Once Worker A merges, this will load via GET /api/admin/memory/thoughts/{{id}}/trace"
+        "filling_modal_empty": "No filling chain · the source events may have been deleted, or this reflection came from an import",
+        "filling_modal_session_count": "From {{count}} sessions"
       },
       "entities": {
         "count": "{{count}} total",

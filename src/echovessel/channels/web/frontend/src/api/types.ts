@@ -634,6 +634,14 @@ export interface MemoryEvent {
  * difference is the discriminator. The split into two interfaces
  * exists so callers don't accidentally render a thought in the
  * Events tab or vice versa.
+ *
+ * v0.5 hotfix · the serializer now also returns ``subject``,
+ * ``source``, and ``filling_event_ids``. ``subject`` is the
+ * ConceptNode column ("persona" / "user" / "shared"). ``source`` is
+ * the heuristic tag derived from subject + source_session_id and is
+ * non-null for thoughts. ``filling_event_ids`` are the L3 event IDs
+ * this thought was reflected from (empty when the lineage is
+ * orphaned or the row is from import).
  */
 export interface MemoryThought {
   id: number
@@ -648,6 +656,9 @@ export interface MemoryThought {
   source_deleted: boolean
   created_at: string | null
   access_count: number
+  subject: string
+  source: 'slow_tick' | 'reflection' | null
+  filling_event_ids: number[]
 }
 
 /**

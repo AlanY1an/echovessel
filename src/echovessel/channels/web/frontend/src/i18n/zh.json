@@ -300,10 +300,12 @@
         "empty": "persona 还没有对自己的观察 · 继续聊天 · reflection 会自动产出",
         "see_filling": "看 filling chain ({{count}})",
         "delete_aria": "删除这条反思",
+        "delete_confirm": "删掉这条反思?\n\n{{preview}}\n\nslow_tick 不会复活它。",
         "source_slow_tick": "slow_tick",
         "source_reflection": "reflection",
         "filling_modal_title": "源事件",
-        "filling_modal_pending": "等 Worker A merge 后接 GET /api/admin/memory/thoughts/{{id}}/trace"
+        "filling_modal_empty": "找不到 filling 链 · 可能源事件已被删 · 或者这条反思来自导入",
+        "filling_modal_session_count": "来自 {{count}} 个 session"
       },
       "entities": {
         "count": "共 {{count}} 个",
