@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import type { BlockMeta } from '../types'
+import type { BlockMeta } from '../../types'
 
 export function BlockCard({
   meta,
@@ -98,7 +98,7 @@ export function BlockCard({
         >
           {value || (
             <span style={{ color: 'var(--ink-4)' }}>
-              {t('admin.persona_blocks.placeholder_default')}
+              {t('admin.persona.blocks.placeholder_default')}
             </span>
           )}
         </div>

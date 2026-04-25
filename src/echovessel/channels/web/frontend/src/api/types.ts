@@ -56,10 +56,11 @@ export interface DaemonState {
 // ─── HTTP · GET /api/admin/persona ───────────────────────────────────────
 
 /**
- * Full persona state for the Admin screen. `core_blocks` carries the
- * current L1 core block text for each of the five labels (persona /
- * self / user / relationship / style · v0.4). ``voice_id`` may be
- * null if no voice has been cloned/selected yet.
+ * Full persona state for the Admin screen. ``core_blocks`` carries the
+ * three human-authored L1 labels (persona / user / style). v0.5 dropped
+ * ``self`` (now L4 thought[subject='persona']) and ``relationship`` (now
+ * L5 entities.description). ``voice_id`` may be null if no voice has
+ * been cloned/selected yet.
  */
 export interface PersonaStateApi {
   id: string
@@ -69,9 +70,7 @@ export interface PersonaStateApi {
   has_avatar: boolean
   core_blocks: {
     persona: string
-    self: string
     user: string
-    relationship: string
     style: string
   }
   facts: PersonaFacts
@@ -131,15 +130,15 @@ export const EMPTY_PERSONA_FACTS: PersonaFacts = {
 // ─── HTTP · POST /api/admin/persona/onboarding ───────────────────────────
 
 /**
- * First-run onboarding payload. Creates the persona and writes the
- * initial values for the three prose core blocks (persona / self /
- * user). Rejected with 409 if already onboarded. Relationship and
- * style blocks are owner-curated later from the Admin Persona tab.
+ * First-run onboarding payload. Creates the persona and writes the two
+ * human-authored prose blocks (persona / user). Rejected with 409 if
+ * already onboarded. ``style`` is owner-curated later via
+ * ``POST /api/admin/persona/style``. Sending ``self_block`` or
+ * ``relationship_block`` returns 422 — those labels were dropped in v0.5.
  */
 export interface OnboardingPayload {
   display_name: string
   persona_block: string
-  self_block: string
   user_block: string
   /** Optional biographic facts written to the persona row alongside
    *  the core blocks. Omit or send null to leave every fact unset. */
@@ -168,9 +167,7 @@ export interface PersonaExtractRequest {
   user_input?: string
   existing_blocks?: {
     persona_block?: string
-    self_block?: string
     user_block?: string
-    relationship_block?: string
   }
   locale?: string
   persona_display_name?: string
@@ -189,9 +186,7 @@ export interface PersonaExtractResponse {
   input_type: 'blank_write' | 'import_upload'
   core_blocks: {
     persona_block: string
-    self_block: string
     user_block: string
-    relationship_block: string
   }
   facts: PersonaFacts
   facts_confidence: number
@@ -231,18 +226,16 @@ export interface PersonaBootstrapRequest {
 
 /**
  * Response from bootstrap-from-material. ``suggested_blocks`` is the
- * LLM's four-block draft (persona / self / user / relationship),
- * presented to the user for review before they click "完成" (which
- * POSTs to /api/admin/persona/onboarding).
+ * LLM's two-block draft (persona / user), presented to the user for
+ * review before they click "完成" (which POSTs to
+ * /api/admin/persona/onboarding).
  *
  * Empty blocks are returned as empty strings, not omitted keys.
  */
 export interface PersonaBootstrapResponse {
   suggested_blocks: {
     persona_block: string
-    self_block: string
     user_block: string
-    relationship_block: string
   }
   source_event_count: number
   source_thought_count: number
@@ -253,15 +246,15 @@ export interface PersonaBootstrapResponse {
 
 /**
  * Partial persona update. Every field is optional; server applies only
- * the ones present. Unset fields are left untouched.
+ * the ones present. Unset fields are left untouched. ``style`` lives on
+ * its own endpoint (``POST /api/admin/persona/style``) — sending
+ * ``style_block`` here returns 422, as do the v0.4 ``self_block`` /
+ * ``relationship_block`` / ``mood_block`` fields.
  */
 export interface PersonaUpdatePayload {
   display_name?: string
   persona_block?: string
-  self_block?: string
   user_block?: string
-  relationship_block?: string
-  style_block?: string
 }
 
 // ─── HTTP · POST /api/admin/persona/style ────────────────────────────────
@@ -641,6 +634,14 @@ export interface MemoryEvent {
  * difference is the discriminator. The split into two interfaces
  * exists so callers don't accidentally render a thought in the
  * Events tab or vice versa.
+ *
+ * v0.5 hotfix · the serializer now also returns ``subject``,
+ * ``source``, and ``filling_event_ids``. ``subject`` is the
+ * ConceptNode column ("persona" / "user" / "shared"). ``source`` is
+ * the heuristic tag derived from subject + source_session_id and is
+ * non-null for thoughts. ``filling_event_ids`` are the L3 event IDs
+ * this thought was reflected from (empty when the lineage is
+ * orphaned or the row is from import).
  */
 export interface MemoryThought {
   id: number
@@ -655,6 +656,9 @@ export interface MemoryThought {
   source_deleted: boolean
   created_at: string | null
   access_count: number
+  subject: string
+  source: 'slow_tick' | 'reflection' | null
+  filling_event_ids: number[]
 }
 
 /**
@@ -748,6 +752,102 @@ export interface MemoryTimelineResponse {
   items: MemoryTimelineItem[]
   oldest_timestamp: string | null
   limit: number
+}
+
+// ─── Persona Reflection · L4 thought[subject='persona'] ─────────────────
+
+/**
+ * Single persona-subject reflection row rendered in the Admin Persona
+ * tab's Reflection section. ``source`` flags whether the reflection was
+ * authored by the slow_tick worker (background self-narrative cycle) or
+ * by the in-turn ``reflect`` fast-loop pass; the UI shows the tag so
+ * the owner can tell automatic write-backs from gated reflection
+ * passes. ``filling_event_ids`` are the L3 event IDs the reflection
+ * crystallised from — the "see filling chain" affordance fans out to
+ * those ids via ``GET /api/admin/memory/thoughts/{id}/trace``.
+ */
+export interface PersonaThought {
+  id: number
+  description: string
+  subject: 'persona'
+  created_at: string
+  filling_event_ids: number[]
+  source: 'slow_tick' | 'reflection'
+}
+
+// ─── L5 entity (Social Graph section) ───────────────────────────────────
+
+/**
+ * One row of the entities list returned by
+ * ``GET /api/admin/memory/entities``. Mirrors the L5 entity table
+ * surfaced in the Admin Persona tab's Social Graph section.
+ *
+ * ``description`` is the synthesised "About {canonical_name}" prose
+ * the slow_tick worker writes once an entity has accumulated enough
+ * linked events; null when nothing has been written yet.
+ * ``owner_override`` is true when the owner has hand-edited the
+ * description from the admin UI — slow_tick will not overwrite an
+ * owner-overridden description.
+ *
+ * ``merge_status`` distinguishes confirmed entities (resolved
+ * canonical IDs) from uncertain pairs awaiting arbitration in the
+ * UncertainCallout, and from pending rows the LLM proposed but
+ * hasn't yet linked to enough events to confirm.
+ */
+export interface EntityRow {
+  id: number
+  canonical_name: string
+  kind: 'person' | 'place' | 'org' | 'pet' | 'other'
+  merge_status: 'confirmed' | 'uncertain' | 'pending'
+  /** When ``merge_status='uncertain'``, the candidate match id the
+   *  owner is being asked to arbitrate. Null on confirmed / pending
+   *  rows. */
+  merge_target_id: number | null
+  description: string | null
+  owner_override: boolean
+  linked_events_count: number
+  last_mentioned_at: string | null
+  aliases: string[]
+}
+
+/** Body for ``POST /api/admin/memory/entities`` (manual add). */
+export interface EntityCreatePayload {
+  canonical_name: string
+  kind: EntityRow['kind']
+  description?: string | null
+  aliases?: string[]
+}
+
+/** Body for ``POST /api/admin/memory/entities/{id}/merge``. */
+export interface EntityMergePayload {
+  target_id: number
+}
+
+/** Body for ``POST /api/admin/memory/entities/{id}/confirm-separate``. */
+export interface EntitySeparatePayload {
+  other_id: number
+}
+
+/**
+ * Body for the uncertain-merge arbitration endpoint. ``same: true``
+ * folds entity B into entity A (canonical id wins); ``same: false``
+ * promotes both rows to ``confirmed`` and never proposes the merge
+ * again.
+ */
+export interface EntityClarification {
+  entity_a_id: number
+  entity_b_id: number
+  same: boolean
+}
+
+/**
+ * Body for ``PATCH /api/admin/memory/entities/{id}``. The server
+ * stamps ``owner_override=true`` automatically when this endpoint
+ * fires — the client must NOT send the flag itself, slow_tick gates
+ * write-back on the server-side flag.
+ */
+export interface EntityDescriptionPatchPayload {
+  description: string
 }
 
 // ─── HTTP · GET /api/admin/memory/search ────────────────────────────────

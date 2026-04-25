@@ -89,6 +89,7 @@ export function Admin({
               persona={persona}
               updatePersona={updatePersona}
               updateFacts={updateFacts}
+              onOpenVoiceTab={() => setTab('voice')}
             />
           )}
           {tab === 'memory' && <AdmMemory />}
