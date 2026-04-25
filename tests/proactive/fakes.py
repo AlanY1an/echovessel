@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from echovessel.proactive.base import (
+from echovessel.proactive.core.base import (
     AuditSink,
     ChannelProtocol,
     PersonaView,

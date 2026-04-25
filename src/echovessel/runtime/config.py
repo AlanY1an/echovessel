@@ -356,7 +356,7 @@ class ProactiveSection(BaseModel):
         without leaking proactive imports into the runtime config module
         at import time — lazy imported.
         """
-        from echovessel.proactive.config import ProactiveConfig
+        from echovessel.proactive.core.config import ProactiveConfig
 
         return ProactiveConfig(
             enabled=self.enabled,

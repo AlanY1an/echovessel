@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
-from echovessel.proactive.delivery import (
+from echovessel.proactive.execution.delivery import (
     DeliveryRouter,
     VoiceBudgetError,
     VoicePermanentError,

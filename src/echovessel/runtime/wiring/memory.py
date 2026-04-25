@@ -49,7 +49,7 @@ from echovessel.memory.ingest import IngestResult, ingest_message
 from echovessel.memory.models import ConceptNode
 from echovessel.memory.models import Session as SessionRow
 from echovessel.memory.retrieve import load_core_blocks
-from echovessel.proactive.base import ChannelProtocol
+from echovessel.proactive.core.base import ChannelProtocol
 from echovessel.runtime.channel_registry import ChannelRegistry
 
 log = logging.getLogger(__name__)

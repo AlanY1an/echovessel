@@ -52,8 +52,7 @@ Proactive may NOT import:
 Spec: docs/proactive/01-spec-v0.1.md
 """
 
-from echovessel.proactive.audit import JSONLAuditSink
-from echovessel.proactive.base import (
+from echovessel.proactive.core.base import (
     ActionType,
     AuditSink,
     ChannelProtocol,
@@ -73,27 +72,28 @@ from echovessel.proactive.base import (
     TriggerReason,
     VoiceServiceProtocol,
 )
-from echovessel.proactive.config import ProactiveConfig
-from echovessel.proactive.delivery import (
+from echovessel.proactive.core.config import ProactiveConfig
+from echovessel.proactive.core.errors import (
+    ProactiveError,
+    ProactivePermanentError,
+    ProactiveTransientError,
+)
+from echovessel.proactive.engines.generator import (
+    F10Violation,
+    GenerationOutcome,
+    MessageGenerator,
+)
+from echovessel.proactive.engines.policy import SHOCK_IMPACT, PolicyEngine
+from echovessel.proactive.execution.audit import JSONLAuditSink
+from echovessel.proactive.execution.delivery import (
     DeliveryRouter,
     VoiceBudgetError,
     VoicePermanentError,
     VoiceTransientError,
 )
-from echovessel.proactive.errors import (
-    ProactiveError,
-    ProactivePermanentError,
-    ProactiveTransientError,
-)
+from echovessel.proactive.execution.queue import DEFAULT_MAX_EVENTS, ProactiveEventQueue
+from echovessel.proactive.execution.scheduler import DefaultScheduler
 from echovessel.proactive.factory import build_proactive_scheduler
-from echovessel.proactive.generator import (
-    F10Violation,
-    GenerationOutcome,
-    MessageGenerator,
-)
-from echovessel.proactive.policy import SHOCK_IMPACT, PolicyEngine
-from echovessel.proactive.queue import DEFAULT_MAX_EVENTS, ProactiveEventQueue
-from echovessel.proactive.scheduler import DefaultScheduler
 
 __all__ = [
     # Top-level

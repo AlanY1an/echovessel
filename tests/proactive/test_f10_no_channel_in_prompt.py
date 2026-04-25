@@ -17,8 +17,8 @@ from datetime import datetime
 
 import pytest
 
-from echovessel.proactive.base import MemorySnapshot, SkipReason
-from echovessel.proactive.generator import (
+from echovessel.proactive.core.base import MemorySnapshot, SkipReason
+from echovessel.proactive.engines.generator import (
     F10Violation,
     MessageGenerator,
     _assert_no_channel_leak,
@@ -149,13 +149,13 @@ def test_polluted_core_block_blocks_generator_path():
 
     async def _spy_fn(snapshot):
         fn_called["n"] += 1
-        from echovessel.proactive.base import ProactiveMessage
+        from echovessel.proactive.core.base import ProactiveMessage
 
         return ProactiveMessage(text="should not get here")
 
     gen = MessageGenerator(memory=memory, proactive_fn=_spy_fn)
 
-    from echovessel.proactive.base import (
+    from echovessel.proactive.core.base import (
         ActionType,
         ProactiveDecision,
         TriggerReason,

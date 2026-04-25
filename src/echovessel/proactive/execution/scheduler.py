@@ -26,7 +26,7 @@ from datetime import datetime
 from typing import Any
 
 from echovessel.core.types import MessageRole
-from echovessel.proactive.base import (
+from echovessel.proactive.core.base import (
     ActionType,
     AuditSink,
     EventType,
@@ -38,12 +38,12 @@ from echovessel.proactive.base import (
     SkipReason,
     TriggerReason,
 )
-from echovessel.proactive.config import ProactiveConfig
-from echovessel.proactive.delivery import DeliveryRouter
-from echovessel.proactive.errors import ProactivePermanentError
-from echovessel.proactive.generator import MessageGenerator
-from echovessel.proactive.policy import PolicyEngine
-from echovessel.proactive.queue import ProactiveEventQueue
+from echovessel.proactive.core.config import ProactiveConfig
+from echovessel.proactive.core.errors import ProactivePermanentError
+from echovessel.proactive.engines.generator import MessageGenerator
+from echovessel.proactive.engines.policy import PolicyEngine
+from echovessel.proactive.execution.delivery import DeliveryRouter
+from echovessel.proactive.execution.queue import ProactiveEventQueue
 
 log = logging.getLogger(__name__)
 

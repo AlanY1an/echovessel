@@ -21,13 +21,13 @@ import asyncio
 from datetime import datetime, timedelta
 
 from echovessel.core.types import MessageRole
-from echovessel.proactive.base import ActionType, TriggerReason
-from echovessel.proactive.config import ProactiveConfig
-from echovessel.proactive.delivery import DeliveryRouter
-from echovessel.proactive.generator import MessageGenerator
-from echovessel.proactive.policy import PolicyEngine
-from echovessel.proactive.queue import ProactiveEventQueue
-from echovessel.proactive.scheduler import DefaultScheduler
+from echovessel.proactive.core.base import ActionType, TriggerReason
+from echovessel.proactive.core.config import ProactiveConfig
+from echovessel.proactive.engines.generator import MessageGenerator
+from echovessel.proactive.engines.policy import PolicyEngine
+from echovessel.proactive.execution.delivery import DeliveryRouter
+from echovessel.proactive.execution.queue import ProactiveEventQueue
+from echovessel.proactive.execution.scheduler import DefaultScheduler
 from tests.proactive.fakes import (
     FakeAuditSink,
     FakeChannel,

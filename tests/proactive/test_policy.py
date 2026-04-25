@@ -9,15 +9,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from echovessel.proactive.base import (
+from echovessel.proactive.core.base import (
     ActionType,
     EventType,
     ProactiveEvent,
     SkipReason,
     TriggerReason,
 )
-from echovessel.proactive.config import ProactiveConfig
-from echovessel.proactive.policy import PolicyEngine, _in_quiet_hours
+from echovessel.proactive.core.config import ProactiveConfig
+from echovessel.proactive.engines.policy import PolicyEngine, _in_quiet_hours
 from tests.proactive.fakes import (
     FakeAuditSink,
     FakeMessage,
@@ -133,7 +133,7 @@ def test_rate_limit_read_error_is_safe_skip():
 
 
 def _make_sent_decision(sent_at: datetime):
-    from echovessel.proactive.base import ProactiveDecision
+    from echovessel.proactive.core.base import ProactiveDecision
 
     return ProactiveDecision(
         decision_id=f"d_{sent_at.timestamp()}",

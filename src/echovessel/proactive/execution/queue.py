@@ -26,7 +26,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 
-from echovessel.proactive.base import ProactiveEvent
+from echovessel.proactive.core.base import ProactiveEvent
 
 DEFAULT_MAX_EVENTS = 64
 
