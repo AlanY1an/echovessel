@@ -268,3 +268,39 @@ forbidden_modules = [
     "echovessel.runtime",
     "echovessel.prompts",
 ]
+
+# Within the proactive package, the three sub-packages have a natural
+# bottom-up order:
+#   core      — Protocols, value types, config, errors (no proactive deps)
+#   engines   — decision logic (policy + generator); reads core
+#   execution — runtime delivery (scheduler / queue / delivery / audit);
+#               reads engines + core
+# A reverse import (engines → execution, or core → either) would be a
+# regression — core is foundational, engines decide before execution
+# delivers. The layered contract below freezes the order.
+
+[[tool.importlinter.contracts]]
+name = "Proactive sub-package layering: execution -> engines -> core"
+type = "layers"
+layers = [
+    "echovessel.proactive.execution",
+    "echovessel.proactive.engines",
+    "echovessel.proactive.core",
+]
+
+# runtime.wiring is the composition root — it builds adapters and
+# factory closures that runtime.app hands to channels, loops, and turn.
+# It must stay foundational: a turn/ or loops/ import inside wiring/
+# would couple the wiring graph to per-turn or background-loop code
+# and break the "build once at startup, hand out everywhere" model.
+# (channels → wiring is already blocked by the top-level layered
+# contract above; this guard is intra-runtime.)
+
+[[tool.importlinter.contracts]]
+name = "Runtime wiring must not import turn or loops"
+type = "forbidden"
+source_modules = ["echovessel.runtime.wiring"]
+forbidden_modules = [
+    "echovessel.runtime.turn",
+    "echovessel.runtime.loops",
+]
