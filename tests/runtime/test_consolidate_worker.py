@@ -19,8 +19,8 @@ from echovessel.memory import (
 from echovessel.memory.backends.sqlite import SQLiteBackend
 from echovessel.memory.consolidate import ExtractedEvent, ExtractionResult
 from echovessel.memory.models import ConceptNode
-from echovessel.runtime.consolidate_worker import ConsolidateWorker
 from echovessel.runtime.llm.errors import LLMPermanentError, LLMTransientError
+from echovessel.runtime.loops.consolidate_worker import ConsolidateWorker
 
 
 def _embed(text: str) -> list[float]:

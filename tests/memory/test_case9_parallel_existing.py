@@ -43,7 +43,7 @@ from echovessel.memory.slow_cycle import (
     SlowCycleOutput,
     SlowCycleThoughtInput,
 )
-from echovessel.runtime.consolidate_worker import ConsolidateWorker
+from echovessel.runtime.loops.consolidate_worker import ConsolidateWorker
 
 
 def _keyword_embed(text: str) -> list[float]:

@@ -273,7 +273,7 @@ def is_trivial(
     existing callers are behaviour-preserving. Runtime threads them from
     ``cfg.consolidate.trivial_message_count`` /
     ``cfg.consolidate.trivial_token_count`` via
-    :class:`echovessel.runtime.consolidate_worker.ConsolidateWorker`.
+    :class:`echovessel.runtime.loops.consolidate_worker.ConsolidateWorker`.
     """
     if session.message_count >= trivial_message_count:
         return False

@@ -44,8 +44,8 @@ from echovessel.memory.consolidate import (
     consolidate_session,
 )
 from echovessel.memory.models import ConceptNode
-from echovessel.runtime.consolidate_worker import ConsolidateWorker
 from echovessel.runtime.llm import StubProvider
+from echovessel.runtime.loops.consolidate_worker import ConsolidateWorker
 from echovessel.runtime.prompts_wiring import make_extract_fn
 
 # ---------------------------------------------------------------------------
