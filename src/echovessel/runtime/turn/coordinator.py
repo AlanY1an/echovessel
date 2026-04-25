@@ -56,7 +56,7 @@ from echovessel.runtime.llm.errors import (
     LLMPermanentError,
     LLMTransientError,
 )
-from echovessel.runtime.turn_tracer import (
+from echovessel.runtime.turn.tracer import (
     NullTurnTracer,
     TurnTracer,
     make_turn_tracer,
@@ -130,12 +130,11 @@ STYLE_INSTRUCTIONS = (
 # ---------------------------------------------------------------------------
 # Runtime-owned envelopes
 # ---------------------------------------------------------------------------
-# ``IncomingMessage`` and ``IncomingTurn`` now live canonically in
+# ``IncomingMessage`` and ``IncomingTurn`` live canonically in
 # ``echovessel.channels.base`` (Stage 1 of the web v1 release plan —
 # ``develop-docs/web-v1/01-stage-1-tracker.md``). They are re-exported
-# here for backward compatibility: all existing callers of
-# ``from echovessel.runtime.interaction import IncomingMessage`` continue
-# to resolve to the same class.
+# here so callers reaching the runtime turn-coordinator module still
+# get the canonical Channel-side types.
 
 __all__ = [
     "IncomingMessage",

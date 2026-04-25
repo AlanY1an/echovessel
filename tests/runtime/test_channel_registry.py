@@ -9,7 +9,7 @@ import pytest
 
 from echovessel.channels.base import IncomingMessage, OutgoingMessage
 from echovessel.runtime.channel_registry import ChannelRegistry
-from echovessel.runtime.turn_dispatcher import TurnDispatcher
+from echovessel.runtime.turn.dispatcher import TurnDispatcher
 
 
 class FakeChannel:

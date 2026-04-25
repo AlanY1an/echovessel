@@ -33,7 +33,7 @@ from echovessel.memory import (
 from echovessel.memory.backends.sqlite import SQLiteBackend
 from echovessel.memory.models import ConceptNode
 from echovessel.memory.retrieve import retrieve
-from echovessel.runtime.interaction import build_user_prompt
+from echovessel.runtime.turn.coordinator import build_user_prompt
 
 _NOW = datetime(2026, 4, 24, 14, 0, 0)
 

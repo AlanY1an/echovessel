@@ -17,7 +17,9 @@ from echovessel.memory import (
     create_engine,
 )
 from echovessel.memory.backends.sqlite import SQLiteBackend
-from echovessel.runtime.interaction import (
+from echovessel.runtime.llm import StubProvider
+from echovessel.runtime.llm.errors import LLMPermanentError, LLMTransientError
+from echovessel.runtime.turn.coordinator import (
     IncomingMessage,
     PersonaFactsView,
     TurnContext,
@@ -25,8 +27,6 @@ from echovessel.runtime.interaction import (
     build_system_prompt,
     build_user_prompt,
 )
-from echovessel.runtime.llm import StubProvider
-from echovessel.runtime.llm.errors import LLMPermanentError, LLMTransientError
 
 
 def _embed(text: str) -> list[float]:

@@ -1,6 +1,6 @@
 """Per-session dev-mode trace recorder for the consolidate pipeline (Spec 4).
 
-Mirrors :class:`echovessel.runtime.turn_tracer.TurnTracer` but the shape
+Mirrors :class:`echovessel.runtime.turn.tracer.TurnTracer` but the shape
 is a set of six phase JSON blobs (A–G) rather than a timeline. The
 consolidate pipeline is a strictly sequential state machine so a
 timeline would add no information; the phase-keyed layout matches the

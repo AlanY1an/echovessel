@@ -64,12 +64,6 @@ from echovessel.runtime.config import Config, load_config
 from echovessel.runtime.consolidate_worker import ConsolidateWorker
 from echovessel.runtime.idle_scanner import IdleScanner
 from echovessel.runtime.importer_facade import ImporterFacade
-from echovessel.runtime.interaction import (
-    AssembledTurn,
-    IncomingTurn,
-    TurnContext,
-    assemble_turn,
-)
 from echovessel.runtime.llm import LLMProvider, build_llm_provider
 from echovessel.runtime.memory_facade import (
     MemoryFacade,
@@ -82,7 +76,13 @@ from echovessel.runtime.prompts_wiring import (
     make_reflect_fn,
     make_slow_cycle_fn,
 )
-from echovessel.runtime.turn_dispatcher import TurnDispatcher
+from echovessel.runtime.turn.coordinator import (
+    AssembledTurn,
+    IncomingTurn,
+    TurnContext,
+    assemble_turn,
+)
+from echovessel.runtime.turn.dispatcher import TurnDispatcher
 from echovessel.voice import (
     VoiceService,
     VoiceServiceConfig,
@@ -1389,7 +1389,7 @@ class Runtime:
         # flips the admin toggle without first running the clone wizard.
         if voice_enabled and voice_service is not None:
             try:
-                from echovessel.runtime.interaction import _pending_id_for_turn
+                from echovessel.runtime.turn.coordinator import _pending_id_for_turn
 
                 message_id = _pending_id_for_turn(turn)
                 voice_result = await voice_service.generate_voice(

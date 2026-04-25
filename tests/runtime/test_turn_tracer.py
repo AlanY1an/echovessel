@@ -9,7 +9,7 @@ from sqlmodel import Session as DbSession
 
 from echovessel.memory import create_all_tables, create_engine
 from echovessel.memory.migrations import ensure_schema_up_to_date
-from echovessel.runtime.turn_tracer import (
+from echovessel.runtime.turn.tracer import (
     NullTurnTracer,
     TurnTracer,
     make_turn_tracer,

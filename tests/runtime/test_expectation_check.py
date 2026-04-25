@@ -18,7 +18,7 @@ from echovessel.memory import (
     create_engine,
 )
 from echovessel.memory.models import ConceptNode
-from echovessel.runtime.interaction import (
+from echovessel.runtime.turn.coordinator import (
     EXPECTATION_MATCH_COSINE_THRESHOLD,
     build_system_prompt,
     check_pending_expectations,
