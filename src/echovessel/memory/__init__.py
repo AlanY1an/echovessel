@@ -23,6 +23,7 @@ Public API (import from `echovessel.memory` directly):
 Only depends on `echovessel.core`. Must not import from voice/channels/runtime.
 """
 
+from echovessel.memory.consolidate import consolidate_session
 from echovessel.memory.db import create_all_tables, create_engine
 from echovessel.memory.episodic import update_episodic_state
 from echovessel.memory.imports import (
@@ -58,6 +59,7 @@ from echovessel.memory.retrieve import (
     ConceptSearchHit,
     list_concept_nodes,
     list_recall_messages,
+    retrieve,
     search_concept_nodes,
 )
 from echovessel.memory.slow_cycle import (
@@ -120,5 +122,8 @@ __all__ = [
     "list_recall_messages",
     "list_concept_nodes",
     "search_concept_nodes",
+    "retrieve",
     "ConceptSearchHit",
+    # Consolidation
+    "consolidate_session",
 ]
