@@ -176,6 +176,17 @@ Toggles and quotas for the slow_tick reflection phase. Full design lives in [`me
 
 Config parse failures (non-int / negative / out-of-range) fail-fast at startup; reload runs the same validation. When daily cap or a token budget is hit, the worker marks the over-budget cycle as `throttled` and logs a warning; the next rolling window restores capacity automatically.
 
+slow_tick does not write to L1 — its output lands in L4 thoughts / expectations and in L5 entity descriptions. This section therefore has no `self_narrative_append` or `self_block_*` field; any such field previously shown here has been removed from the schema.
+
+## `[dev_trace]`
+
+Toggle for dev-mode turn traces. With `false` (the default), runtime injects a `NullTurnTracer` whose `stage_start` / `stage_end` calls inside `assemble_turn` compile to bytecode no-ops, and the `turn_traces` / `session_traces` tables are never written. With `true`, every turn writes a `turn_traces` row, and the matching `session_traces` row is filled with the A–G phases once the session closes. Full mechanics live in [`runtime.md`](./runtime.md#dev-mode-turn-traces).
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `enabled` | `false` | Global on/off. While off, the tracer chain has zero overhead (Null variant); the frontend `?dev=1` drawer will get 404 / empty payloads. |
+| `ttl_days` | `14` | Default argument for `scripts/purge_old_traces.py --days`. The CLI flag can override (`--days 7`); the daemon does not purge automatically — the owner wires a cron or runs it on demand. |
+
 ## `[idle_scanner]`
 
 The idle scanner closes stale open sessions so that memory can consolidate them.

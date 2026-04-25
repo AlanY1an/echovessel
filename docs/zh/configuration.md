@@ -176,6 +176,17 @@ slow_tick reflection phase 的开关和 quota。完整设计见 [`memory.md`](./
 
 config 解析失败时(non-int / 负数 / 不在合理量级)启动时 fail-fast,不静默降级;reload 时也走同样的 validation。 在容量到达 daily cap 或 token budget 时,worker 把超额的 cycle 标记为"throttled"并 log warning,下一周期窗口自动恢复。
 
+slow_tick 不写 L1 · 产出只落 L4 thought / expectation + L5 entity description(合成或更新) · 所以这个 section 里没有 `self_narrative_append` / `self_block_*` 类字段 · 从前提过的任何这类字段都已从 schema 拿掉。
+
+## `[dev_trace]`
+
+Dev-mode turn trace 开关。`false`(默认)时 runtime 注入 `NullTurnTracer`,`assemble_turn` 内部的 `stage_start` / `stage_end` 调用折叠成字节码 no-op,`turn_traces` / `session_traces` 表完全不写。`true` 时每个 turn 写一条 `turn_traces` 行,session 关闭后填齐 `session_traces` 的 A–G 7 个 phase。完整机制见 [`runtime.md`](./runtime.md#dev-mode-turn-traces)。
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `enabled` | `false` | 全局开关。关着时零 overhead(tracer 是 no-op 变种)· 前端 `?dev=1` 点开 drawer 会拿到 404/空。 |
+| `ttl_days` | `14` | `scripts/purge_old_traces.py --days` 的默认值。CLI 参数可以覆盖(`--days 7`);daemon 不内置自动 purge,owner 自己加 cron 或按需手跑。 |
+
 ## `[idle_scanner]`
 
 空闲扫描器负责关闭陈旧的 open session,让 memory 可以去 consolidate 它们。
