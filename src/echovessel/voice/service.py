@@ -27,8 +27,8 @@ from echovessel.voice.base import (
 )
 from echovessel.voice.cloning import CloneEntry, FingerprintCache, compute_fingerprint
 from echovessel.voice.errors import VoicePermanentError
-from echovessel.voice.models import VoiceResult
 from echovessel.voice.pricing import COST_ESTIMATE_DISCLAIMER, estimate_tts_cost
+from echovessel.voice.types import VoiceResult
 
 log = logging.getLogger(__name__)
 

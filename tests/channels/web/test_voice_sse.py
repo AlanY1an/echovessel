@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 from echovessel.channels.base import OutgoingMessage
 from echovessel.channels.web.channel import WebChannel
 from echovessel.channels.web.sse import SSEBroadcaster
-from echovessel.voice.models import VoiceResult
+from echovessel.voice.types import VoiceResult
 
 
 def _make_voice_result() -> VoiceResult:

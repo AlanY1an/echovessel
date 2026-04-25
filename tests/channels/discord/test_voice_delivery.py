@@ -24,7 +24,7 @@ from echovessel.channels.base import (  # noqa: E402
     OutgoingMessage,
 )
 from echovessel.channels.discord.channel import DiscordChannel  # noqa: E402
-from echovessel.voice.models import VoiceResult  # noqa: E402
+from echovessel.voice.types import VoiceResult  # noqa: E402
 
 DEBOUNCE_MS = 50
 

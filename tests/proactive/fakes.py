@@ -172,7 +172,7 @@ class FakeChannelRegistry:
 
 @dataclass(frozen=True)
 class FakeVoiceResult:
-    """Stand-in for echovessel.voice.models.VoiceResult. Tests don't need
+    """Stand-in for echovessel.voice.types.VoiceResult. Tests don't need
     the real dataclass — proactive treats it as an opaque ``Any``."""
 
     url: str = "/api/chat/voice/100.mp3"

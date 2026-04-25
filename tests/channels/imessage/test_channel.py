@@ -510,7 +510,7 @@ async def test_send_attaches_voice_file_when_voice_result_present(tmp_path):
     existing cache_path, the channel should add it as a ``file`` param
     on the ``send`` RPC so imsg attaches it to the iMessage. Text is
     still sent alongside the audio."""
-    from echovessel.voice.models import VoiceResult
+    from echovessel.voice.types import VoiceResult
 
     audio_path = tmp_path / "reply.mp3"
     audio_path.write_bytes(b"ID3\x03\x00\x00\x00fake-mp3-bytes")
@@ -546,7 +546,7 @@ async def test_send_omits_file_when_voice_result_cache_missing(tmp_path):
     """Graceful fallback · if the cache_path doesn't exist (e.g. GC'd
     between generation and send), we MUST NOT pass a ``file`` param —
     otherwise imsg would reject the send with a file-not-found error."""
-    from echovessel.voice.models import VoiceResult
+    from echovessel.voice.types import VoiceResult
 
     missing_path = tmp_path / "vanished.mp3"  # deliberately never created
 
