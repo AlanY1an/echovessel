@@ -76,6 +76,10 @@ from echovessel.memory import (
     list_concept_nodes,
     search_concept_nodes,
 )
+from echovessel.memory.entities import (
+    apply_entity_clarification,
+    update_entity_description,
+)
 from echovessel.memory.forget import (
     DeletionChoice,
     delete_concept_node,
@@ -86,9 +90,11 @@ from echovessel.memory.forget import (
 )
 from echovessel.memory.models import (
     ConceptNode,
+    ConceptNodeEntity,
     ConceptNodeFilling,
     CoreBlockAppend,
     Entity,
+    EntityAlias,
     RecallMessage,
     User,
 )
@@ -432,6 +438,63 @@ class PreviewDeleteRequest(BaseModel):
     node_id: int = Field(..., ge=1)
 
 
+# v0.5 hotfix · admin Persona tab Social Graph endpoints. The five
+# entity-related Pydantic bodies below back the routes added at the
+# bottom of ``build_admin_router``.
+
+_ENTITY_KIND_PATTERN: str = "^(person|place|org|pet|other)$"
+
+
+class EntityDescriptionPatchRequest(BaseModel):
+    """Body for ``PATCH /api/admin/memory/entities/{id}``.
+
+    Owner-edited descriptions always set ``owner_override=true``
+    server-side — the client cannot opt out — so the slow_cycle
+    description synthesizer permanently leaves the row alone (plan
+    §2.2). An empty string is allowed (clears the description).
+    """
+
+    description: str = Field(..., max_length=4000)
+
+
+class EntityCreateRequest(BaseModel):
+    """Body for ``POST /api/admin/memory/entities``.
+
+    Owner manually adds an entity from the admin UI. ``merge_status``
+    is forced to ``'confirmed'`` server-side; ``owner_override`` is
+    set to True iff a non-empty ``description`` is supplied.
+    """
+
+    canonical_name: str = Field(..., min_length=1, max_length=256)
+    kind: str = Field(default="person", pattern=_ENTITY_KIND_PATTERN)
+    description: str | None = Field(default=None, max_length=4000)
+    aliases: list[str] | None = Field(default=None)
+
+
+class EntityMergeRequest(BaseModel):
+    """Body for ``POST /api/admin/memory/entities/{id}/merge``.
+
+    Owner says "this entity is the same person as ``target_id``".
+    Routes through the existing
+    :func:`echovessel.memory.entities.apply_entity_clarification`
+    with ``same=True``.
+    """
+
+    target_id: int = Field(..., ge=1)
+
+
+class EntitySeparateRequest(BaseModel):
+    """Body for ``POST /api/admin/memory/entities/{id}/confirm-separate``.
+
+    Owner says "this entity and ``other_id`` are different people".
+    Routes through ``apply_entity_clarification(same=False)`` and
+    additionally promotes any leftover ``merge_status='uncertain'``
+    rows on either side to ``'confirmed'``.
+    """
+
+    other_id: int = Field(..., ge=1)
+
+
 # Map the JSON keys used on the wire to the memory BlockLabel values.
 # v0.5 · L1 collapsed to ``persona`` + ``user`` (+ ``style`` via its
 # own endpoint). ``self`` and ``relationship`` are gone (plan §1).
@@ -496,16 +559,59 @@ def _count_rows(db: DbSession, model: type) -> int:
     return int(db.exec(select(func.count()).select_from(model)).one() or 0)
 
 
-def _serialize_concept_node(node: ConceptNode) -> dict[str, Any]:
+def _serialize_concept_node(
+    node: ConceptNode,
+    *,
+    db: DbSession | None = None,
+) -> dict[str, Any]:
     """Convert a ConceptNode SQLModel row into the JSON shape the
     admin Events / Thoughts tabs render.
 
     Field naming mirrors the DB columns 1:1 — the frontend's
     ``MemoryEvent`` / ``MemoryThought`` types in
     ``api/types.ts`` consume this exact shape.
+
+    v0.5 hotfix · the optional ``db`` kwarg unlocks two extra fields
+    needed by the admin Persona tab (Spec 2):
+
+    - ``subject`` — ``'persona'`` or ``'user'`` (already on the
+      ConceptNode column; surfaced unconditionally).
+    - ``filling_event_ids`` — IDs of the L3 events this node was
+      reflected from, queried from ``concept_node_filling`` WHERE
+      ``parent_id == node.id``. Requires ``db``; an empty list is
+      returned when ``db`` is None.
+    - ``source`` — only on ``type == 'thought'``. Heuristic per spec
+      ST A: ``subject='persona' AND source_session_id IS NULL`` →
+      ``'slow_tick'``; otherwise ``'reflection'``. ``None`` when the
+      node isn't a thought.
+
+    Old callers that don't pass ``db`` still get the original schema
+    plus the always-cheap ``subject`` column — additive only.
     """
 
     type_value = getattr(node.type, "value", node.type)
+    subject = getattr(node, "subject", None) or "user"
+
+    filling_event_ids: list[int] = []
+    if db is not None and node.id is not None:
+        filling_event_ids = [
+            int(row.child_id)
+            for row in db.exec(
+                select(ConceptNodeFilling).where(
+                    ConceptNodeFilling.parent_id == node.id,
+                    ConceptNodeFilling.orphaned == False,  # noqa: E712
+                )
+            )
+        ]
+
+    source: str | None = None
+    if type_value == "thought":
+        source = (
+            "slow_tick"
+            if subject == "persona" and node.source_session_id is None
+            else "reflection"
+        )
+
     return {
         "id": node.id,
         "node_type": type_value,
@@ -519,6 +625,10 @@ def _serialize_concept_node(node: ConceptNode) -> dict[str, Any]:
         "source_deleted": bool(node.source_deleted),
         "created_at": node.created_at.isoformat() if node.created_at else None,
         "access_count": int(node.access_count),
+        # v0.5 hotfix additions ↓
+        "subject": subject,
+        "filling_event_ids": filling_event_ids,
+        "source": source,
     }
 
 
@@ -1788,7 +1898,7 @@ def build_admin_router(
         limit: int = Query(default=20, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
-        return _list_concept_nodes_payload(NodeType.EVENT, limit, offset)
+        return _list_concept_nodes_payload(NodeType.EVENT, limit, offset, None)
 
     # ---- GET /api/admin/memory/thoughts --------------------------------
     #
@@ -1796,15 +1906,26 @@ def build_admin_router(
     # the underlying ConceptNode columns are identical — UI distinguishes
     # them by which endpoint it called (via the `node_type` field on
     # the response items, mirrored from the DB column).
+    #
+    # v0.5 hotfix · ``subject`` query param scopes the list to one
+    # subject value (``'persona'`` / ``'user'`` / ``'shared'``). Omit
+    # to keep the legacy "all subjects" behaviour. The admin Persona
+    # tab Reflection section calls this with ``subject=persona``.
 
     @router.get("/api/admin/memory/thoughts")
     async def list_thoughts(
         limit: int = Query(default=20, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
+        subject: str | None = Query(default=None, pattern="^(persona|user|shared)$"),
     ) -> dict[str, Any]:
-        return _list_concept_nodes_payload(NodeType.THOUGHT, limit, offset)
+        return _list_concept_nodes_payload(NodeType.THOUGHT, limit, offset, subject)
 
-    def _list_concept_nodes_payload(node_type: NodeType, limit: int, offset: int) -> dict[str, Any]:
+    def _list_concept_nodes_payload(
+        node_type: NodeType,
+        limit: int,
+        offset: int,
+        subject: str | None,
+    ) -> dict[str, Any]:
         with _open_db() as db:
             rows, total = list_concept_nodes(
                 db,
@@ -1813,13 +1934,19 @@ def build_admin_router(
                 node_type=node_type,
                 limit=limit,
                 offset=offset,
+                subject=subject,
             )
-        items = [_serialize_concept_node(n) for n in rows]
+            # Pass ``db`` through so the serializer can fetch
+            # ``filling_event_ids`` from concept_node_filling — the
+            # admin Persona tab consumes this for the Reflection
+            # section's "see filling chain" expander.
+            items = [_serialize_concept_node(n, db=db) for n in rows]
         return {
             "node_type": node_type.value,
             "limit": limit,
             "offset": offset,
             "total": total,
+            "subject": subject,
             "items": items,
         }
 
@@ -3097,6 +3224,238 @@ def build_admin_router(
             "episodic_state": _decode_trace_json(m["episodic_state"]),
             "steps": _decode_trace_json(m["steps"]) or [],
         }
+
+    # ---- L5 entity endpoints (v0.5 hotfix · admin Persona Social Graph) ----
+    #
+    # Six routes that back the Persona tab's Social Graph section:
+    #
+    #   GET    /api/admin/memory/entities          → list all (UNcertain
+    #                                                first, then by recency)
+    #   GET    /api/admin/memory/entities/{id}     → one row + aliases
+    #   PATCH  /api/admin/memory/entities/{id}     → owner-edit description
+    #                                                (always sets
+    #                                                ``owner_override=true``)
+    #   POST   /api/admin/memory/entities          → manually create with
+    #                                                ``merge_status='confirmed'``
+    #   POST   /api/admin/memory/entities/{id}/merge
+    #          → owner says "is the same person" → reuse the existing
+    #            ``apply_entity_clarification(same=True)`` codepath
+    #   POST   /api/admin/memory/entities/{id}/confirm-separate
+    #          → owner says "they're different" → ``same=False`` plus
+    #            an explicit flip of any uncertain row to 'confirmed'
+
+    def _list_entity_aliases(db: DbSession, entity_id: int) -> list[str]:
+        rows = db.exec(
+            select(EntityAlias).where(EntityAlias.entity_id == entity_id)
+        ).all()
+        # Sort for deterministic output. Aliases are case-sensitive
+        # exact matches per plan decision 4 — ordering is purely
+        # cosmetic for the admin UI.
+        return sorted(row.alias for row in rows)
+
+    def _entity_metrics(db: DbSession, entity_id: int) -> tuple[int, str | None]:
+        """Return ``(linked_events_count, last_mentioned_at_iso)``.
+
+        ``concept_node_entities`` is the L3↔L5 junction; we join it to
+        ``concept_nodes`` so soft-deleted nodes don't inflate the
+        count. ``last_mentioned_at`` falls back to None when the
+        entity has zero junction rows — the admin UI renders that as
+        "never mentioned" rather than today's timestamp.
+        """
+        junction_rows = db.exec(
+            select(ConceptNode.created_at)
+            .join(ConceptNodeEntity, ConceptNodeEntity.node_id == ConceptNode.id)
+            .where(
+                ConceptNodeEntity.entity_id == entity_id,
+                ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+            )
+        ).all()
+        if not junction_rows:
+            return 0, None
+        last = max(junction_rows)
+        last_iso = last.isoformat() if hasattr(last, "isoformat") else None
+        return len(junction_rows), last_iso
+
+    def _serialize_entity(db: DbSession, ent: Entity) -> dict[str, Any]:
+        linked, last_at = _entity_metrics(db, ent.id) if ent.id is not None else (0, None)
+        return {
+            "id": ent.id,
+            "canonical_name": ent.canonical_name,
+            "kind": ent.kind,
+            "description": ent.description,
+            "merge_status": ent.merge_status,
+            "merge_target_id": ent.merge_target_id,
+            "owner_override": bool(getattr(ent, "owner_override", False)),
+            "created_at": ent.created_at.isoformat() if ent.created_at else None,
+            "updated_at": ent.updated_at.isoformat() if ent.updated_at else None,
+            "linked_events_count": linked,
+            "last_mentioned_at": last_at,
+            "aliases": _list_entity_aliases(db, ent.id) if ent.id is not None else [],
+        }
+
+    @router.get("/api/admin/memory/entities")
+    async def list_entities() -> dict[str, Any]:
+        persona_id = _persona_id()
+        with _open_db() as db:
+            rows = list(
+                db.exec(
+                    select(Entity)
+                    .where(
+                        Entity.persona_id == persona_id,
+                        Entity.user_id == user_id,
+                        Entity.deleted_at.is_(None),  # type: ignore[union-attr]
+                    )
+                    .order_by(Entity.updated_at.desc())  # type: ignore[attr-defined]
+                )
+            )
+            payload = [_serialize_entity(db, ent) for ent in rows]
+        # Surface uncertain rows first so the admin UI can render the
+        # arbitration callout without re-sorting client-side; within
+        # each bucket we keep ``last_mentioned_at`` (or ``updated_at``
+        # fallback) recency from the SQL ORDER BY above.
+        payload.sort(
+            key=lambda row: (0 if row["merge_status"] == "uncertain" else 1)
+        )
+        return {"entities": payload}
+
+    @router.get("/api/admin/memory/entities/{entity_id}")
+    async def get_entity(entity_id: int) -> dict[str, Any]:
+        persona_id = _persona_id()
+        with _open_db() as db:
+            ent = db.get(Entity, entity_id)
+            if ent is None or ent.deleted_at is not None or ent.persona_id != persona_id:
+                raise HTTPException(status_code=404, detail="entity not found")
+            return _serialize_entity(db, ent)
+
+    @router.patch("/api/admin/memory/entities/{entity_id}")
+    async def patch_entity_description(
+        entity_id: int, req: EntityDescriptionPatchRequest
+    ) -> dict[str, Any]:
+        persona_id = _persona_id()
+        with _open_db() as db:
+            ent = db.get(Entity, entity_id)
+            if ent is None or ent.deleted_at is not None or ent.persona_id != persona_id:
+                raise HTTPException(status_code=404, detail="entity not found")
+            updated = update_entity_description(
+                db,
+                entity_id=entity_id,
+                description=req.description,
+                source="owner",
+            )
+            if updated is None:
+                raise HTTPException(status_code=404, detail="entity not found")
+            # Owner-authored descriptions always lock the slow_cycle
+            # synthesizer out — set the flag server-side so a
+            # malicious / buggy client can't write a bypass.
+            updated.owner_override = True
+            db.add(updated)
+            db.commit()
+            db.refresh(updated)
+            return _serialize_entity(db, updated)
+
+    @router.post("/api/admin/memory/entities")
+    async def create_entity_manual(req: EntityCreateRequest) -> dict[str, Any]:
+        persona_id = _persona_id()
+        with _open_db() as db:
+            # Owner manually creating an entity: definitionally
+            # confirmed (no embedding fight, no ambiguity to resolve).
+            # ``owner_override`` flips when a description is supplied
+            # so the slow_cycle synthesizer leaves it alone.
+            ent = Entity(
+                persona_id=persona_id,
+                user_id=user_id,
+                canonical_name=req.canonical_name,
+                kind=req.kind,
+                description=req.description,
+                merge_status="confirmed",
+                merge_target_id=None,
+                owner_override=bool(req.description and req.description.strip()),
+            )
+            db.add(ent)
+            db.commit()
+            db.refresh(ent)
+            for alias in req.aliases or []:
+                if not alias or alias == ent.canonical_name:
+                    continue
+                db.add(EntityAlias(alias=alias, entity_id=ent.id))
+            # Always carry the canonical_name as an alias too so the
+            # Level 1 alias-match codepath finds it on next extraction.
+            db.add(EntityAlias(alias=ent.canonical_name, entity_id=ent.id))
+            db.commit()
+            db.refresh(ent)
+            return _serialize_entity(db, ent)
+
+    @router.post("/api/admin/memory/entities/{entity_id}/merge")
+    async def merge_entities(entity_id: int, req: EntityMergeRequest) -> dict[str, Any]:
+        persona_id = _persona_id()
+        with _open_db() as db:
+            ent = db.get(Entity, entity_id)
+            target = db.get(Entity, req.target_id)
+            if (
+                ent is None
+                or target is None
+                or ent.deleted_at is not None
+                or target.deleted_at is not None
+                or ent.persona_id != persona_id
+                or target.persona_id != persona_id
+            ):
+                raise HTTPException(status_code=404, detail="entity not found")
+            if ent.id == target.id:
+                raise HTTPException(
+                    status_code=400, detail="cannot merge an entity into itself"
+                )
+            apply_entity_clarification(
+                db,
+                persona_id=persona_id,
+                user_id=user_id,
+                canonical_a=ent.canonical_name,
+                canonical_b=target.canonical_name,
+                same=True,
+            )
+        return {"ok": True, "merged_into": req.target_id}
+
+    @router.post("/api/admin/memory/entities/{entity_id}/confirm-separate")
+    async def confirm_entities_separate(
+        entity_id: int, req: EntitySeparateRequest
+    ) -> dict[str, Any]:
+        persona_id = _persona_id()
+        with _open_db() as db:
+            ent = db.get(Entity, entity_id)
+            other = db.get(Entity, req.other_id)
+            if (
+                ent is None
+                or other is None
+                or ent.deleted_at is not None
+                or other.deleted_at is not None
+                or ent.persona_id != persona_id
+                or other.persona_id != persona_id
+            ):
+                raise HTTPException(status_code=404, detail="entity not found")
+            if ent.id == other.id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="cannot confirm-separate an entity from itself",
+                )
+            apply_entity_clarification(
+                db,
+                persona_id=persona_id,
+                user_id=user_id,
+                canonical_a=ent.canonical_name,
+                canonical_b=other.canonical_name,
+                same=False,
+            )
+            # ``apply_entity_clarification(same=False)`` flips the
+            # uncertain row to 'disambiguated'; the owner UI semantics
+            # is "they are confirmed-different people now", so promote
+            # any leftover 'uncertain' rows on either side back to
+            # 'confirmed' too. Idempotent.
+            for e in (ent, other):
+                if e.merge_status == "uncertain":
+                    e.merge_status = "confirmed"
+                    e.merge_target_id = None
+                    db.add(e)
+            db.commit()
+        return {"ok": True}
 
     @router.get("/api/admin/sessions/{session_id}/consolidate-trace")
     async def get_consolidate_trace(session_id: str) -> dict[str, Any]:
