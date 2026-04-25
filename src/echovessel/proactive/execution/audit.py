@@ -38,7 +38,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from echovessel.proactive.base import (
+from echovessel.proactive.core.base import (
     ActionType,
     AuditSink,
     ProactiveDecision,

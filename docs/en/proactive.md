@@ -172,12 +172,12 @@ Triggers in MVP live inside `PolicyEngine._match_trigger`. To prototype a new tr
 
 ```python
 from datetime import datetime, timedelta
-from echovessel.proactive.base import (
+from echovessel.proactive.core.base import (
     EventType,
     ProactiveEvent,
     TriggerReason,
 )
-from echovessel.proactive.policy import PolicyEngine, TriggerMatch
+from echovessel.proactive.engines.policy import PolicyEngine, TriggerMatch
 
 
 class ExtendedPolicyEngine(PolicyEngine):
@@ -289,8 +289,8 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-from echovessel.proactive.audit import JSONLAuditSink
-from echovessel.proactive.base import AuditSink, ProactiveDecision
+from echovessel.proactive.core.base import AuditSink, ProactiveDecision
+from echovessel.proactive.execution.audit import JSONLAuditSink
 
 
 class TeeJSONLAuditSink(AuditSink):

@@ -21,7 +21,7 @@ import inspect
 import re
 from pathlib import Path
 
-from echovessel.proactive.base import MemoryApi
+from echovessel.proactive.core.base import MemoryApi
 
 PROACTIVE_SRC = Path(__file__).resolve().parents[2] / "src" / "echovessel" / "proactive"
 

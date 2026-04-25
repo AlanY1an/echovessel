@@ -22,7 +22,7 @@ from echovessel.memory import (
 )
 from echovessel.memory.ingest import ingest_message
 from echovessel.memory.models import Session as SessionRow
-from echovessel.proactive.base import ChannelProtocol
+from echovessel.proactive.core.base import ChannelProtocol
 from echovessel.runtime.channel_registry import ChannelRegistry
 from echovessel.runtime.wiring.memory import (
     MemoryFacade,

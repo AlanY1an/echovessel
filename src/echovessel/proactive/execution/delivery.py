@@ -45,7 +45,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from echovessel.proactive.base import (
+from echovessel.proactive.core.base import (
     ChannelProtocol,
     ChannelRegistryApi,
     MemoryApi,

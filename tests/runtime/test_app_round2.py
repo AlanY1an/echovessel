@@ -18,7 +18,7 @@ import asyncio
 import tempfile
 
 from echovessel.channels.base import IncomingMessage, OutgoingMessage
-from echovessel.proactive.base import ProactiveScheduler as ProactiveSchedulerBase
+from echovessel.proactive.core.base import ProactiveScheduler as ProactiveSchedulerBase
 from echovessel.runtime import (
     Runtime,
     build_zero_embedder,

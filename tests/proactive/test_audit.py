@@ -6,16 +6,16 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from echovessel.proactive.audit import (
-    JSONLAuditSink,
-    deserialize_decision,
-    serialize_decision,
-)
-from echovessel.proactive.base import (
+from echovessel.proactive.core.base import (
     ActionType,
     ProactiveDecision,
     SkipReason,
     TriggerReason,
+)
+from echovessel.proactive.execution.audit import (
+    JSONLAuditSink,
+    deserialize_decision,
+    serialize_decision,
 )
 
 

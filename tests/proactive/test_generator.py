@@ -10,14 +10,14 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
-from echovessel.proactive.base import (
+from echovessel.proactive.core.base import (
     ActionType,
     ProactiveDecision,
     ProactiveMessage,
     SkipReason,
     TriggerReason,
 )
-from echovessel.proactive.generator import (
+from echovessel.proactive.engines.generator import (
     GenerationOutcome,
     MessageGenerator,
 )

@@ -10,7 +10,7 @@ import pytest
 from echovessel.core.types import MessageRole, NodeType
 from echovessel.memory.consolidate import ExtractedEvent, ExtractedThought
 from echovessel.memory.models import ConceptNode, RecallMessage
-from echovessel.proactive.base import MemorySnapshot, ProactiveMessage
+from echovessel.proactive.core.base import MemorySnapshot, ProactiveMessage
 from echovessel.prompts import (
     EXTRACTION_SYSTEM_PROMPT,
     JUDGE_SYSTEM_PROMPT,

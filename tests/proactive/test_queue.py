@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from echovessel.proactive.base import EventType, ProactiveEvent
-from echovessel.proactive.queue import DEFAULT_MAX_EVENTS, ProactiveEventQueue
+from echovessel.proactive.core.base import EventType, ProactiveEvent
+from echovessel.proactive.execution.queue import DEFAULT_MAX_EVENTS, ProactiveEventQueue
 
 
 def _ev(i: int, *, critical: bool = False) -> ProactiveEvent:

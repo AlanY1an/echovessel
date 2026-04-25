@@ -13,7 +13,7 @@ from echovessel.proactive import (
     ProactiveScheduler,
     build_proactive_scheduler,
 )
-from echovessel.proactive.errors import ProactivePermanentError
+from echovessel.proactive.core.errors import ProactivePermanentError
 from tests.proactive.fakes import (
     FakeChannelRegistry,
     FakePersonaView,

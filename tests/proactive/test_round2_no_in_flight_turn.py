@@ -10,15 +10,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from echovessel.proactive.base import (
+from echovessel.proactive.core.base import (
     ActionType,
     EventType,
     ProactiveEvent,
     SkipReason,
     TriggerReason,
 )
-from echovessel.proactive.config import ProactiveConfig
-from echovessel.proactive.policy import PolicyEngine
+from echovessel.proactive.core.config import ProactiveConfig
+from echovessel.proactive.engines.policy import PolicyEngine
 from tests.proactive.fakes import FakeAuditSink, FakeMessage, InMemoryMemoryApi
 
 

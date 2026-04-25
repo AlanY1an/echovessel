@@ -46,7 +46,7 @@ from echovessel.memory.slow_cycle import (
     SlowCycleOutput,
     SlowCycleThoughtInput,
 )
-from echovessel.proactive.base import (
+from echovessel.proactive.core.base import (
     MemorySnapshot,
     ProactiveFn,
     ProactiveMessage,

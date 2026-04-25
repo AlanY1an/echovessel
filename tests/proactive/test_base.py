@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from echovessel.proactive.base import (
+from echovessel.proactive.core.base import (
     ActionType,
     EventType,
     ProactiveDecision,

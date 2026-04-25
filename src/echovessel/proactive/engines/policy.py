@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from echovessel.proactive.base import (
+from echovessel.proactive.core.base import (
     CONFIG_VERSION,
     ActionType,
     AuditSink,
@@ -57,7 +57,7 @@ from echovessel.proactive.base import (
     SkipReason,
     TriggerReason,
 )
-from echovessel.proactive.config import ProactiveConfig
+from echovessel.proactive.core.config import ProactiveConfig
 
 log = logging.getLogger(__name__)
 
