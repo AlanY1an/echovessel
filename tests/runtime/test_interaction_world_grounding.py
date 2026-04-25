@@ -16,12 +16,12 @@ from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from echovessel.memory.models import Persona
-from echovessel.runtime.turn.coordinator import (
+from echovessel.runtime.turn.coordinator import maybe_decay_episodic_state
+from echovessel.runtime.turn.prompt_assembly import (
     PersonaFactsView,
     _format_episodic_state_section,
     _format_now_section,
     build_system_prompt,
-    maybe_decay_episodic_state,
 )
 
 

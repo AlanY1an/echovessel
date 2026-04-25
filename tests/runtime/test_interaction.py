@@ -21,9 +21,11 @@ from echovessel.runtime.llm import StubProvider
 from echovessel.runtime.llm.errors import LLMPermanentError, LLMTransientError
 from echovessel.runtime.turn.coordinator import (
     IncomingMessage,
-    PersonaFactsView,
     TurnContext,
     assemble_turn,
+)
+from echovessel.runtime.turn.prompt_assembly import (
+    PersonaFactsView,
     build_system_prompt,
     build_user_prompt,
 )

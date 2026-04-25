@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 
 from echovessel.core.types import MessageRole
 from echovessel.memory.models import RecallMessage
-from echovessel.runtime.turn.coordinator import (
+from echovessel.runtime.turn.prompt_assembly import (
     DAY_BUCKET_ORDER,
     build_user_prompt,
     day_bucket_of,
