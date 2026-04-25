@@ -188,10 +188,10 @@
     <rect x="40" y="120" width="260" height="120" rx="12" fill="#eef2ff" stroke="#6366f1" stroke-width="2"/>
     <text x="60" y="148" font-family="JetBrains Mono, monospace" font-size="14" font-weight="700" fill="#4338ca">L1</text>
     <text x="110" y="148" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#4338ca">core_blocks</text>
-    <text x="60" y="168" font-family="Inter, sans-serif" font-size="11" fill="#6366f1" font-weight="500">persona · self · user · relationship · style</text>
+    <text x="60" y="168" font-family="Inter, sans-serif" font-size="11" fill="#6366f1" font-weight="500">persona · user · style</text>
     <text x="60" y="196" font-family="Inter, sans-serif" font-size="10" fill="#4f46e5" font-style="italic">— "who the persona is"</text>
     <text x="60" y="214" font-family="Inter, sans-serif" font-size="10" fill="#64748b">✍️ authored · by human (onboarding / admin)</text>
-    <text x="60" y="228" font-family="Inter, sans-serif" font-size="10" fill="#64748b">📖 read every single turn</text>
+    <text x="60" y="228" font-family="Inter, sans-serif" font-size="10" fill="#64748b">📖 read every single turn · never auto-updated</text>
   </g>
 
   <!-- L2 (top right, raw capture) -->
@@ -331,9 +331,10 @@
   <div class="leg-item l1">
     <h3><span class="lv">L1</span>core_blocks</h3>
     <div class="sub">
-      Five <strong>authored</strong> identity documents — persona, self, user, relationship, style. Written by humans during onboarding or via the admin UI; the slow_tick reflection phase may append to <code>self</code> within an edit-distance bound. Always sit at the top of every LLM prompt.
+      Three <strong>authored</strong> identity documents — persona, user, style. Written by humans during onboarding or via the admin UI. Always sit at the top of every LLM prompt.
+      L1 never auto-updates · reflection grows via L4 thoughts (<code>subject='persona'</code>) and people/places grow via L5 entities with descriptions.
       <br><br>
-      <code>1 row per label</code> · never auto-distilled per turn
+      <code>1 row per label</code> · human-authored only
     </div>
   </div>
 
@@ -391,7 +392,7 @@
     <p>
       L2 captures every incoming and outgoing message <em>before</em> the LLM streams a reply. This is the only write that happens on the turn's critical path. Latency matters here; keep it fast.
       <br><br>
-      L1 is also a write target, but only by admin edits and the onboarding bootstrap — never per-turn.
+      L1 is also a write target, but only by admin edits and the onboarding bootstrap — never per-turn · never by slow_tick.
     </p>
   </div>
   <div class="mode distill">
@@ -403,7 +404,7 @@
   <div class="mode read">
     <h3><span class="pill">read</span>Fused · every turn</h3>
     <p>
-      At assembly time, every new user message triggers: L1 read (all 5 blocks), L6 read (episodic state · 12h decay check), L2 read (recent window grouped into day buckets), L5 alias scan (<code>find_query_entities</code>), and an L3+L4 vector search with ranking formula:
+      At assembly time, every new user message triggers: L1 read (all 3 blocks), L6 read (episodic state · 12h decay check), L2 read (recent window grouped into day buckets), L5 alias scan (<code>find_query_entities</code>), and an L3+L4 vector search with ranking formula:
       <br><br>
       <code>total = 0.5·recency + 3·relevance + 2·|impact| + 1·relational_bonus + 1.5·entity_anchor</code>
       <br><br>

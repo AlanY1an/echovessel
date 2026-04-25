@@ -485,9 +485,9 @@
 
     <!-- L1 genesis -->
     <div style="margin-bottom:24px; padding:18px 22px; background:#fff; border-radius:10px; border-left:5px solid #6366f1;">
-      <h3 style="color:#4338ca; margin:0 0 8px;">L1 · <code class="mono" style="font-size:13px;">core_blocks</code> — how the 5 blocks are born</h3>
+      <h3 style="color:#4338ca; margin:0 0 8px;">L1 · <code class="mono" style="font-size:13px;">core_blocks</code> — how the 3 blocks are born</h3>
       <p style="font-size:12px;color:#475569;line-height:1.6;margin-bottom:10px;">
-        L1 is the only layer that is <strong>authored, not distilled</strong>. The 5 blocks exist from persona inception onward, written directly by a human (or a bootstrap LLM pass on imported material).
+        L1 is the only layer that is <strong>human-authored</strong>. Three blocks — <code>persona</code> / <code>user</code> / <code>style</code> — exist from persona inception onward, written directly by a human (or a bootstrap LLM pass on imported material that the user reviews before commit).
       </p>
       <div class="activation">
         <div class="act-head">Path</div>
@@ -499,29 +499,29 @@
         <div class="act-step" style="background:#6366f1;">①</div>
         <div class="act-what">Onboarding</div>
         <div>First run · <code class="mono">/api/admin/persona/onboarding</code></div>
-        <div class="act-detail">persona / self / user</div>
+        <div class="act-detail">persona / user</div>
         <div class="act-detail"><code>memory.onboarding.bootstrap_persona()</code> · one <code>CoreBlock</code> row per label</div>
 
         <div class="act-step" style="background:#6366f1;">②</div>
         <div class="act-what">Bootstrap from material</div>
-        <div>Onboarding path 2 · upload → LLM drafts 5 blocks</div>
-        <div class="act-detail">all 5</div>
+        <div>Onboarding path 2 · upload → LLM drafts the blocks</div>
+        <div class="act-detail">all 3</div>
         <div class="act-detail">LLM synthesises from imported events/thoughts · user reviews before commit</div>
 
         <div class="act-step" style="background:#6366f1;">③</div>
         <div class="act-what">Admin edit</div>
         <div>Admin → Persona tab · save</div>
-        <div class="act-detail">any block</div>
-        <div class="act-detail"><code>POST /api/admin/persona</code> · partial update · optimistic on-disk write</div>
+        <div class="act-detail">persona / user</div>
+        <div class="act-detail"><code>POST /api/admin/persona</code> · partial update · atomic on-disk write · <code>extra='forbid'</code> rejects legacy keys (422)</div>
 
         <div class="act-step" style="background:#6366f1;">④</div>
-        <div class="act-what">Append-to-block</div>
-        <div>Import pipeline or admin → append existing block · slow_tick may also append to <code>self</code> within an edit-distance bound</div>
-        <div class="act-detail">any block</div>
-        <div class="act-detail"><code>memory.append_to_core_block()</code> · atomic · writes audit row to <code>core_block_appends</code></div>
+        <div class="act-what">Style-only edit</div>
+        <div>Admin → Persona tab · style preferences</div>
+        <div class="act-detail">style</div>
+        <div class="act-detail"><code>POST /api/admin/persona/style</code> · the only writer for the style block</div>
       </div>
       <div class="callout" style="margin-top:12px; border-left-color:#818cf8;">
-        <strong>L1 is NOT auto-updated per turn.</strong> Per-turn affect lives in L6 (<code>personas.episodic_state</code>), which consolidate writes through automatically from extraction's <code>session_mood_signal</code>. L1 only changes when a human (or the gated slow_tick self-narrative append) writes to it.
+        <strong>L1 is NEVER auto-updated.</strong> No code path inside <code>slow_tick</code> / <code>consolidate</code> / extraction may write to <code>core_blocks</code> — pinned by the <code>tests/memory/test_slow_cycle.py</code> "L1-never-auto-update invariant" test. Per-turn affect lives in L6 (<code>personas.episodic_state</code>), which consolidate writes through automatically from extraction's <code>session_mood_signal</code>. Persona reflection grows in L4 thoughts (<code>subject='persona'</code>); third-party people grow in L5 <code>entities.description</code>. Neither lands in L1.
       </div>
     </div>
 
@@ -745,7 +745,7 @@
 
       <div class="act-step">3</div>
       <div class="act-what"><span class="dot d-l1"></span> L1 read</div>
-      <div>Pull the 5 core blocks verbatim — persona / self / user / relationship / style. Always first in the prompt.</div>
+      <div>Pull the 3 core blocks verbatim — persona / user / style. Always first in the prompt.</div>
       <div class="act-detail act-read">L1 · <code>core_blocks</code> (1 row per label)</div>
       <div class="act-detail act-write">—</div>
 
@@ -838,13 +838,13 @@
       <!-- step 3 -->
       <div class="seq-cell">—</div>
       <div class="seq-cell active aRun">assemble</div>
-      <div class="seq-cell active aL1">read 5 blocks</div>
+      <div class="seq-cell active aL1">read 3 blocks</div>
       <div class="seq-cell">—</div>
       <div class="seq-cell">—</div>
       <div class="seq-cell">—</div>
       <div class="seq-cell">—</div>
       <div class="seq-cell">—</div>
-      <div class="seq-text">Step 3 · L1 reads — persona / self / user / relationship / style. Always first. L6 read also runs here; if mood snapshot is &gt; 12h old it's decayed back to neutral on the way in.</div>
+      <div class="seq-text">Step 3 · L1 reads — persona / user / style. Always first. L6 read also runs here; if mood snapshot is &gt; 12h old it's decayed back to neutral on the way in.</div>
 
       <!-- step 4 -->
       <div class="seq-cell">—</div>
@@ -1013,7 +1013,7 @@
       <div class="act-step" style="background:#10b981;">💚</div>
       <div class="act-what"><span class="dot d-l3"></span> L3 write</div>
       <div>Each <code class="mono">ExtractedEvent</code> becomes a <code class="mono">concept_node</code> row (type=EVENT). Sentence-transformers embedder generates a 384-d vector; sqlite-vec stores it.</div>
-      <div class="act-detail act-read">L1 · self_block (for context)</div>
+      <div class="act-detail act-read">L1 · <code>persona</code> / <code>user</code> blocks (for context)</div>
       <div class="act-detail act-write">L3 · <code>concept_nodes</code>, <code>concept_nodes_vec</code>, <code>concept_nodes_fts</code></div>
 
       <div class="act-step" style="background:#f59e0b;">🎯</div>
@@ -1073,7 +1073,7 @@
     <div class="story-step">
       <div class="ss-time">t+2.2s</div>
       <div class="ss-badge b-l1">L1</div>
-      <div class="ss-text"><strong>Read ↗</strong> 5 core_blocks loaded · persona="她的性格是…" · user="你是一个在旧金山的软件工程师…" · style="don't say 'haha'" · etc. L6 read also runs · <code>personas.episodic_state.mood</code>="neutral" so the <code># How you feel right now</code> section is skipped.</div>
+      <div class="ss-text"><strong>Read ↗</strong> 3 core_blocks loaded · persona="她的性格是…" · user="你是一个在旧金山的软件工程师…" · style="don't say 'haha'". L6 read also runs · <code>personas.episodic_state.mood</code>="neutral" so the <code># How you feel right now</code> section is skipped.</div>
     </div>
     <div class="story-step">
       <div class="ss-time">t+2.3s</div>
@@ -1154,21 +1154,21 @@
         <tr>
           <td class="mx-layer l1">L1</td>
           <td class="op-read">
-            <code>get_core_blocks()</code> · every prompt · all 5 labels
+            <code>load_core_blocks()</code> · every prompt · 3 labels (persona / user / style)
           </td>
           <td class="op-write">
             —
           </td>
           <td class="op-read">
-            extract_fn may read <code>self_block</code> for context
+            extract_fn may read <code>persona</code> / <code>user</code> blocks for context
           </td>
           <td class="op-write">
-            slow_tick may append to <code>self_block</code> within an edit-distance bound
+            —
           </td>
           <td>
             <ul>
               <li>GET <code>/api/admin/persona</code></li>
-              <li>POST <code>/api/admin/persona</code></li>
+              <li>POST <code>/api/admin/persona</code> (rejects legacy keys with 422)</li>
               <li>POST <code>/api/admin/persona/style</code> (style block)</li>
               <li>onboarding · bootstrap-from-material</li>
             </ul>
@@ -1658,16 +1658,40 @@
       <div class="act-detail">show ▶ voice play button</div>
 
       <div class="act-step" style="background:#ec4899;">◎</div>
-      <div class="act-what"><span class="dot d-l1"></span> chat.mood.update</div>
-      <div>L6.episodic_state refreshed (post session-close, via extraction's session_mood_signal)</div>
-      <div class="act-detail">mood, energy, last_user_signal, updated_at</div>
-      <div class="act-detail">re-render chat header mood</div>
+      <div class="act-what"><span class="dot d-run"></span> chat.mood.update</div>
+      <div>L6 episodic_state refreshed (post session-close, via extraction's session_mood_signal)</div>
+      <div class="act-detail">persona_id, user_id, mood_summary</div>
+      <div class="act-detail">re-render chat header mood · prepend mood-shift row into Memory Timeline panel</div>
 
       <div class="act-step" style="background:#10b981;">◎</div>
       <div class="act-what"><span class="dot d-run"></span> chat.session.boundary</div>
-      <div>Session transitions open → closed</div>
-      <div class="act-detail">closed_session_id, new_session_id, timestamp</div>
-      <div class="act-detail">insert timestamped horizontal rule</div>
+      <div>Session transitions open → closed · or a new session starts</div>
+      <div class="act-detail">closed_session_id, new_session_id, events_count, thoughts_count (close edge)</div>
+      <div class="act-detail">timeline session-close summary row + timestamped horizontal rule in bubble column</div>
+
+      <div class="act-step" style="background:#14b8a6;">◎</div>
+      <div class="act-what"><span class="dot d-l3"></span> memory.event.created</div>
+      <div>Consolidate or import commits a new L3 event (RuntimeMemoryObserver → on_event_created)</div>
+      <div class="act-detail">event_id, description, emotional_impact, session_id</div>
+      <div class="act-detail">prepend event row into Memory Timeline panel</div>
+
+      <div class="act-step" style="background:#f59e0b;">◎</div>
+      <div class="act-what"><span class="dot d-l4"></span> memory.thought.created</div>
+      <div>Fast-loop reflection, slow_tick G phase, or import commits a new L4 thought / intention / expectation</div>
+      <div class="act-detail">thought_id, type, subject, description, source ∈ {reflection, slow_tick, import}, filling_event_ids</div>
+      <div class="act-detail">prepend thought / intention / expectation row into Memory Timeline panel (subject='persona' feeds # How you see yourself lately on next turn)</div>
+
+      <div class="act-step" style="background:#8b5cf6;">◎</div>
+      <div class="act-what"><span class="dot d-run"></span> memory.entity.confirmed</div>
+      <div>L5 entity resolves to confirmed (new row, alias-matched, or operator-merged · uncertain entities are filtered at source)</div>
+      <div class="act-detail">entity_id, canonical_name, kind, merge_status</div>
+      <div class="act-detail">prepend entity row into Memory Timeline panel</div>
+
+      <div class="act-step" style="background:#a855f7;">◎</div>
+      <div class="act-what"><span class="dot d-run"></span> memory.entity.description_updated</div>
+      <div>slow_tick synthesizes a description over threshold, or owner PATCHes via admin API</div>
+      <div class="act-detail">entity_id, canonical_name, description, source ∈ {slow_tick, owner}</div>
+      <div class="act-detail">prepend entity-description row into Memory Timeline panel</div>
 
       <div class="act-step" style="background:#94a3b8;">◎</div>
       <div class="act-what"><span class="dot d-run"></span> chat.settings.updated</div>

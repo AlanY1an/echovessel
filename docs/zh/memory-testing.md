@@ -23,15 +23,20 @@ Memory 是 EchoVessel 里最密集的一层 : 一次写 操作牵涉到 schema /
 
 ## 第 1 层 · L1 core blocks + 生平事实
 
-**这一层做什么。** 五段散文 core blocks(`persona / self / user / relationship / style`) 加上 `personas` 行上的 15 个结构化生平字段(`full_name` / `gender` / `birth_date` / `timezone` / `occupation` / …)。两者每个 turn 都会被重新载入、拼进 system prompt;15 个 fact 里只有 5 个会渲进 prompt 的 `# Who you are` 段(C 方案契约)。当下情绪状态不在 L1 而在 L6 episodic state(见 [`memory.md`](./memory.md))。
+**这一层做什么。** 三段散文 core blocks(`persona / user / style`) 加上 `personas` 行上的 15 个结构化生平字段(`full_name` / `gender` / `birth_date` / `timezone` / `occupation` / …)。两者每个 turn 都会被重新载入、拼进 system prompt;15 个 fact 里只有 5 个会渲进 prompt 的 `# Who you are` 段(C 方案契约)。L1 永远不被代码自动写入——`slow_tick` / `consolidate` / extraction 都绕开 `core_blocks`;persona 的自我反思住在 L4 thought[subject='persona'],persona 对第三方人/地/组织的描述住在 L5 `entities.description`。当下情绪状态不在 L1 而在 L6 episodic state(见 [`memory.md`](./memory.md))。
 
 **测试覆盖。**
 
+- BlockLabel enum 契约 — enum 值精确等于 `{persona, user, style}` · SHARED / PER_USER 分组 · 老 label(`self`/`relationship`)通过 getattr 不可达 · `tests/memory/test_core_block_label_enum.py` (4 条)
+- L1 admin route 契约 — `OnboardingRequest` / `PersonaUpdateRequest` 对 `self_block` / `relationship_block` 返 422(`extra='forbid'`)· GET 精确返 3 个 key · `tests/channels/web/test_admin_routes_block_contract.py` (5 条)
+- L1-never-auto-update 不变律 — slow_cycle 跑完不动 `core_blocks`(过去 `_self_append_*` 测试改写为此 invariant)· `tests/memory/test_slow_cycle.py`
 - Prompt 模板 + parser — JSON 往返 / enum · date 归一化 / 烂 JSON 降级 · `tests/prompts/test_persona_facts.py` (20 条)
 - Runtime orchestrator — 默认 LARGE tier / `existing_blocks` 确实进 prompt / parser 异常变 `PersonaExtractionError` · `tests/runtime/test_persona_extraction.py` (7 条)
 - Admin API — 带/不带 facts 的 onboarding / GET 返回 15 个 keys / PATCH 部分更新 + 显式 null 清空 / 越界 enum 降级 vs 烂 date 返 422 · `tests/channels/web/test_persona_facts_routes.py` (17 条)
-- System prompt 契约 — 只渲 5 fact / `birth_date.year` 不渲完整 ISO / `timezone` 不进 prompt / 空 view 等价 legacy prompt · `tests/runtime/test_interaction.py` (新增 6 条) + `tests/memory/test_stage1_facts_addons.py` (4 条)
+- System prompt 契约 — `# About yourself` / `# Relationship` 不进 system prompt · `# How you see yourself lately` 渲进 user prompt 的 pinned persona-thoughts · `# About {canonical_name}` 仅在 description 非空时渲 · `tests/runtime/test_prompt_sections.py` (6 条)
+- System prompt 契约(facts) — 只渲 5 fact / `birth_date.year` 不渲完整 ISO / `timezone` 不进 prompt / 空 view 等价 legacy prompt · `tests/runtime/test_interaction.py` (新增 6 条) + `tests/memory/test_stage1_facts_addons.py` (4 条)
 - Schema 迁移 + 幂等 — 新装 + 老装 DB 各 15 列 / 重跑零动作 · `tests/memory/test_migrations_idempotent.py` · `test_migrations_from_old_db.py`
+- L4 persona-thought 旁路 — `retrieve.force_load_persona_thoughts(top_n, exclude_ids)` 按 recency 取 subject='persona' · subject='user' 过滤掉 · `tests/memory/test_force_load_persona_thoughts.py` (3 条)
 
 ---
 
@@ -127,6 +132,29 @@ Memory 是 EchoVessel 里最密集的一层 : 一次写 操作牵涉到 schema /
 - **跨 channel 统一 persona** — 同一 `(persona, user)` 在 Discord 和 Web 共享记忆 · 任一 channel 的 event 在另一边也被检索到 · `tests/integration/test_cross_channel_unified_persona.py`
 - **L6 episodic state 写入** — extraction 输出的 `session_mood_signal` 在 consolidate 收尾时 UPDATE `personas.episodic_state` JSON 列 · `tests/memory/test_episodic_state.py`
 - **Forget + orphan** — 删 event 可选 cascade · orphan · cancel · `tests/memory/test_forget.py`
+
+---
+
+## Observer 广播 + Memory Timeline 路由
+
+**这一层做什么。** `RuntimeMemoryObserver` 实现 memory lifecycle hook 后把每条变成 SSE topic · Web Memory Timeline 靠它实时滚动 · admin timeline backfill 端点在冷启时一次返所有类型。
+
+**测试覆盖。**
+
+- 每个 hook 的广播形状(`memory.event.created` / `memory.thought.created` / `memory.entity.confirmed` / `memory.entity.description_updated`)· `on_thought_created` 的 `source` arg 保留 · uncertain entity 不广播 · engine 缺失时优雅降级 · `chat.mood.update` 向后兼容 · `tests/runtime/test_memory_observer_sse_broadcast.py` (9 条)
+- `GET /api/admin/memory/timeline` 路由 — 空 body · 混合合并(events / thoughts / entities / mood / session-close with counts) · `limit` cap · `since` 游标分页 · `tests/channels/web/test_memory_timeline_route.py` (4 条)
+
+---
+
+## Dev-mode trace · turn_traces + session_traces
+
+**这一层做什么。** `TurnTracer` / `ConsolidateTracer` 在 `assemble_turn` 和 `consolidate_worker._process_one` 里记录每个 stage · 写进 `turn_traces` / `session_traces` 表 · admin 三条路由把数据喂给前端 drawer。`cfg.dev_trace.enabled = false` 时 tracer 是 NullTurnTracer(byte-code no-op)。
+
+**测试覆盖。**
+
+- `TurnTracer` — `stage_start` / `stage_end` 配对 · 未配对的 `stage_end` 被静默跳过 · Null 变种 `__setattr__` 也 no-op · `tests/memory/test_turn_tracer.py` (7 条)
+- `ConsolidateTracer` — 7 个 phase 记录(A trivial · B extract 含 `junction_rejects` · C shock · D timer · E reflect · F status · G slow_tick) · `tests/memory/test_consolidate_tracer.py` (5 条)
+- Admin 路由 — `GET /api/admin/turns` · `GET /api/admin/turns/{turn_id}` · `GET /api/admin/sessions/{session_id}/consolidate-trace` · `tests/channels/web/test_turn_trace_route.py` (6 条)
 
 ---
 

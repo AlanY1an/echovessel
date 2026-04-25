@@ -70,7 +70,7 @@ Launcher 暴露四条子命令:`echovessel run` 在前台启动守护进程,`ech
 
 启动所有 channel。`await registry.start_all()` 并发跑每个 channel 的 `start()`。启动失败的 channel log error 并保持未注册;守护进程继续启动,让其他子系统保持可用。
 
-构造并注册 runtime memory observer。`RuntimeMemoryObserver(registry, loop)` 被创建出来,传进 memory 模块的 `register_observer(...)`。从这一刻起,memory 每次 commit 一个 session close、新 session 开始或 mood 更新,observer 就把事件扇出到 registry 里每个暴露了 `push_sse()` 能力的 channel。
+构造并注册 runtime memory observer。`RuntimeMemoryObserver(registry, loop, engine)` 被创建出来,传进 memory 模块的 `register_observer(...)`。从这一刻起,memory 每次 commit 一个 lifecycle 事件——event 创建、thought 创建、entity confirmed、entity description 更新、session 开/关、mood 变——observer 就把它扇出到 registry 里每个暴露 `push_sse()` 的 channel。Web channel 是目前唯一的消费者:它的 chat 页右侧 Memory Timeline 面板订阅这些 topic 实时刷新。详见后面 [Cross-Channel SSE topic 目录](#cross-channel-sse-topic-目录) 段。
 
 从配置填充 `ctx.persona.voice_enabled`。`[persona].voice_enabled` 的 bool 被拷进可变的 `RuntimePersonaContext`,这样 interaction 和 proactive 在 turn 时读到的是同一个内存值。
 
@@ -139,19 +139,21 @@ Persona 的回复**先写进 memory,再让 channel 发出去**。如果写入失
 2. `# Right now` — 双时区。第一行是 user 的本地时间（`IncomingMessage.received_at`,带 tz）。如果 `personas.timezone` 设了一个 IANA zone,第二行附 persona 的"概念上所在地"时间。两行同时渲染,这样 persona 在以 user-local 时间回应（"你那边不是下午吗"）的同时仍能保持自己的所在地一致性。
 3. `# Who you are` — `PersonaFactsView` 里的 7 项 biographic facts:`Name / Gender / Born / Nationality / Based in / Occupation / Native language`。每一项 None 时跳过该 bullet,全 None 时整段跳过。`timezone` 在 facts 里,但只喂给 `# Right now` 的双时区渲染,不作为 bullet 显示。
 4. `# How you feel right now` — L6 episodic state。当 mood 仍是默认 `neutral` 时整段跳过(prompt 保持简短)。否则渲染 `mood`、`energy /10`,以及如果有的话,`last sense from them` 行。
-5. L1 core blocks(按这个顺序): `# Persona` / `# About yourself (private self-narrative)` / `# About the user` / `# Relationship` / `# Style preferences`。任何缺失的 block 静默跳过。
-6. `# Entity disambiguation pending` — 仅当当前 query 命中了 `merge_status='uncertain'` 的 entity 时由 retrieve 注入;描述模糊性并请 LLM 在自然对话节奏里向 user 问一句。
-7. `STYLE_INSTRUCTIONS` — 硬编码 · 永远在最末。包含 F10 transport-name 禁令、competence boundary("我刚才说错了" / "I got that wrong" · 不 retrofit · 不 invent),以及从 `prompts/judge.py` 反模式抽出的 negative few-shot 段(formulaic opener / generic affect label / empty reassurance / strategy lock 等)。
+5. L1 core blocks(按这个顺序,共 3 段): `# Persona` / `# About the user` / `# Style preferences`。任何缺失的 block 静默跳过。L1 都是人写的——onboarding / admin UI / import bootstrap 的内容,代码不会自动改。
+6. `# About {canonical_name}` — 仅当 retrieve 的 entity-anchor 命中一个 `merge_status='confirmed'` 且 `description` 非空的 entity 时注入。一行一个 entity(命中几个就渲几个);description 由 slow_tick 合成或 owner 通过 `PATCH /api/admin/memory/entities/{id}` 写入。
+7. `# Entity disambiguation pending` — 仅当当前 query 命中了 `merge_status='uncertain'` 的 entity 时由 retrieve 注入;描述模糊性并请 LLM 在自然对话节奏里向 user 问一句。
+8. `STYLE_INSTRUCTIONS` — 硬编码 · 永远在最末。包含 F10 transport-name 禁令、competence boundary("我刚才说错了" / "I got that wrong" · 不 retrofit · 不 invent),以及从 `prompts/judge.py` 反模式抽出的 negative few-shot 段(formulaic opener / generic affect label / empty reassurance / strategy lock 等)。
 
 **User prompt（`build_user_prompt`）** — 段顺序从老到新走:
 
 1. `# Recent sessions` — 最多 5 条最近的 session_summary L4 thoughts(每个 session close 时由 extraction LLM 顺便产出)。每行带一个 day-bucket 前缀(`[Older] / [Earlier this week] / [Yesterday] / [Earlier today] / [Just now]`)。空时整段跳过。
 2. `# Recent thoughts you've had about this person` — retrieve rerank top_k 里 `type='thought'` 的描述。空时跳过。
 3. `# About {speaker}` — `force_load_user_thoughts=10` 出来的 pinned L4 thoughts(按 recency × importance,绕 query similarity)。已经在上一段出现的 id 在 retrieve 层就被剔除了,这里不会重复。`{speaker}` 是 `User.display_name`,缺省 fallback `them`。
-4. `# Recent things you remember happened` — retrieve rerank top_k 里 `type='event'`,每行附 R4 day-precision delta phrase(`· event 2026-04-26~2026-05-02 · status=active (3 days in)`)。Atemporal event 不附 phrase。
-5. `# Promises you've made` — 当前活跃的 persona-side intentions(`subject='persona'` AND `type='intention'` AND `event_time_end >= now` 或 NULL)。每条同样附 delta phrase。
-6. `# Our recent conversation` — L2 最近 ~20 条消息按 day-bucket 分组,顺序 OLDER → NEWER(`## Older` → `## Just now`)。每行用 `them:` / `me:` 而非字面的 `user:` / `persona:`。这样人称一致,不暴露内部 role 标签。
-7. `# What they just said` — 本 turn 用户写的内容(burst 多条用换行连接)。
+4. `# How you see yourself lately` — `force_load_persona_thoughts=5` 出来的 pinned L4 thoughts(`subject='persona'`,按 recency 取最新 5 条,绕 query similarity)。这是 persona 自我画像随时间积累的渲染入口——L1.persona 是人写的静态身份,这一段是 slow_tick 自动生长的当前自我反思。空时整段跳过。
+5. `# Recent things you remember happened` — retrieve rerank top_k 里 `type='event'`,每行附 R4 day-precision delta phrase(`· event 2026-04-26~2026-05-02 · status=active (3 days in)`)。Atemporal event 不附 phrase。
+6. `# Promises you've made` — 当前活跃的 persona-side intentions(`subject='persona'` AND `type='intention'` AND `event_time_end >= now` 或 NULL)。每条同样附 delta phrase。
+7. `# Our recent conversation` — L2 最近 ~20 条消息按 day-bucket 分组,顺序 OLDER → NEWER(`## Older` → `## Just now`)。每行用 `them:` / `me:` 而非字面的 `user:` / `persona:`。这样人称一致,不暴露内部 role 标签。
+8. `# What they just said` — 本 turn 用户写的内容(burst 多条用换行连接)。
 
 把 ConceptNode 渲染所需的辅助数据(speaker_display, active_intentions, recent_session_summaries)在 `assemble_turn` 里提前查好后传进 `build_turn_user_prompt`,让 `build_user_prompt` 保持纯渲染、不再持有 DB session。
 
@@ -165,9 +167,48 @@ slow_tick 不在 runtime 里跑——它住在 `consolidate_worker._process_one`
 
 ### Memory observer 接线
 
-Memory 的 lifecycle hook(`on_session_closed`、`on_new_session_started`、`on_mood_updated`)在 `MemoryEventObserver` Protocol 里被定义为**同步**方法——memory 没法 import asyncio,因为它的写入路径是同步的,跑在 SQLite 单写入者的锁里面。Runtime 的 observer 实现也是同步的,所以它的方法立即返回;把事件广播到 channel 这个真正的工作被通过 `asyncio.run_coroutine_threadsafe(self._broadcast(...), self._loop)` 调度到 runtime 的 event loop 上。
+`RuntimeMemoryObserver`(住在 `src/echovessel/runtime/memory_observers.py`)实现了 memory 的 `MemoryEventObserver` Protocol 的全部 7 个 lifecycle hook,并把每条变成一条 SSE topic 广播给 registry 里所有暴露 `push_sse` 的 channel——目前只有 Web channel 暴露,Discord 等非 web channel 自然 no-op 跳过。
+
+Memory 的 lifecycle hook 在 Protocol 里定义为**同步**方法——memory 没法 import asyncio,因为它的写入路径是同步的,跑在 SQLite 单写入者的锁里面。Runtime 的 observer 实现也是同步的,所以它的方法立即返回;把事件广播到 channel 这个真正的工作被通过 `asyncio.run_coroutine_threadsafe(self._broadcast(...), self._loop)` 调度到 runtime 的 event loop 上。
 
 效果是一个干净的分离:memory 在一次成功 commit 之后触发一个 sync hook,hook 在微秒级返回,async 广播在 loop 上并发跑,遍历 channel registry 并对任何暴露了 `push_sse` 能力的 channel 调 `await channel.push_sse(event, payload)`。单 channel 的 push 失败会被捕获并 log;一个坏 channel 不会污染另一个 channel 的广播,memory 的写入无论 observer 做什么都已经 commit 了。如果 loop 不可用(observer 在关机过程中被触发),coroutine 被干净地关掉并 log 一条 warning——一次丢失的广播没有什么可做的,因为 memory 状态早就落盘了。
+
+#### Cross-Channel SSE topic 目录
+
+每个 lifecycle hook 映射到一条 wire-format 稳定的 SSE topic,Web 前端订阅这些 topic 来驱动 chat 页右侧的 Memory Timeline 面板,以及 dev-mode trace drawer 之外的所有实时 UI。Topic 名是 `{namespace}.{noun}.{verb}` 三段式,namespace 选 `memory`(memory 内部状态变化)或 `chat`(channel-level UI 信号)。
+
+| Hook | SSE topic | Payload 关键字段 | 备注 |
+|---|---|---|---|
+| `on_event_created` | `memory.event.created` | `event_id` · `description` · `emotional_impact` · `session_id` | 不论 fast loop 还是 slow loop 抽出的 L3 event 都广播 |
+| `on_thought_created` | `memory.thought.created` | `thought_id` · `type` · `subject` · `description` · `source` · `filling_event_ids` | `source` ∈ {`reflection`, `slow_tick`, `import`}; `subject='persona'` 是 user prompt `# How you see yourself lately` 段的来源 |
+| `on_entity_confirmed` | `memory.entity.confirmed` | `entity_id` · `canonical_name` · `kind` · `merge_status` | observer 在 source 处过滤 `merge_status='uncertain'`(这些是 admin-only 的) |
+| `on_entity_description_updated` | `memory.entity.description_updated` | `entity_id` · `canonical_name` · `description` · `source` | `source` ∈ {`slow_tick`, `owner`} |
+| `on_session_closed` / `on_new_session_started` | `chat.session.boundary` | `closed_session_id` · `new_session_id` · `events_count` · `thoughts_count` | 新旧两个 hook 共用同一条 topic,一边的字段为 null;`events_count` / `thoughts_count` 仅在 close 边附 |
+| `on_mood_updated` | `chat.mood.update` | `persona_id` · `user_id` · `mood_summary` | mood 实际住在 L6 episodic state,这条 topic 名跟 v0.4 一致以便前端不跟换 |
+
+`memory.*` 四条 topic 是 v0.5 加的,用于 Memory Timeline 实时面板;`chat.session.boundary` 在 v0.5 里被丰富了 events/thoughts 计数(close 边)以让 timeline 渲染 session-close summary 行。`chat.settings.updated` 是 voice-toggle / 其他 admin runtime 设置变更广播,跟 memory observer 无关——见上面 voice_enabled toggle 段。
+
+### Dev-mode turn traces
+
+dev-mode 让每条 persona 回复都能"点开看内部 18 stage 怎么跑的",目的是 dogfood 时不用挖 daemon log 就能查 retrieve miss、prompt drift、consolidate 卡哪一步。开关有两路:URL query `?dev=1`(也接受 `?dev=0` 取消)和 localStorage flag `echovessel_dev_mode=1`。`?dev=1` 命中时前端把 flag 写进 localStorage 并粘住,reload 之后仍开。
+
+启用后,persona 气泡右上角多一个 ▸ trace 小图标;点开 drawer 渲染本 turn 的全部 18 stage——12 个 fast-loop stage(`debounce / ingest_user / l1_load / l6_decay / l5_alias_scan / vector_retrieve / pinned_thoughts_load / build_system_prompt / build_user_prompt / llm_stream / ingest_persona / on_turn_done`)加上 6 个 consolidate phase(A trivial / B extract / C shock / D timer / E reflect / F status / G slow_tick)。每个 stage 显示耗时和一个可展开的 detail JSON;retrieval 表展示每条命中节点的 recency / relevance / impact / relational / entity_anchor / total 分数;system / user prompt 各有一个全文 view + copy 按钮。
+
+数据落两张表(住在 memory.db 里,跟其它持久化共池):
+
+```
+turn_traces      (turn_id PK · persona_id · user_id · channel_id · started_at · finished_at
+                  · system_prompt · user_prompt · retrieval JSON · pinned_thoughts JSON
+                  · entity_alias_hits JSON · episodic_state JSON · llm_model · input_tokens
+                  · output_tokens · first_token_ms · duration_ms · steps JSON)
+session_traces   (session_id PK · phase_a..phase_g JSON · finished_at)
+```
+
+Trace 写入由 runtime 提供两个 tracer:`TurnTracer` 在 `assemble_turn` 内部 stage_start / stage_end 配对,`ConsolidateTracer` 在 worker 的 `_process_one` 内部记录每个 phase。`cfg.dev_trace.enabled = false`(默认)时 runtime 注入 `NullTurnTracer`,所有 stage_start / stage_end 调用 byte-code 层 no-op,零 overhead;turn 不留 row,session_traces 也不写。`true` 时每个 turn 留一行,session 关闭后填齐 phase JSON。
+
+Admin 路由暴露 trace 给前端:`GET /api/admin/turns?persona_id=&user_id=&limit=` 列分页 turn,`GET /api/admin/turns/{turn_id}` 返完整 turn payload,`GET /api/admin/sessions/{session_id}/consolidate-trace` 返 6/7 个 consolidate phase。这些路由不走 SSE——dev-mode drawer 是 pure REST pull(开 drawer 时拉一次,trace 不变就不重拉)。
+
+TTL 默认 14 天,由 `scripts/purge_old_traces.py --days <n>` 删——CLI 形式,owner 自行加 cron,或 daemon idle 时跑也行(idle_scanner 不内置自动调用,以保持 worker 路径单一)。配置项见 `configuration.md § [dev_trace]`。
 
 ### `voice_enabled` toggle
 

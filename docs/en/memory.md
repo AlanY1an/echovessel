@@ -18,7 +18,9 @@ The promise the rest of the system makes on top of memory is simple: one persona
 
 ## Core Concepts
 
-**L1 core blocks** — short, stable pieces of text that are injected into every prompt unconditionally. Five labels live in `core_blocks`: `persona`, `self`, `user`, `relationship`, `style`. `persona` / `self` / `style` are shared across users (the persona is one character, and the owner-curated style instructions don't fork per user). `user` / `relationship` are per-user, keyed by `(persona_id, user_id)`. Each block is capped at 5000 characters and has an append-only audit log in `core_block_appends`. Emotional state is not in L1 — current mood lives in L6 episodic state.
+**L1 core blocks** — short, stable pieces of text that are injected into every prompt unconditionally. Three labels live in `core_blocks`: `persona`, `user`, `style`. `persona` / `style` are shared across users (the persona is one character, and the owner-curated style instructions don't fork per user). `user` is per-user, keyed by `(persona_id, user_id)`. Each block is capped at 5000 characters and has an append-only audit log in `core_block_appends`. Emotional state is not in L1 — current mood lives in L6 episodic state.
+
+**L1 is the "human-authored identity" layer — never auto-updated by code.** All three write entry points are human-driven: onboarding bootstrap, the admin UI (`POST /api/admin/persona` and `POST /api/admin/persona/style`), and the import pipeline's `bootstrap_from_material`. Code paths inside `slow_tick` / `consolidate` / extraction **must not** write to `core_blocks` — the `tests/memory/test_slow_cycle.py` "L1-never-auto-update invariant" pins this rule. Persona reflection grows into L4 thoughts (`subject='persona'`); persona descriptions of third-party people / places / orgs grow into L5 `entities.description`. Neither lands in L1.
 
 **Biographic facts** — fifteen structured identity columns on the `personas` row itself (`full_name`, `gender`, `birth_date`, `nationality`, `native_language`, `timezone`, `occupation`, `relationship_status`, …). These live alongside the prose core blocks rather than inside them, so code that needs "what timezone is she in" or "what year was she born" can query a column instead of re-parsing the persona block. All fifteen are nullable — the LLM extraction fills what it can during onboarding and the user corrects the rest in the review page. Five of them (name, gender, birth year, occupation, native language) get rendered into the system prompt's "# Who you are" section every turn; the other ten are for system use only.
 
@@ -28,7 +30,11 @@ The promise the rest of the system makes on top of memory is simple: one persona
 
 **L4 thoughts** — longer-term observations distilled from many events. Same table as L3, differentiated by `type='thought'`. Each thought carries a `filling` chain (via `concept_node_filling`) that records which events it was generated from, so a user who deletes the source events can choose to keep the thought as orphaned. Thoughts are written by two paths: the SHOCK / TIMER reflection inside consolidate (fast loop) and the slow_tick reflection phase that runs between sessions (slow loop · forward-looking inference). Slow_tick can also produce `type='expectation'` sub-class nodes ("she'll probably update grad school next week"); the fast loop matches new user messages against `expectation.description` by embedding similarity, marking hits `fulfilled` and overdue ones `expired`.
 
-**L5 entities** — canonical identity for third-party people / places / orgs / pets. Three tables: `entities` (canonical name + kind + tri-state `merge_status`), `entity_aliases` (many-to-one alias → entity), and `concept_node_entities` (many-to-many junction between L3 events and L5 entities). Extraction creates a new entity when a new name appears and only appends an alias row when a known entity surfaces under a new alias. At retrieve time, any alias hit in the query text pulls every ConceptNode linked to that entity into the candidate pool with a score bump — this is the engineering basis for cross-language / cross-alias recall, since vector distance alone cannot bridge "Scott" and "黄逸扬". Three-tier dedup (alias exact match → embedding 0.65 / 0.85 thresholds → uncertain branch where the persona naturally asks the user) lives in `memory/entities.py`.
+Each thought row carries a `subject` column: `subject='user'` is the persona's judgement *about the user* ("she's been stretched thin lately"), `subject='persona'` is the persona's reflection *about itself* ("I've been replying too tersely"). The `subject='persona'` rows are produced by the slow_tick G phase — they are the only physical path by which the persona's self-image grows over time (the L1 `persona` block itself is never written by code). The prompt renderer surfaces the most recent ≤5 of them in the user prompt's `# How you see yourself lately` section, fetched by `retrieve.force_load_persona_thoughts(top_n=5)` directly, bypassing query embedding.
+
+**L5 entities** — canonical identity for third-party people / places / orgs / pets. Three tables: `entities` (canonical name + kind + tri-state `merge_status` + a `description` prose column), `entity_aliases` (many-to-one alias → entity), and `concept_node_entities` (many-to-many junction between L3 events and L5 entities). Extraction creates a new entity when a new name appears and only appends an alias row when a known entity surfaces under a new alias. At retrieve time, any alias hit in the query text pulls every ConceptNode linked to that entity into the candidate pool with a score bump — this is the engineering basis for cross-language / cross-alias recall, since vector distance alone cannot bridge "Scott" and "黄逸扬". Three-tier dedup (alias exact match → embedding 0.65 / 0.85 thresholds → uncertain branch where the persona naturally asks the user) lives in `memory/entities.py`.
+
+`entities.description` is the prose portrait column: slow_tick synthesizes one when an entity's `linked_events_count` crosses a threshold (default ≥ 3), and the owner can override via `PATCH /api/admin/memory/entities/{id}` (which sets `owner_override=true` and locks slow_tick out of further overwrites). Both write paths funnel through the same `update_entity_description(db, *, entity_id, description, source)` primitive, with `source` ∈ {`'slow_tick'`, `'owner'`}. When an alias anchor hits a confirmed entity carrying a non-empty description, retrieve injects an `# About {canonical_name}` section into the system prompt — one entity per section, strict 1:1 cardinality with the entity row.
 
 **L6 episodic state** — a single-row snapshot of how the persona feels right now, stored as JSON in the `personas.episodic_state` column: `{mood, energy, last_user_signal, updated_at}`. The extraction LLM emits a `session_mood_signal` field alongside events when a session closes, and consolidate writes it through — no extra LLM call, no extra round-trip, so updating L6 is free. `assemble_turn` checks for 12h decay on entry; if the snapshot is older than 12 hours, mood resets to `neutral` so a long quiet period doesn't open the next turn under stale affect. Renders to the system prompt's `# How you feel right now` section; when mood is `neutral`, the section is skipped to keep the prompt terse.
 
@@ -90,7 +96,7 @@ drain_and_fire_pending_lifecycle_events()  <--+
 observer.on_message_ingested(msg)   (per-call hook)
 ```
 
-Every write commits before any hook fires. The lifecycle queue in `sessions.py` batches "new session" / "session closed" events so that a single commit can dispatch multiple hooks in one drain. Per-write hooks travel through an explicit `observer=` parameter on `ingest_message`, `bulk_create_events`, and `append_to_core_block`; lifecycle hooks travel through the module-level `_observers` registry populated once via `register_observer(...)`.
+Every write commits before any hook fires. The lifecycle queue in `sessions.py` batches "new session" / "session closed" events so that a single commit can dispatch multiple hooks in one drain. `ingest_message` and `append_to_core_block` accept explicit `observer=` parameters (per-write notifications); most other hooks (event/thought/entity/session/mood) fan out from the module-level `_observers` registry populated once via `register_observer(...)` at daemon startup.
 
 When a session crosses `SESSION_MAX_MESSAGES` or `SESSION_MAX_TOKENS`, it is marked for closing and the next `ingest_message` call opens a new one in the same channel. Nothing is visible to the user — the split is an internal extraction boundary. Idle sessions (over 30 minutes without a message) and lifecycle signals from runtime (daemon shutdown, persona swap) close sessions the same way.
 
@@ -159,9 +165,9 @@ The memory module's response path for all seven stimulus kinds is implemented an
 | 4 | Contradicting information | Extraction outputs `superseded_event_ids` · consolidate sets the old node's `superseded_by_id` to the new node (soft delete · row not removed) · retrieve filters `superseded_by_id IS NULL` by default |
 | 5 | User correcting style | Owner explicitly writes the `STYLE` block via `POST /api/admin/persona/style` · no NLP keyword auto-detection |
 | 6 | Quiet period (no user messages) | `idle_scanner` closes stale sessions (existing) · `assemble_turn` entry runs the 12h episodic_state decay back to neutral · slow_tick does not fire when there's no fresh inbox material |
-| 7 | Spontaneous recall (slow_tick) | The G phase appended to `consolidate_worker._process_one` runs the slow_cycle LLM under the right conditions · produces `type='thought'` and `type='expectation'` nodes · likely to be retrieved by the next fast-loop turn (this is the physical realisation of "the persona thinks of you when you're not talking") |
+| 7 | Spontaneous recall (slow_tick) | The G phase appended to `consolidate_worker._process_one` runs the slow_cycle LLM under the right conditions · produces `type='thought'` and `type='expectation'` nodes · likely to be retrieved by the next fast-loop turn (this is the physical realisation of "the persona thinks of you when you're not talking") · the produced thought is broadcast immediately via `on_thought_created` → SSE topic `memory.thought.created`, so the Web chat's Memory Timeline shows it in real time |
 
-Time only legitimately enters the system in three places: L6 episodic 12h decay · `consolidate_worker` 5s polling · L1.self TIMER reflection (force one reflection if N days have passed without any). Anything else of the "every Tuesday X / first of the month Y" shape is forbidden — the memory module only accepts event-driven triggers.
+Time only legitimately enters the system in three places: L6 episodic 12h decay · `consolidate_worker` 5s polling · TIMER reflection (force one reflect pass if 24h have passed without any thought). Anything else of the "every Tuesday X / first of the month Y" shape is forbidden — the memory module only accepts event-driven triggers.
 
 ### Slow_tick consolidate phase (L4 forward-looking)
 
@@ -171,14 +177,16 @@ slow_tick is **not a separate worker** — it's the G phase appended to `consoli
 - `now - persona.last_slow_tick_at < cool_down_minutes` (default 30) AND no SHOCK in this session → skip
 - otherwise run
 
-The run makes one `slow_cycle_llm` call. Input: cross-session material from the cool-down window (events + existing thoughts + the previous cycle's `salient_questions`). Output: five sub-tasks bundled in one return — `new_thoughts` / `new_expectations` / `self_block_append` / `salient_questions` / `revisit_decisions`. Then:
+The run makes one `slow_cycle_llm` call. Input: cross-session material from the cool-down window (events + existing thoughts + the previous cycle's `salient_questions`). Output: three sub-tasks bundled in one return — `new_thoughts` (mixing `subject='persona'` self-reflections and `subject='user'` user-judgements) / `new_expectations` / `salient_questions` (seed questions for the next cycle, written back to the `personas` row). Then:
 
-- `bulk_create_thoughts(new_thoughts)` writes the L4 thought nodes plus their filling chains
+- `bulk_create_thoughts(new_thoughts)` writes the L4 thought nodes plus their filling chains; `subject='persona'` rows feed the user prompt's `# How you see yourself lately` section
 - `type='expectation'` nodes get written with `event_time_end` as the due_at · the fast loop runs embedding similarity between each new user message and pending `expectation.description` · matches mark fulfilled, overdue ones expired
-- if `self_block_append` is non-empty · `append_to_core_block(BlockLabel.SELF, ...)` · guarded by the ≤ 20% edit-distance invariant
+- as a side pass: scan each entity's `linked_events_count`; over-threshold rows funnel through `update_entity_description(...)` to synthesize a description (slow_tick always uses `source='slow_tick'`; rows with `owner_override=true` are skipped)
 - `personas.last_slow_tick_at = now`
 
-Guardrails (load-bearing invariants): per-cycle token wall (input ≤ 8k · output ≤ 1k) · daily 36 cycles + 150k input + 30k output · `cfg.slow_tick.enabled = false` global kill switch · each event reflected on ≤ 3 times. Slow_tick is forbidden from: creating intentions without source-turn evidence · scheduling itself · editing nodes in place · calling external APIs · creating new NodeTypes / BlockLabels · recursively self-invoking · bypassing the token budget. The closed tool enumeration plus schema rejection enforce these invariants. Transcripts land at `develop-docs/slow_tick_transcripts/<cycle_id>.json`; the admin tab exposes `GET /api/admin/slow-tick/transcripts` for browsing history.
+**slow_tick never writes L1 core_blocks — not one row.** Persona self-reflection lands in L4 thought[subject='persona']; persona descriptions of people/places/orgs land in L5 entities.description. The `BlockLabel` enum has only `persona` / `user` / `style`, and `append_to_core_block` is not in slow_tick's call chain — pinned by the `tests/memory/test_slow_cycle.py` "L1-never-auto-update invariant" test.
+
+Guardrails (load-bearing invariants): per-cycle token wall (input ≤ 8k · output ≤ 1k) · daily 36 cycles + 150k input + 30k output · `cfg.slow_tick.enabled = false` global kill switch · each event reflected on ≤ 3 times. Slow_tick is forbidden from: writing any L1 block · creating intentions without source-turn evidence · scheduling itself · editing nodes in place · calling external APIs · creating new NodeTypes / BlockLabels · recursively self-invoking · bypassing the token budget. The closed tool enumeration plus schema rejection enforce these invariants. Transcripts land at `develop-docs/slow_tick_transcripts/<cycle_id>.json`; the admin tab exposes `GET /api/admin/slow-tick/transcripts` for browsing history.
 
 ### One persona across channels
 
@@ -259,7 +267,7 @@ t = 0s             User types "hi" in the Web channel
 t ≈ 0.1s           runtime prepares the reply
                    ↓
 ┌─ memory.load_core_blocks(persona, user)
-│    → 5 rows (persona / self / style [shared] + user / relationship [per-user])
+│    → 3 rows (persona / style [shared] + user [per-user])
 │
 ├─ assemble_turn entry checks L6 episodic_state · 12h decay resets mood to neutral
 │
@@ -282,12 +290,13 @@ t ≈ 0.1s           runtime prepares the reply
 │    See docs/en/runtime.md § Prompt section order for the canonical order.
 │    system_prompt = opener + # Right now (dual TZ) + # Who you are (7 facts)
 │                    + # How you feel right now (L6 episodic) + L1 core blocks
-│                    + # Style preferences + # Entity disambiguation pending
-│                    + STYLE_INSTRUCTIONS
+│                    + # Style preferences + # About {canonical_name} (alias hit)
+│                    + # Entity disambiguation pending + STYLE_INSTRUCTIONS
 │    user_prompt   = # Recent sessions (day-bucket) + retrieved thoughts/events
-│                    + # About {speaker} (pinned) + # Promises you've made
-│                    + # You've been expecting + # Our recent conversation
-│                    + # What they just said
+│                    + # About {speaker} (pinned user-thoughts)
+│                    + # How you see yourself lately (pinned persona-thoughts)
+│                    + # Promises you've made + # You've been expecting
+│                    + # Our recent conversation + # What they just said
 │
 └─ stream tokens → channel → write accumulated reply back via ingest_message(PERSONA)
 
@@ -350,11 +359,17 @@ t ≈ 30-60min + 5s  consolidate_worker polls (every 5s by default)
 │  [G] slow_tick consolidate phase — runs only when should_run_slow_cycle agrees
 │      (cool_down OK, session non-trivial, daily-cap and token-wall not breached):
 │        run_slow_cycle(persona, recent_events, recent_thoughts, ...)
-│          → typed ConceptNode output · subject='persona' · type IN ('thought','expectation')
+│          → typed ConceptNode output · type IN ('thought','expectation')
+│          → thought rows carry subject='user' or subject='persona'
+│            · subject='persona' is the home for persona self-reflection
+│              · then rendered into the user prompt's
+│                # How you see yourself lately section
 │          → each carries filling_event_ids · expectation requires non-empty
 │            reasoning_event_ids
-│          → optional self_block append (edit distance ≤ 20%)
+│          → side pass: scan entities, synthesize description for any
+│            entity over linked_events_count threshold
 │          → personas.last_slow_tick_at = now
+│      slow_tick never writes L1 · no append_to_core_block in this path
 │      Failure does not roll back the session ([F] is already committed) · just logs.
 │
 │  · session_mood_signal (emitted by the [B] extraction LLM as a side field) is
@@ -410,22 +425,31 @@ The same short-circuit applies even if someone force-appends an already-`extract
 
 ### Observer contract
 
-Observers are fire-and-forget post-commit notifications. The protocol lives in `observers.py`:
+Observers are fire-and-forget post-commit notifications. The Protocol lives in `observers.py` and exposes 9 hooks split across two firing paths — pure per-write and lifecycle:
 
 ```
-MemoryEventObserver
-  on_message_ingested(msg)        per-call, via observer= parameter
-  on_event_created(event)         per-call, via observer= parameter
-  on_thought_created(thought)     per-call, via observer= parameter
-  on_core_block_appended(append)  per-call, via observer= parameter
-  on_new_session_started(...)     lifecycle, via _observers registry
-  on_session_closed(...)          lifecycle, via _observers registry
-  on_mood_updated(...)            lifecycle, via _observers registry
+MemoryEventObserver  (Protocol · source of truth in observers.py)
+  # Pure per-write hooks · only fire when caller passes observer=
+  on_message_ingested(msg)
+  on_core_block_appended(append)
+
+  # 7 lifecycle hooks · fan out automatically through the _observers registry
+  on_event_created(event)
+  on_thought_created(thought, source)        # source ∈ {reflection, slow_tick, import}
+  on_entity_confirmed(entity)                # uncertain entities are not broadcast — see plan §3.1
+  on_entity_description_updated(entity, source)  # source ∈ {slow_tick, owner}
+  on_new_session_started(session_id, persona_id, user_id)
+  on_session_closed(session_id, persona_id, user_id)
+  on_mood_updated(persona_id, user_id, new_mood_text)  # mood actually lives in L6 · no L1 write
 ```
+
+`on_event_created` and `on_thought_created` fire **on both paths** — they fan out through the lifecycle registry (so `RuntimeMemoryObserver` sees them) AND honour the explicit `observer=` parameter on `consolidate_session` / `import_content` (so import pipelines and tests can keep their per-call callbacks). The fan-out is additive; the older per-call invocation semantics are unchanged.
 
 All methods are plain `def` (not `async def`). Exceptions raised by a hook are caught at the memory boundary and logged via the module logger; the memory write that fired the hook has already committed by then and is never rolled back. A consumer that implements only some of the hooks relies on structural subtyping — `NullObserver` is provided as a no-op base for subclassing.
 
-Lifecycle events flow through a small queue in `sessions.py`. The code path that mutates `session.status` enqueues a pending event and the committing caller drains the queue immediately after `db.commit()` returns. This lets a single commit dispatch several lifecycle hooks in one pass without each function needing to know whether a hook should fire.
+Session lifecycle events flow through a small queue in `sessions.py`: the code path that mutates `session.status` enqueues a pending event and the committing caller drains the queue immediately after `db.commit()` returns, so a single commit can dispatch several lifecycle hooks in one pass. Entity hooks (`on_entity_confirmed` / `on_entity_description_updated`) skip the session queue and fire `_fire_lifecycle(...)` directly from the entity write path in `entities.resolve_entity` / `entities.apply_entity_clarification` / `update_entity_description` — they have no relationship to session boundaries.
+
+The runtime-side `RuntimeMemoryObserver` (in `src/echovessel/runtime/memory_observers.py`) implements every lifecycle hook above and turns each into an SSE topic broadcast across every channel that exposes `push_sse`. See `docs/en/runtime.md § Cross-Channel SSE` and `docs/en/channels.md § Web channel` for the topic catalog.
 
 ---
 
@@ -467,12 +491,14 @@ class EventLogger(NullObserver):
 
 
 logger = EventLogger()
-register_observer(logger)  # lifecycle hooks auto-fire after register
-# Per-write hooks (on_event_created, etc.) also work here when the caller
-# passes observer=logger into consolidate_session / bulk_create_events.
+register_observer(logger)
+# Once registered, every lifecycle hook fires automatically — including
+# on_event_created and on_thought_created. on_message_ingested /
+# on_core_block_appended still require the caller to pass observer=logger
+# explicitly into the relevant write API.
 ```
 
-The lifecycle hooks (`on_new_session_started`, `on_session_closed`, `on_mood_updated`) fire automatically once the observer is registered. The per-write hooks (`on_event_created`, `on_thought_created`, `on_message_ingested`, `on_core_block_appended`) fire only when the caller explicitly passes `observer=...` into the relevant write API. Structural subtyping means you only need to implement the hooks you care about.
+After registration, every lifecycle hook (`on_new_session_started` / `on_session_closed` / `on_mood_updated` / `on_event_created` / `on_thought_created` / `on_entity_confirmed` / `on_entity_description_updated`) fires automatically — no caller needs to thread `observer=` through. The pure per-write hooks (`on_message_ingested`, `on_core_block_appended`) still fire only when the caller passes `observer=...` into `ingest_message` / `append_to_core_block`. `on_event_created` / `on_thought_created` are dual-fire: the lifecycle fan-out **plus** the per-call `observer=` parameter on `consolidate_session` / `import_content` (so import pipelines and tests retain their per-call callbacks). Structural subtyping means you only need to implement the hooks you care about.
 
 ### 2. Add a new retrieve scorer
 

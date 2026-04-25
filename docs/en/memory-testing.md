@@ -23,15 +23,20 @@ Unless noted, every file is under `tests/`. All tests live on stub providers by 
 
 ## Stage 1 · L1 core blocks + biographic facts
 
-**What this layer does.** Five prose core blocks (`persona / self / user / relationship / style`) plus fifteen structured biographic columns on the `personas` row (`full_name`, `gender`, `birth_date`, `timezone`, `occupation`, …). Both are loaded on every turn and injected into the system prompt; only five facts render into the prompt's `# Who you are` section (C-option contract). Current emotional state is not in L1 — it lives in L6 episodic state (see [`memory.md`](./memory.md)).
+**What this layer does.** Three prose core blocks (`persona / user / style`) plus fifteen structured biographic columns on the `personas` row (`full_name`, `gender`, `birth_date`, `timezone`, `occupation`, …). Both are loaded on every turn and injected into the system prompt; only five facts render into the prompt's `# Who you are` section (C-option contract). L1 is never auto-written by code — `slow_tick` / `consolidate` / extraction all bypass `core_blocks`. The persona's self-reflection lives in L4 thought[subject='persona'], and the persona's description of third-party people / places / orgs lives in L5 `entities.description`. Current emotional state is not in L1 — it lives in L6 episodic state (see [`memory.md`](./memory.md)).
 
 **What's tested.**
 
+- BlockLabel enum contract — enum values are exactly `{persona, user, style}`, SHARED / PER_USER grouping is correct, legacy labels (`self` / `relationship`) are unreachable via getattr · `tests/memory/test_core_block_label_enum.py` (4 tests)
+- L1 admin route contract — `OnboardingRequest` / `PersonaUpdateRequest` reject `self_block` / `relationship_block` with 422 (via `extra='forbid'`); GET returns exactly three keys · `tests/channels/web/test_admin_routes_block_contract.py` (5 tests)
+- L1-never-auto-update invariant — slow_cycle run leaves `core_blocks` byte-identical (the former `_self_append_*` cases were rewritten to pin this invariant) · `tests/memory/test_slow_cycle.py`
 - Prompt template + parser — round-trip JSON, enum / date normalisation, malformed-JSON handling · `tests/prompts/test_persona_facts.py` (20 tests)
 - Runtime orchestrator — LARGE tier default, `existing_blocks` flows into the LLM prompt, parser error becomes `PersonaExtractionError` · `tests/runtime/test_persona_extraction.py` (7 tests)
 - Admin API — onboarding with/without facts, GET returns all 15 keys, PATCH partial update + explicit-null clears, enum coercion vs 422 on bad date · `tests/channels/web/test_persona_facts_routes.py` (17 tests)
-- System prompt contract — only five facts render, `birth_date.year` not ISO, `timezone` stays out, empty view equals legacy prompt · `tests/runtime/test_interaction.py` (6 new tests) + `tests/memory/test_stage1_facts_addons.py` (4 tests)
+- Prompt section contract — `# About yourself` / `# Relationship` removed from the system prompt, `# How you see yourself lately` renders the pinned persona-thoughts in the user prompt, `# About {canonical_name}` renders only when description is non-empty · `tests/runtime/test_prompt_sections.py` (6 tests)
+- System prompt contract (facts) — only five facts render, `birth_date.year` not ISO, `timezone` stays out, empty view equals legacy prompt · `tests/runtime/test_interaction.py` (6 new tests) + `tests/memory/test_stage1_facts_addons.py` (4 tests)
 - Schema migration + idempotency — 15 columns on fresh + legacy DBs, rerun is no-op · `tests/memory/test_migrations_idempotent.py`, `tests/memory/test_migrations_from_old_db.py`
+- L4 persona-thought sidecar — `retrieve.force_load_persona_thoughts(top_n, exclude_ids)` takes subject='persona' by recency; subject='user' is filtered out · `tests/memory/test_force_load_persona_thoughts.py` (3 tests)
 
 ---
 
@@ -127,6 +132,29 @@ Reflection reads the last 24 h of events, asks the reflection LLM for higher-ord
 - **Cross-channel unified persona** — A Discord session and a Web session for the same `(persona, user)` share memory · events from either surface in the other channel's retrieval · `tests/integration/test_cross_channel_unified_persona.py`
 - **L6 episodic state write** — extraction's `session_mood_signal` field flows through consolidate and lands in the `personas.episodic_state` JSON column · `tests/memory/test_episodic_state.py`
 - **Forget + orphan** — deleting an event cascades, orphans, or is cancelled per `DeletionChoice` · `tests/memory/test_forget.py`
+
+---
+
+## Observer broadcast + Memory Timeline route
+
+**What this layer does.** `RuntimeMemoryObserver` implements the memory lifecycle hooks and turns each into an SSE topic; the Web Memory Timeline consumes them for real-time updates; the admin timeline backfill endpoint returns a mixed-kind list on cold start.
+
+**What's tested.**
+
+- Per-hook broadcast shape (`memory.event.created` / `memory.thought.created` / `memory.entity.confirmed` / `memory.entity.description_updated`), `source` tag preservation on `on_thought_created`, uncertain entities are filtered at the source, engine-missing degradation, `chat.mood.update` backward compat · `tests/runtime/test_memory_observer_sse_broadcast.py` (9 tests)
+- `GET /api/admin/memory/timeline` route — empty body, mixed merge (events / thoughts / entities / mood / session-close with counts), `limit` cap, `since` cursor pagination · `tests/channels/web/test_memory_timeline_route.py` (4 tests)
+
+---
+
+## Dev-mode trace · turn_traces + session_traces
+
+**What this layer does.** `TurnTracer` / `ConsolidateTracer` record each stage inside `assemble_turn` and `consolidate_worker._process_one` and write to the `turn_traces` / `session_traces` tables; three admin routes feed the frontend drawer. With `cfg.dev_trace.enabled = false` the tracer is a `NullTurnTracer` whose calls compile to bytecode no-ops.
+
+**What's tested.**
+
+- `TurnTracer` — `stage_start` / `stage_end` pairing, unmatched `stage_end` silently skipped, the Null variant's `__setattr__` is also a no-op · `tests/memory/test_turn_tracer.py` (7 tests)
+- `ConsolidateTracer` — 7 phase records (A trivial · B extract including `junction_rejects` · C shock · D timer · E reflect · F status · G slow_tick) · `tests/memory/test_consolidate_tracer.py` (5 tests)
+- Admin routes — `GET /api/admin/turns`, `GET /api/admin/turns/{turn_id}`, `GET /api/admin/sessions/{session_id}/consolidate-trace` · `tests/channels/web/test_turn_trace_route.py` (6 tests)
 
 ---
 
