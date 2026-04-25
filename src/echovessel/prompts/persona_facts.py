@@ -1,7 +1,7 @@
 """Persona facts + blocks extraction prompt, parser, and dataclasses.
 
 Pure library code — no LLM client, no memory imports. The runtime
-(:mod:`echovessel.runtime.persona_extraction`) turns this into an
+(:mod:`echovessel.runtime.wiring.persona_extraction`) turns this into an
 actual round-trip by combining the template with ``runtime.ctx.llm``.
 
 One LLM call produces two halves of the onboarding output:

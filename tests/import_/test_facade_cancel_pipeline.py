@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from echovessel.runtime.importer_facade import ImporterFacade, PipelineEvent
+from echovessel.runtime.wiring.importer import ImporterFacade, PipelineEvent
 
 
 class _SlowLLM:

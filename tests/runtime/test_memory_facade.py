@@ -24,7 +24,7 @@ from echovessel.memory.ingest import ingest_message
 from echovessel.memory.models import Session as SessionRow
 from echovessel.proactive.base import ChannelProtocol
 from echovessel.runtime.channel_registry import ChannelRegistry
-from echovessel.runtime.memory_facade import (
+from echovessel.runtime.wiring.memory import (
     MemoryFacade,
     ProactiveChannelRegistry,
     _ProactiveChannelAdapter,
@@ -69,7 +69,7 @@ def test_no_channel_id_kwarg_in_reads():
     D4 violation that collapses the unified memory guarantee. Do not
     skip or loosen this test.
     """
-    import echovessel.runtime.memory_facade as mod
+    import echovessel.runtime.wiring.memory as mod
 
     with open(mod.__file__) as fp:
         tree = ast.parse(fp.read())

@@ -42,8 +42,8 @@ from echovessel.runtime import (
     build_zero_embedder,
     load_config_from_str,
 )
-from echovessel.runtime.importer_facade import ImporterFacade, PipelineEvent
 from echovessel.runtime.llm import StubProvider
+from echovessel.runtime.wiring.importer import ImporterFacade, PipelineEvent
 
 
 def _toml(data_dir: str) -> str:

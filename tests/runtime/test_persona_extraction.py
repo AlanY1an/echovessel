@@ -8,7 +8,7 @@ from datetime import date
 
 import pytest
 
-from echovessel.runtime.persona_extraction import (
+from echovessel.runtime.wiring.persona_extraction import (
     ExtractionEvent,
     PersonaExtractionError,
     extract_persona_facts_and_blocks,

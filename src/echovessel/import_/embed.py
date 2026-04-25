@@ -116,7 +116,7 @@ def sqlite_backend_vector_writer(backend: Any) -> VectorWriter:
     """Adapter: build a :data:`VectorWriter` that calls
     ``backend.insert_vector(id, vec)``.
 
-    Used by the runtime wiring in :mod:`echovessel.runtime.importer_facade`
+    Used by the runtime wiring in :mod:`echovessel.runtime.wiring.importer`
     so the pipeline can stay backend-agnostic. Tests pass their own
     lambda instead.
     """

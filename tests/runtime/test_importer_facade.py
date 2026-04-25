@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 
-from echovessel.runtime.importer_facade import ImporterFacade, PipelineEvent
+from echovessel.runtime.wiring.importer import ImporterFacade, PipelineEvent
 
 
 def _make_facade() -> ImporterFacade:

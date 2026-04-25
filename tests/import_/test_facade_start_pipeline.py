@@ -8,7 +8,7 @@ import json
 from sqlalchemy import text
 from sqlmodel import Session as DbSession
 
-from echovessel.runtime.importer_facade import ImporterFacade
+from echovessel.runtime.wiring.importer import ImporterFacade
 
 
 class _StubLLM:

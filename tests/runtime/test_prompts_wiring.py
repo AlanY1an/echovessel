@@ -17,7 +17,7 @@ from echovessel.prompts import (
     REFLECTION_SYSTEM_PROMPT,
 )
 from echovessel.runtime.llm import StubProvider
-from echovessel.runtime.prompts_wiring import (
+from echovessel.runtime.wiring.prompts import (
     PROACTIVE_SYSTEM_PROMPT,
     make_extract_fn,
     make_judge_fn,
@@ -517,7 +517,7 @@ async def test_make_proactive_fn_prompt_does_not_use_bare_channel_names():
 
 
 def test_format_proactive_user_prompt_includes_trigger():
-    from echovessel.runtime.prompts_wiring import _format_proactive_user_prompt
+    from echovessel.runtime.wiring.prompts import _format_proactive_user_prompt
 
     snapshot = _make_clean_snapshot(trigger="warmth_burst")
     prompt = _format_proactive_user_prompt(snapshot)
@@ -530,7 +530,7 @@ def test_format_proactive_user_prompt_includes_trigger():
 
 
 def test_format_proactive_user_prompt_truncates_oversize_content():
-    from echovessel.runtime.prompts_wiring import _format_proactive_user_prompt
+    from echovessel.runtime.wiring.prompts import _format_proactive_user_prompt
 
     long_content = "x" * 2000
     snapshot = MemorySnapshot(
