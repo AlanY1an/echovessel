@@ -24,6 +24,18 @@ _CORPUS_PATH = Path(__file__).resolve().parents[2] / (
 )
 
 
+# Anchor for the eval test tree. modifyitems receives every collected
+# item in the suite (pytest's `items` list is global, not scoped to the
+# conftest's directory), so we filter by nodeid against this prefix
+# before applying the skip marker — otherwise the marker leaks to the
+# entire repo and silently skips every test.
+_EVAL_TESTS_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _EVAL_TESTS_DIR.parents[1]
+_EVAL_NODEID_PREFIX = (
+    _EVAL_TESTS_DIR.relative_to(_REPO_ROOT).as_posix() + "/"
+)
+
+
 def pytest_collection_modifyitems(config, items):  # noqa: ARG001
     if _CORPUS_PATH.is_file():
         return
@@ -35,4 +47,5 @@ def pytest_collection_modifyitems(config, items):  # noqa: ARG001
         )
     )
     for item in items:
-        item.add_marker(skip_eval)
+        if item.nodeid.startswith(_EVAL_NODEID_PREFIX):
+            item.add_marker(skip_eval)
