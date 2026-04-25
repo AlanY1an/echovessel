@@ -447,7 +447,7 @@ Runtime's observer wiring (in `src/echovessel/runtime/`) checks for `push_sse` w
 
 ---
 
-For the authoritative source of the Channel Protocol, see `src/echovessel/channels/base.py`. For the registry and dispatch plumbing, see `src/echovessel/runtime/channel_registry.py` and `src/echovessel/runtime/turn_dispatcher.py`. The turn pipeline itself — where memory retrieval and LLM assembly enforce the no-transport-leak rules — lives in `src/echovessel/runtime/interaction.py`.
+For the authoritative source of the Channel Protocol, see `src/echovessel/channels/base.py`. For the registry and dispatch plumbing, see `src/echovessel/runtime/channel_registry.py` and `src/echovessel/runtime/turn/dispatcher.py`. The turn pipeline itself — where memory retrieval and LLM assembly enforce the no-transport-leak rules — lives in `src/echovessel/runtime/turn/coordinator.py`.
 
 ---
 

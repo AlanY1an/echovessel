@@ -38,9 +38,9 @@ Each thought row carries a `subject` column: `subject='user'` is the persona's j
 
 **L6 episodic state** — a single-row snapshot of how the persona feels right now, stored as JSON in the `personas.episodic_state` column: `{mood, energy, last_user_signal, updated_at}`. The extraction LLM emits a `session_mood_signal` field alongside events when a session closes, and consolidate writes it through — no extra LLM call, no extra round-trip, so updating L6 is free. `assemble_turn` checks for 12h decay on entry; if the snapshot is older than 12 hours, mood resets to `neutral` so a long quiet period doesn't open the next turn under stale affect. Renders to the system prompt's `# How you feel right now` section; when mood is `neutral`, the section is skipped to keep the prompt terse.
 
-**Consolidate** — the pipeline that runs when a session closes. It reads the session's L2 messages in one batch, calls the injected extraction function to produce zero or more L3 events, embeds each event, optionally triggers a reflection pass that writes L4 thoughts, and marks the session `CLOSED`. The entry point is `consolidate_session` in `src/echovessel/memory/consolidate.py`.
+**Consolidate** — the pipeline that runs when a session closes. It reads the session's L2 messages in one batch, calls the injected extraction function to produce zero or more L3 events, embeds each event, optionally triggers a reflection pass that writes L4 thoughts, and marks the session `CLOSED`. The entry point is `consolidate_session` in `src/echovessel/memory/consolidate/core.py`.
 
-**Retrieve** — the pipeline that runs before the persona speaks. It loads every L1 core block, asks the storage backend for a vector search over `concept_nodes`, reranks the candidates with a four-factor score, applies a minimum-relevance floor to suppress orthogonal matches, and optionally expands each hit with a few neighbouring L2 messages. If the vector index returns too few hits, an FTS fallback over L2 supplements the result. The entry point is `retrieve` in `src/echovessel/memory/retrieve.py`.
+**Retrieve** — the pipeline that runs before the persona speaks. It loads every L1 core block, asks the storage backend for a vector search over `concept_nodes`, reranks the candidates with a four-factor score, applies a minimum-relevance floor to suppress orthogonal matches, and optionally expands each hit with a few neighbouring L2 messages. If the vector index returns too few hits, an FTS fallback over L2 supplements the result. The entry point is `retrieve` in `src/echovessel/memory/retrieve/core.py`.
 
 **Observer** — a Protocol in `src/echovessel/memory/observers.py` that higher layers implement to react to memory writes. Memory never imports runtime or channels; instead, runtime registers a `MemoryEventObserver` at startup and memory fires hooks into it after every successful commit. Exceptions from observers are caught and logged, never rolled back into the memory write itself.
 
@@ -230,9 +230,9 @@ The numeric thresholds that shape the flow above are module-level constants, not
 | L2 → (close) | idle timeout | `memory/sessions.py` | `SESSION_IDLE_MINUTES = 30` |
 | L2 → (close) | length cap | `memory/sessions.py` | `SESSION_MAX_MESSAGES = 200`, `SESSION_MAX_TOKENS = 20_000` |
 | L2 → (close) | runtime lifecycle | channels / catchup | — |
-| L3 → L4 | SHOCK — any new event crosses the impact floor | `memory/consolidate.py` | `SHOCK_IMPACT_THRESHOLD = 8` (absolute value) |
-| L3 → L4 | TIMER — no recent reflection | `memory/consolidate.py` | `TIMER_REFLECTION_HOURS = 24` |
-| L3 → L4 (gate) | cap reflections per 24 h | `memory/consolidate.py` | `REFLECTION_HARD_LIMIT_24H = 3` |
+| L3 → L4 | SHOCK — any new event crosses the impact floor | `memory/consolidate/phase_bce.py` | `SHOCK_IMPACT_THRESHOLD = 8` (absolute value) |
+| L3 → L4 | TIMER — no recent reflection | `memory/consolidate/phase_bce.py` | `TIMER_REFLECTION_HOURS = 24` |
+| L3 → L4 (gate) | cap reflections per 24 h | `memory/consolidate/phase_bce.py` | `REFLECTION_HARD_LIMIT_24H = 3` |
 
 Two things worth calling out because they trip new readers:
 
@@ -449,7 +449,7 @@ All methods are plain `def` (not `async def`). Exceptions raised by a hook are c
 
 Session lifecycle events flow through a small queue in `sessions.py`: the code path that mutates `session.status` enqueues a pending event and the committing caller drains the queue immediately after `db.commit()` returns, so a single commit can dispatch several lifecycle hooks in one pass. Entity hooks (`on_entity_confirmed` / `on_entity_description_updated`) skip the session queue and fire `_fire_lifecycle(...)` directly from the entity write path in `entities.resolve_entity` / `entities.apply_entity_clarification` / `update_entity_description` — they have no relationship to session boundaries.
 
-The runtime-side `RuntimeMemoryObserver` (in `src/echovessel/runtime/memory_observers.py`) implements every lifecycle hook above and turns each into an SSE topic broadcast across every channel that exposes `push_sse`. See `docs/en/runtime.md § Cross-Channel SSE` and `docs/en/channels.md § Web channel` for the topic catalog.
+The runtime-side `RuntimeMemoryObserver` (in `src/echovessel/runtime/wiring/memory_observer.py`) implements every lifecycle hook above and turns each into an SSE topic broadcast across every channel that exposes `push_sse`. See `docs/en/runtime.md § Cross-Channel SSE` and `docs/en/channels.md § Web channel` for the topic catalog.
 
 ---
 

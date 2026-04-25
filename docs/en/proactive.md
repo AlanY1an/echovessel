@@ -269,7 +269,7 @@ Two important operational notes:
 
 ### 3. Hook a custom audit sink
 
-The default sink is `JSONLAuditSink`, which writes one JSON object per line to `~/.echovessel/logs/proactive-YYYY-MM-DD.jsonl`. It implements the `AuditSink` Protocol from `echovessel.proactive.base`:
+The default sink is `JSONLAuditSink`, which writes one JSON object per line to `~/.echovessel/logs/proactive-YYYY-MM-DD.jsonl`. It implements the `AuditSink` Protocol from `echovessel.proactive.core.base`:
 
 ```python
 class AuditSink(Protocol):
