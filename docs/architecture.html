@@ -398,21 +398,20 @@
         <div class="m-level lv1">L1</div>
         <div>
           <div class="m-name">Core blocks — the persona's frame</div>
-          <div class="m-tagline">The 5 hand-editable identity documents that every LLM prompt starts with.</div>
+          <div class="m-tagline">Three hand-authored identity documents that every LLM prompt starts with. Never auto-updated.</div>
           <div class="m-table">table · <code>core_blocks</code> &nbsp; audit · <code>core_block_appends</code></div>
         </div>
         <div class="m-content">
           <ul>
             <li><code>persona_block</code> — who this persona is (trait, tone, values)</li>
-            <li><code>self_block</code> — persona's self-narrative (grows by reflection)</li>
             <li><code>user_block</code> — identity-level facts about you</li>
-            <li><code>relationship_block</code> — people in your life as persona sees them</li>
             <li><code>style_block</code> — owner-curated style preferences (don't say "haha", etc.)</li>
+            <li><strong>L1 is human-authored only.</strong> Reflection grows in L4 thoughts (subject='persona'); third-party people grow in L5 entities.description.</li>
           </ul>
         </div>
         <div class="m-kind">
           <div class="m-kind-lbl">write path</div>
-          <div>onboarding · admin edit · importer bootstrap · slow_tick self-narrative append</div>
+          <div>onboarding · admin edit · importer bootstrap</div>
           <div class="m-kind-lbl" style="margin-top:6px;">read path</div>
           <div>every turn's prompt prefix</div>
         </div>
@@ -478,7 +477,8 @@
         </div>
         <div class="m-content">
           <ul>
-            <li><code>type=thought</code> — durable insight from past events ("you find quiet afternoons grounding")</li>
+            <li><code>type=thought · subject='user'</code> — durable insight about the user ("you find quiet afternoons grounding")</li>
+            <li><code>type=thought · subject='persona'</code> — persona's self-reflection produced by slow_tick · feeds the user prompt's <code># How you see yourself lately</code> section · the only physical path by which the persona's self-image grows</li>
             <li><code>type=intention</code> — strict commitment with <code>subject='persona'</code> ("I'll text you back tomorrow")</li>
             <li><code>type=expectation</code> — slow_tick forward prediction with <code>event_time_end</code> as due_at</li>
             <li><code>concept_node_filling</code> · parent=thought, child=event · the evidence chain</li>
@@ -489,9 +489,9 @@
         </div>
         <div class="m-kind">
           <div class="m-kind-lbl">write path</div>
-          <div>consolidate worker <code>reflect_fn</code> (fast loop · SHOCK / TIMER) · slow_tick G phase (slow loop · between-session reflection)</div>
+          <div>consolidate worker <code>reflect_fn</code> (fast loop · SHOCK / TIMER) · slow_tick G phase (slow loop · between-session reflection · also where <code>subject='persona'</code> rows come from)</div>
           <div class="m-kind-lbl" style="margin-top:6px;">read path</div>
-          <div>retrieval · pinned <code># About {speaker}</code> · <code># Promises you've made</code> · <code># You've been expecting</code> · delete → shows source events to confirm cascade</div>
+          <div>retrieval · pinned <code># About {speaker}</code> · <code># How you see yourself lately</code> · <code># Promises you've made</code> · <code># You've been expecting</code> · delete → shows source events to confirm cascade</div>
         </div>
       </div>
 
@@ -505,18 +505,19 @@
         </div>
         <div class="m-content">
           <ul>
-            <li><code>entities</code> · canonical name + kind (<code>person | place | org | pet</code>) + tri-state <code>merge_status</code></li>
+            <li><code>entities</code> · canonical name + kind (<code>person | place | org | pet</code>) + tri-state <code>merge_status</code> + a <code>description</code> prose column</li>
             <li><code>entity_aliases</code> · many-to-one alias → entity (case-sensitive, CJK kept whole)</li>
             <li><code>concept_node_entities</code> · many-to-many junction binding L3 events to L5 entities</li>
             <li>three-tier dedup at extraction time: alias match → embedding 0.65 / 0.85 thresholds → uncertain branch where the persona naturally asks the user</li>
             <li>at retrieve time: alias hit pulls every linked ConceptNode into the candidate pool with an <code>entity_anchor</code> rerank bonus</li>
+            <li><code>description</code> · slow_tick auto-synthesizes when <code>linked_events_count ≥ 3</code> · owner can <code>PATCH /api/admin/memory/entities/{id}</code> to override (sets <code>owner_override=true</code>) · renders into the system prompt as <code># About {canonical_name}</code> on alias hits</li>
           </ul>
         </div>
         <div class="m-kind">
           <div class="m-kind-lbl">write path</div>
-          <div>extraction inside consolidate · only path that creates new entities</div>
+          <div>extraction inside consolidate creates entities · slow_tick G phase or admin PATCH writes <code>description</code> via <code>update_entity_description(...)</code></div>
           <div class="m-kind-lbl" style="margin-top:6px;">read path</div>
-          <div>every turn's <code>find_query_entities()</code> alias scan · <code># Entity disambiguation pending</code> hint when uncertain</div>
+          <div>every turn's <code>find_query_entities()</code> alias scan · <code># About {canonical_name}</code> rendered when description is non-empty · <code># Entity disambiguation pending</code> hint when uncertain</div>
         </div>
       </div>
 
@@ -697,7 +698,7 @@
     <div class="panel-body">
       <div class="endpoint-grid">
         <div class="ep"><span class="ep-method m-get">GET</span><span class="ep-path">/api/state</span><span class="ep-desc">daemon + channel readiness + memory counts</span></div>
-        <div class="ep"><span class="ep-method m-get">GET</span><span class="ep-path">/api/admin/persona</span><span class="ep-desc">5 core blocks</span></div>
+        <div class="ep"><span class="ep-method m-get">GET</span><span class="ep-path">/api/admin/persona</span><span class="ep-desc">3 core blocks (persona / user / style)</span></div>
         <div class="ep"><span class="ep-method m-post">POST</span><span class="ep-path">/api/admin/persona</span><span class="ep-desc">partial update · atomic TOML write</span></div>
         <div class="ep"><span class="ep-method m-post">POST</span><span class="ep-path">/api/admin/persona/onboarding</span><span class="ep-desc">first-run bootstrap</span></div>
         <div class="ep"><span class="ep-method m-post">POST</span><span class="ep-path">/api/admin/persona/voice-toggle</span><span class="ep-desc">flip persona.voice_enabled</span></div>
