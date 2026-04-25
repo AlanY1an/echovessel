@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     # field so channels can forward pre-generated voice artifacts
     # through the send path without each channel having to re-run
     # generate_voice itself.
-    from echovessel.voice.models import VoiceResult
+    from echovessel.voice.types import VoiceResult
 
 # ---------------------------------------------------------------------------
 # Envelope dataclasses

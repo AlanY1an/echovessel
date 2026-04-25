@@ -61,9 +61,9 @@ from echovessel.voice.factory import (
     build_tts_provider,
     build_voice_service,
 )
-from echovessel.voice.models import VoiceResult
 from echovessel.voice.service import VoiceService
 from echovessel.voice.stub import StubVoiceProvider
+from echovessel.voice.types import VoiceResult
 
 __all__ = [
     # Types

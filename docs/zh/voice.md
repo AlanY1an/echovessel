@@ -18,7 +18,7 @@
 
 **Voice profile。** `(provider_name, voice_id)` 的二元组,存在 `config.toml` 的 persona section 里。Runtime 启动时读取,把 `voice_id` 当作 `default_voice_id` 传给 `VoiceService`,从此 daemon 其他地方都以这副音色合成,而完全不用关心它是哪个 provider 铸的。
 
-**`VoiceResult`。** `generate_voice()` 返回的 frozen dataclass,定义在 `src/echovessel/voice/models.py`。五个字段全部承载语义:`url`(Web channel 提供音频的相对路径)、`duration_seconds`(进度条用的尽力估计)、`provider`(审计日志用的不透明标签)、`cost_usd`(写死表估出的每次调用 USD 估算,命中缓存时为 `0.0`)、`cached`(结果是否跳过了底层 provider)。
+**`VoiceResult`。** `generate_voice()` 返回的 frozen dataclass,定义在 `src/echovessel/voice/types.py`。五个字段全部承载语义:`url`(Web channel 提供音频的相对路径)、`duration_seconds`(进度条用的尽力估计)、`provider`(审计日志用的不透明标签)、`cost_usd`(写死表估出的每次调用 USD 估算,命中缓存时为 `0.0`)、`cached`(结果是否跳过了底层 provider)。
 
 **Voice cache。** 磁盘缓存位于 `~/.echovessel/voice_cache/<message_id>.mp3`,`generate_voice()` 第一次运行时才懒建立。它让该方法按 message id 幂等:第二次调同一个 message id 直接返回缓存文件、把 `cached` 标为 `True`、`cost_usd` 报 `0.0`,完全不碰 provider。它与声音克隆用的 fingerprint 缓存(`~/.echovessel/voice-cache.json`)是不同的文件位置,清其中一个永远不影响另一个。
 

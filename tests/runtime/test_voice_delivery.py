@@ -26,7 +26,7 @@ from echovessel.runtime import (
     load_config_from_str,
 )
 from echovessel.runtime.llm import StubProvider
-from echovessel.voice.models import VoiceResult
+from echovessel.voice.types import VoiceResult
 
 
 def _toml(data_dir: str, *, voice_enabled: bool = False) -> str:
