@@ -265,15 +265,15 @@ async def test_clone_voice_calls_sdk_correctly(fake_fish_sdk):
     p = FishAudioProvider(api_key="fake")
     # Prime client and set up the voices mock
     p._get_client()
-    p._client.voices.create = MagicMock(  # type: ignore[attr-defined]
+    p._client.create_model = MagicMock(  # type: ignore[attr-defined]
         return_value=SimpleNamespace(id="fishmodel_new123")
     )
 
     voice_id = await p.clone_voice(b"wav data", name="alice")
 
     assert voice_id == "fishmodel_new123"
-    p._client.voices.create.assert_called_once()  # type: ignore[attr-defined]
-    call_kwargs = p._client.voices.create.call_args.kwargs  # type: ignore[attr-defined]
+    p._client.create_model.assert_called_once()  # type: ignore[attr-defined]
+    call_kwargs = p._client.create_model.call_args.kwargs  # type: ignore[attr-defined]
     assert call_kwargs["title"] == "alice"
     assert call_kwargs["voices"] == [b"wav data"]
 
@@ -281,7 +281,7 @@ async def test_clone_voice_calls_sdk_correctly(fake_fish_sdk):
 async def test_clone_voice_from_path(fake_fish_sdk, tmp_path: Path):
     p = FishAudioProvider(api_key="fake")
     p._get_client()
-    p._client.voices.create = MagicMock(  # type: ignore[attr-defined]
+    p._client.create_model = MagicMock(  # type: ignore[attr-defined]
         return_value=SimpleNamespace(id="fishmodel_path")
     )
 
@@ -290,7 +290,7 @@ async def test_clone_voice_from_path(fake_fish_sdk, tmp_path: Path):
     voice_id = await p.clone_voice(sample_path, name="me")
 
     assert voice_id == "fishmodel_path"
-    call_kwargs = p._client.voices.create.call_args.kwargs  # type: ignore[attr-defined]
+    call_kwargs = p._client.create_model.call_args.kwargs  # type: ignore[attr-defined]
     assert call_kwargs["voices"] == [b"file content"]
 
 
@@ -307,7 +307,7 @@ async def test_clone_voice_fallback_attribute_name(fake_fish_sdk):
     p = FishAudioProvider(api_key="fake")
     p._get_client()
     fake_voice = SimpleNamespace(_id="fallback_id")
-    p._client.voices.create = MagicMock(return_value=fake_voice)  # type: ignore[attr-defined]
+    p._client.create_model = MagicMock(return_value=fake_voice)  # type: ignore[attr-defined]
 
     voice_id = await p.clone_voice(b"data", name="x")
     assert voice_id == "fallback_id"
@@ -317,7 +317,7 @@ async def test_clone_voice_missing_id_raises(fake_fish_sdk):
     p = FishAudioProvider(api_key="fake")
     p._get_client()
     # Object with neither `id` nor `_id`
-    p._client.voices.create = MagicMock(return_value=object())  # type: ignore[attr-defined]
+    p._client.create_model = MagicMock(return_value=object())  # type: ignore[attr-defined]
 
     with pytest.raises(VoicePermanentError, match="no id"):
         await p.clone_voice(b"data", name="x")
@@ -329,7 +329,7 @@ async def test_clone_voice_sdk_exception_classified(fake_fish_sdk):
 
     p = FishAudioProvider(api_key="fake")
     p._get_client()
-    p._client.voices.create = MagicMock(side_effect=FakeForbiddenError("nope"))  # type: ignore[attr-defined]
+    p._client.create_model = MagicMock(side_effect=FakeForbiddenError("nope"))  # type: ignore[attr-defined]
 
     with pytest.raises(VoicePermanentError, match="auth error 403"):
         await p.clone_voice(b"data", name="x")
@@ -347,7 +347,7 @@ async def test_list_voices_returns_voice_meta(fake_fish_sdk):
         SimpleNamespace(id="v1", title="Alice", language="en"),
         SimpleNamespace(id="v2", title="Bob", language="zh"),
     ]
-    p._client.voices.list = MagicMock(return_value=iter(fake_voices))  # type: ignore[attr-defined]
+    p._client.list_models = MagicMock(return_value=iter(fake_voices))  # type: ignore[attr-defined]
 
     voices = await p.list_voices()
     assert len(voices) == 2
@@ -361,7 +361,7 @@ async def test_list_voices_returns_voice_meta(fake_fish_sdk):
 async def test_list_voices_handles_missing_fields(fake_fish_sdk):
     p = FishAudioProvider(api_key="fake")
     p._get_client()
-    p._client.voices.list = MagicMock(  # type: ignore[attr-defined]
+    p._client.list_models = MagicMock(  # type: ignore[attr-defined]
         return_value=iter([SimpleNamespace(id="v1")])
     )
 
@@ -377,7 +377,7 @@ async def test_list_voices_sdk_error_classified(fake_fish_sdk):
 
     p = FishAudioProvider(api_key="fake")
     p._get_client()
-    p._client.voices.list = MagicMock(side_effect=FakeServerError("boom"))  # type: ignore[attr-defined]
+    p._client.list_models = MagicMock(side_effect=FakeServerError("boom"))  # type: ignore[attr-defined]
 
     with pytest.raises(VoiceTransientError):
         await p.list_voices()
@@ -391,7 +391,7 @@ async def test_list_voices_sdk_error_classified(fake_fish_sdk):
 async def test_health_check_success(fake_fish_sdk):
     p = FishAudioProvider(api_key="fake")
     p._get_client()
-    p._client.voices.list = MagicMock(return_value=iter([]))  # type: ignore[attr-defined]
+    p._client.list_models = MagicMock(return_value=iter([]))  # type: ignore[attr-defined]
 
     assert await p.health_check() is True
 
@@ -399,7 +399,7 @@ async def test_health_check_success(fake_fish_sdk):
 async def test_health_check_failure(fake_fish_sdk):
     p = FishAudioProvider(api_key="fake")
     p._get_client()
-    p._client.voices.list = MagicMock(  # type: ignore[attr-defined]
+    p._client.list_models = MagicMock(  # type: ignore[attr-defined]
         side_effect=Exception("unreachable")
     )
 
