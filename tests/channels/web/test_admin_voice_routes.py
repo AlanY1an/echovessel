@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 
 from echovessel.channels.web.app import build_web_app
 from echovessel.channels.web.channel import WebChannel
-from echovessel.channels.web.routes.admin import _VOICE_SAMPLE_MIN_COUNT
+from echovessel.channels.web.routes.admin.helpers import _VOICE_SAMPLE_MIN_COUNT
 from echovessel.channels.web.sse import SSEBroadcaster
 from echovessel.runtime import Runtime, build_zero_embedder, load_config_from_str
 from echovessel.runtime.llm import StubProvider
@@ -158,10 +158,10 @@ def test_post_voice_sample_rejects_oversize_before_reading_body(
     """
     from starlette.datastructures import UploadFile as StarletteUploadFile
 
-    from echovessel.channels.web.routes import admin as admin_module
+    from echovessel.channels.web.routes.admin import voice as voice_module
 
     # Dial the cap down so we don't need a 50 MB body in the test.
-    monkeypatch.setattr(admin_module, "_VOICE_SAMPLE_MAX_BYTES", 10)
+    monkeypatch.setattr(voice_module, "_VOICE_SAMPLE_MAX_BYTES", 10)
 
     read_calls: list[int] = []
     original_read = StarletteUploadFile.read
