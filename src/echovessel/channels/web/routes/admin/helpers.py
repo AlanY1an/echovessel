@@ -54,6 +54,19 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Runtime accessors
+# ---------------------------------------------------------------------------
+
+
+def _persona_id(runtime: Any) -> str:
+    return runtime.ctx.persona.id
+
+
+def _open_db(runtime: Any) -> DbSession:
+    return DbSession(runtime.ctx.engine)
+
+
+# ---------------------------------------------------------------------------
 # Block-label mappings
 # ---------------------------------------------------------------------------
 
