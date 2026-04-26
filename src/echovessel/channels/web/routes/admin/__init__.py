@@ -78,6 +78,8 @@ from echovessel.channels.web.routes.admin.helpers import (
     _drop_existing_avatars,
     _format_events_thoughts_for_prompt,
     _load_core_blocks_dict,
+    _open_db,
+    _persona_id,
     _serialize_concept_node,
     _serialize_persona_facts,
     _try_persist_display_name,
@@ -199,18 +201,12 @@ def build_admin_router(
     # user and this matches every other runtime callsite.
     user_id = "self"
 
-    def _persona_id() -> str:
-        return runtime.ctx.persona.id
-
-    def _open_db() -> DbSession:
-        return DbSession(runtime.ctx.engine)
-
     # ---- GET /api/state -------------------------------------------------
 
     @router.get("/api/state")
     async def get_state() -> dict[str, Any]:
-        persona_id = _persona_id()
-        with _open_db() as db:
+        persona_id = _persona_id(runtime)
+        with _open_db(runtime) as db:
             core_block_count = _count_core_blocks_for_persona(db, persona_id)
             message_count = _count_rows(db, RecallMessage)
             event_count = int(
@@ -252,8 +248,8 @@ def build_admin_router(
 
     @router.get("/api/admin/persona")
     async def get_persona() -> dict[str, Any]:
-        persona_id = _persona_id()
-        with _open_db() as db:
+        persona_id = _persona_id(runtime)
+        with _open_db(runtime) as db:
             blocks = _load_core_blocks_dict(db, persona_id=persona_id, user_id=user_id)
             persona_row = db.get(Persona, persona_id)
             facts = (
@@ -275,9 +271,9 @@ def build_admin_router(
 
     @router.post("/api/admin/persona/onboarding")
     async def post_onboarding(req: OnboardingRequest) -> dict[str, Any]:
-        persona_id = _persona_id()
+        persona_id = _persona_id(runtime)
 
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             existing_count = _count_core_blocks_for_persona(db, persona_id)
             if existing_count > 0:
                 raise HTTPException(
@@ -338,9 +334,9 @@ def build_admin_router(
     async def post_reset() -> dict[str, Any]:
         from sqlalchemy import delete as sa_delete
 
-        persona_id = _persona_id()
+        persona_id = _persona_id(runtime)
 
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             # Delete child tables first to avoid FK violations. Order
             # mirrors the creation graph in reverse: appends + fillings
             # before concept_nodes, messages before sessions, everything
@@ -488,9 +484,9 @@ def build_admin_router(
 
     @router.post("/api/admin/persona")
     async def post_persona(req: PersonaUpdateRequest) -> dict[str, Any]:
-        persona_id = _persona_id()
+        persona_id = _persona_id(runtime)
 
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             pairs: list[tuple[BlockLabel, str]] = []
             for field, label in _UPDATE_LABELS:
                 value = getattr(req, field, None)
@@ -527,9 +523,9 @@ def build_admin_router(
 
     @router.post("/api/admin/persona/style")
     async def post_persona_style(req: StyleUpdateRequest) -> dict[str, Any]:
-        persona_id = _persona_id()
+        persona_id = _persona_id(runtime)
 
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             existing = db.exec(
                 select(CoreBlock).where(
                     CoreBlock.persona_id == persona_id,
@@ -588,7 +584,7 @@ def build_admin_router(
                 detail=f"unknown IANA timezone {req.timezone!r}",
             ) from e
 
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             user_row = db.get(User, user_id)
             if user_row is None:
                 user_row = User(id=user_id, display_name=user_id)
@@ -664,8 +660,8 @@ def build_admin_router(
                 detail=str(e),
             ) from e
 
-        persona_id = _persona_id()
-        with _open_db() as db:
+        persona_id = _persona_id(runtime)
+        with _open_db(runtime) as db:
             persona_row = db.get(Persona, persona_id)
             if persona_row is None:
                 raise HTTPException(
@@ -703,12 +699,12 @@ def build_admin_router(
     async def post_extract_from_input(
         req: PersonaExtractRequest,
     ) -> dict[str, Any]:
-        persona_id = _persona_id()
+        persona_id = _persona_id(runtime)
 
         # Guard against re-onboarding — this endpoint is scoped to
         # first-run, matching the existing bootstrap-from-material
         # guard.
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             existing_count = _count_core_blocks_for_persona(db, persona_id)
             if existing_count > 0:
                 raise HTTPException(
@@ -823,7 +819,7 @@ def build_admin_router(
                 ),
             )
 
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             events_rows = list(
                 db.exec(
                     select(ConceptNode)
@@ -966,12 +962,12 @@ def build_admin_router(
                 ),
             )
 
-        persona_id = _persona_id()
+        persona_id = _persona_id(runtime)
 
         # Guard against re-onboarding — same rule as POST
         # /api/admin/persona/onboarding so the two routes can't race
         # past each other.
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             existing_count = _count_core_blocks_for_persona(db, persona_id)
             if existing_count > 0:
                 raise HTTPException(
@@ -1060,7 +1056,7 @@ def build_admin_router(
         # pre-existing — onboarding is by definition the first run so
         # there SHOULD be nothing pre-existing, but the filter makes
         # the path safe under retries.
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             events_rows = list(
                 db.exec(
                     select(ConceptNode)
@@ -1152,7 +1148,7 @@ def build_admin_router(
             description="Window: today | 7d | 30d",
         ),
     ) -> dict[str, Any]:
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             return runtime.cost_summarize(db, range)
 
     # ---- GET /api/admin/cost/recent ------------------------------------
@@ -1161,7 +1157,7 @@ def build_admin_router(
     async def get_cost_recent(
         limit: int = Query(default=50, ge=1, le=200),
     ) -> dict[str, Any]:
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             rows = runtime.cost_list_recent(db, limit=limit)
         return {
             "limit": limit,
@@ -1208,10 +1204,10 @@ def build_admin_router(
         offset: int,
         subject: str | None,
     ) -> dict[str, Any]:
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             rows, total = list_concept_nodes(
                 db,
-                persona_id=_persona_id(),
+                persona_id=_persona_id(runtime),
                 user_id=user_id,
                 node_type=node_type,
                 limit=limit,
@@ -1246,9 +1242,9 @@ def build_admin_router(
         since: Annotated[datetime | None, Query()] = None,
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ) -> dict[str, Any]:
-        persona_id = _persona_id()
+        persona_id = _persona_id(runtime)
 
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             items: list[dict[str, Any]] = []
 
             # --- L3 / L4 nodes (events + thoughts/intentions/expectations) ---
@@ -1461,10 +1457,10 @@ def build_admin_router(
         else:
             node_types = None  # both
 
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             hits, total = search_concept_nodes(
                 db,
-                persona_id=_persona_id(),
+                persona_id=_persona_id(runtime),
                 user_id=user_id,
                 query_text=q,
                 node_types=node_types,
@@ -1521,7 +1517,7 @@ def build_admin_router(
         architecture §4.12.2 case B.
         """
 
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             node = db.get(ConceptNode, req.node_id)
             if node is None or node.deleted_at is not None:
                 raise HTTPException(
@@ -1553,7 +1549,7 @@ def build_admin_router(
         ),
     ) -> dict[str, Any]:
         choice_enum = DeletionChoice(choice)
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             node = _get_concept_node(db, node_id, kind=NodeType.EVENT)
             if node is None:
                 raise HTTPException(
@@ -1587,7 +1583,7 @@ def build_admin_router(
         thought-of-thought graph (v1.x)."""
 
         choice_enum = DeletionChoice(choice)
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             node = _get_concept_node(db, node_id, kind=NodeType.THOUGHT)
             if node is None:
                 raise HTTPException(
@@ -1615,7 +1611,7 @@ def build_admin_router(
         `source_deleted` flag flipped — extraction is never re-run.
         """
 
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             msg = db.get(RecallMessage, message_id)
             if msg is None or msg.deleted_at is not None:
                 raise HTTPException(
@@ -1634,7 +1630,7 @@ def build_admin_router(
         itself is left intact (architecture §4.12 does not require
         dropping the session envelope — only its contents)."""
 
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             sess = db.get(RecallSession, session_id)
             if sess is None:
                 raise HTTPException(
@@ -1689,7 +1685,7 @@ def build_admin_router(
                 detail=f"unknown core block label: {label!r}",
             ) from e
 
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             append = db.get(CoreBlockAppend, append_id)
             if append is None:
                 raise HTTPException(
@@ -1746,7 +1742,7 @@ def build_admin_router(
         the cascade path). Returns 404 when the node is missing,
         soft-deleted, or not a thought.
         """
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             thought = db.get(ConceptNode, node_id)
             if (
                 thought is None
@@ -1789,7 +1785,7 @@ def build_admin_router(
         when no thought cites the event. 404 when the node is missing,
         soft-deleted, or not an event.
         """
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             event = db.get(ConceptNode, node_id)
             if event is None or event.deleted_at is not None or event.type != NodeType.EVENT:
                 raise HTTPException(
@@ -2323,7 +2319,7 @@ def build_admin_router(
     async def list_failed_sessions() -> dict[str, Any]:
         from echovessel.memory.models import Session as _Session
 
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             stmt = (
                 select(_Session)
                 .where(
@@ -2426,8 +2422,8 @@ def build_admin_router(
     async def list_turns(
         limit: int = Query(default=20, ge=1, le=100),
     ) -> dict[str, Any]:
-        persona_id = _persona_id()
-        with _open_db() as db:
+        persona_id = _persona_id(runtime)
+        with _open_db(runtime) as db:
             rows = db.execute(
                 text(
                     "SELECT turn_id, persona_id, user_id, channel_id, "
@@ -2470,7 +2466,7 @@ def build_admin_router(
 
     @router.get("/api/admin/turns/{turn_id}")
     async def get_turn_trace(turn_id: str) -> dict[str, Any]:
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             row = db.execute(
                 text("SELECT * FROM turn_traces WHERE turn_id = :tid"),
                 {"tid": turn_id},
@@ -2577,8 +2573,8 @@ def build_admin_router(
 
     @router.get("/api/admin/memory/entities")
     async def list_entities() -> dict[str, Any]:
-        persona_id = _persona_id()
-        with _open_db() as db:
+        persona_id = _persona_id(runtime)
+        with _open_db(runtime) as db:
             rows = list(
                 db.exec(
                     select(Entity)
@@ -2602,8 +2598,8 @@ def build_admin_router(
 
     @router.get("/api/admin/memory/entities/{entity_id}")
     async def get_entity(entity_id: int) -> dict[str, Any]:
-        persona_id = _persona_id()
-        with _open_db() as db:
+        persona_id = _persona_id(runtime)
+        with _open_db(runtime) as db:
             ent = db.get(Entity, entity_id)
             if ent is None or ent.deleted_at is not None or ent.persona_id != persona_id:
                 raise HTTPException(status_code=404, detail="entity not found")
@@ -2613,8 +2609,8 @@ def build_admin_router(
     async def patch_entity_description(
         entity_id: int, req: EntityDescriptionPatchRequest
     ) -> dict[str, Any]:
-        persona_id = _persona_id()
-        with _open_db() as db:
+        persona_id = _persona_id(runtime)
+        with _open_db(runtime) as db:
             ent = db.get(Entity, entity_id)
             if ent is None or ent.deleted_at is not None or ent.persona_id != persona_id:
                 raise HTTPException(status_code=404, detail="entity not found")
@@ -2637,8 +2633,8 @@ def build_admin_router(
 
     @router.post("/api/admin/memory/entities")
     async def create_entity_manual(req: EntityCreateRequest) -> dict[str, Any]:
-        persona_id = _persona_id()
-        with _open_db() as db:
+        persona_id = _persona_id(runtime)
+        with _open_db(runtime) as db:
             # Owner manually creating an entity: definitionally
             # confirmed (no embedding fight, no ambiguity to resolve).
             # ``owner_override`` flips when a description is supplied
@@ -2669,8 +2665,8 @@ def build_admin_router(
 
     @router.post("/api/admin/memory/entities/{entity_id}/merge")
     async def merge_entities(entity_id: int, req: EntityMergeRequest) -> dict[str, Any]:
-        persona_id = _persona_id()
-        with _open_db() as db:
+        persona_id = _persona_id(runtime)
+        with _open_db(runtime) as db:
             ent = db.get(Entity, entity_id)
             target = db.get(Entity, req.target_id)
             if (
@@ -2700,8 +2696,8 @@ def build_admin_router(
     async def confirm_entities_separate(
         entity_id: int, req: EntitySeparateRequest
     ) -> dict[str, Any]:
-        persona_id = _persona_id()
-        with _open_db() as db:
+        persona_id = _persona_id(runtime)
+        with _open_db(runtime) as db:
             ent = db.get(Entity, entity_id)
             other = db.get(Entity, req.other_id)
             if (
@@ -2741,7 +2737,7 @@ def build_admin_router(
 
     @router.get("/api/admin/sessions/{session_id}/consolidate-trace")
     async def get_consolidate_trace(session_id: str) -> dict[str, Any]:
-        with _open_db() as db:
+        with _open_db(runtime) as db:
             row = db.execute(
                 text("SELECT * FROM session_traces WHERE session_id = :sid"),
                 {"sid": session_id},
