@@ -11,14 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Daemon control plane**: a dedicated HTTP listener on an independent loopback TCP port for operator-level lifecycle operations (`GET /health`, `POST /shutdown`, `POST /reload`). Orthogonal to the Web channel — separate uvicorn instance, separate FastAPI app, hardcoded `127.0.0.1` bind host, Host-header middleware that rejects off-host requests with 403. `echovessel stop` / `reload` / `status` now speak HTTP first and fall back to `SIGTERM` / `SIGHUP` only when the plane is unreachable. Pidfile upgraded to JSON v2 with `control_port` so the CLI knows where to POST; v1 integer pidfiles still read correctly and cause the signal fallback to trigger transparently. See `docs/en/runtime.md` (Control plane) and `develop-docs/initiatives/_active/2026-04-daemon-control/` for the full initiative.
 
+### Changed
+
+- **Modular sub-package layout** across `memory/`, `runtime/`, `proactive/`, and `channels/web/routes/admin/`. Memory: `retrieve/` (core / scoring / search) + `consolidate/` (core / phase_a / phase_bce / tracer). Runtime: `turn/` (coordinator / prompt_assembly / dispatcher / tracer) + `loops/` (consolidate_worker / idle_scanner) + `wiring/` (memory / importer / prompts / memory_observer / persona_extraction). Proactive: `core/` (protocols + value types + config + errors) + `engines/` (policy + generator) + `execution/` (scheduler + queue + delivery + audit). Admin: 49 routes split across `core.py` / `config.py` / `voice.py` / `diagnostics.py` / `persona.py` / `memory.py` driven by `register_*_routes(router, *, …)` functions; `__init__.py` is now a 79-LOC composition entry (was 2774 LOC). Public imports (`from echovessel.memory import retrieve, consolidate_session`, `build_admin_router`, etc.) are unchanged.
+- **import-linter contracts grew from 1 to 4** to enforce the new layout. New rules: `proactive` must not import `runtime` or `prompts`; `proactive.execution → engines → core` sub-package layering; `runtime.wiring` must not import `runtime.turn` or `runtime.loops` (composition root must not couple to per-turn or background-loop code).
+- `voice/models.py` renamed to `voice/types.py` — contents are dataclass value objects (e.g. `VoiceMeta`), not SQLModel ORM, and the new name avoids the false parallel with `memory/models.py`.
+- `Runtime.reload()` returns a `list[str]` of reloaded component names instead of `None`. HTTP `/reload` renders this list in its JSON response so the CLI can print `reloaded (via control plane): llm, consolidate.trivial_message_count`. Reload is now serialized via an `asyncio.Lock` so HTTP + `SIGHUP` invocations cannot race on `ctx.config` mid-swap.
+- `docs/{en,zh}/configuration.md`'s reload matrix is now field-by-field (13 hot-reloadable fields tabulated) instead of section-level. Matches `HOT_RELOADABLE_CONFIG_PATHS` literal-for-literal; backed by `tests/runtime/test_reload_matrix.py` so drift flips CI red.
+
 ### Fixed
 
 - `consolidate.{trivial_message_count, trivial_token_count, reflection_hard_gate_24h}` were listed in `HOT_RELOADABLE_CONFIG_PATHS` — the admin `PATCH /api/admin/config` accepted them — but `Runtime.reload()` only updated `ctx.config`, not the live `ConsolidateWorker` (which was constructed once at boot with the old values). Tuning these thresholds through the admin UI now takes effect without a restart.
+- `tests/eval/conftest.py::pytest_collection_modifyitems` filters items to `tests/eval/` before applying the corpus-missing skip marker. Previously the marker landed on every collected test, so running `pytest` from the repo root silently skipped 1432 tests.
+- `tests/voice/test_fishaudio.py` mocks aligned to the current `fish_audio_sdk` shape. Nine tests previously stubbed the pre-2024 `client.voices.{create, list}` API; production migrated to flat `client.create_model` / `client.list_models` and the test fixtures now match.
+- `consolidate`'s events-loop atomicity is enforced and regression-tested. `backend.insert_vector(..., conn=)` joins the caller's `DbSession` transaction, so a mid-loop vector write failure rolls back all event rows in the same session and leaves `extracted_events=False` for retry. The corresponding test was previously xfail; it now actively guards the contract.
 
-### Changed
+### Removed
 
-- `Runtime.reload()` returns a `list[str]` of reloaded component names instead of `None`. HTTP `/reload` renders this list in its JSON response so the CLI can print `reloaded (via control plane): llm, consolidate.trivial_message_count`. Reload is now serialized via an `asyncio.Lock` so HTTP + `SIGHUP` invocations cannot race on `ctx.config` mid-swap.
-- `docs/{en,zh}/configuration.md`'s reload matrix is now field-by-field (13 hot-reloadable fields tabulated) instead of section-level. Matches `HOT_RELOADABLE_CONFIG_PATHS` literal-for-literal; backed by `tests/runtime/test_reload_matrix.py` so drift flips CI red.
+- `tests/perf/test_llm_latency.py` (and the otherwise-empty `tests/perf/` directory). The benchmark required `OPENAI_API_KEY` to run, was never wired into CI, and had no companion benchmarks.
 
 ## [0.0.1] - 2026-04-15
 
