@@ -86,6 +86,7 @@ class _PipelineState:
     subscribers: list[asyncio.Queue[PipelineEvent | None]] = field(
         default_factory=list
     )
+    history: list[PipelineEvent] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.now)
     task: asyncio.Task | None = None
     progress: ProgressSnapshot | None = None
@@ -304,6 +305,13 @@ class ImporterFacade:
             raise KeyError(f"unknown pipeline_id: {pipeline_id}")
 
         queue: asyncio.Queue[PipelineEvent | None] = asyncio.Queue()
+        # Replay events that were emitted before this subscriber attached.
+        # Late subscribers (e.g. SSE clients reconnecting mid-pipeline,
+        # or fast pipelines that finish before their consumer attaches)
+        # would otherwise see an empty stream — see _emit for the matching
+        # write into state.history.
+        for past in state.history:
+            queue.put_nowait(past)
         state.subscribers.append(queue)
         return self._iter_queue(queue, state)
 
@@ -371,6 +379,7 @@ class ImporterFacade:
         state = self._pipelines.get(pipeline_id)
         if state is None:
             return
+        state.history.append(event)
         for q in state.subscribers:
             q.put_nowait(event)
 
