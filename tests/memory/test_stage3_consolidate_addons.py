@@ -23,7 +23,6 @@ from __future__ import annotations
 import json
 from datetime import date
 
-import pytest
 from sqlalchemy import func
 from sqlmodel import Session as DbSession
 from sqlmodel import select
@@ -190,26 +189,19 @@ class _ExplodingBackend(SQLiteBackend):
         self._fail_after = fail_after
         self.calls = 0
 
-    def insert_vector(self, concept_node_id: int, embedding) -> None:  # type: ignore[override]
+    def insert_vector(  # type: ignore[override]
+        self,
+        concept_node_id: int,
+        embedding,
+        *,
+        conn=None,
+    ) -> None:
         self.calls += 1
         if self.calls > self._fail_after:
             raise RuntimeError("simulated vector store outage")
-        super().insert_vector(concept_node_id, embedding)
+        super().insert_vector(concept_node_id, embedding, conn=conn)
 
 
-@pytest.mark.xfail(
-    reason=(
-        "consolidate is not atomic across the events loop · backend."
-        "insert_vector opens its own engine.begin() connection which "
-        "auto-commits, so a mid-loop failure can leave one concept_nodes "
-        "row plus one concept_nodes_vec row visible while the session "
-        "still has extracted_events=False. A retry would then duplicate "
-        "that event. Fix is a separate PR — design choice between "
-        "(a) wrapping vector writes in the SQLAlchemy transaction or "
-        "(b) writing all events in one commit, then vectors after."
-    ),
-    strict=True,
-)
 async def test_consolidate_atomic_when_vector_insert_raises_mid_event() -> None:
     """Two extracted events; ``insert_vector`` raises on the second.
     The whole session-level commit must NOT happen, and a fresh DB
