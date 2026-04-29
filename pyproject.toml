@@ -130,12 +130,12 @@ artifacts = [
     # know which keys to set (OPENAI_API_KEY / FISH_AUDIO_KEY / …).
     "src/echovessel/resources/env.sample",
     # Vendored LiteLLM model-price JSON + upstream LICENSE for attribution.
-    # Loaded at runtime via importlib.resources by runtime/llm/prices.py;
+    # Loaded at runtime via importlib.resources by core/llm/prices.py;
     # without this entry the JSON would be dropped from the wheel because
     # hatchling's default rule keeps only ``.py`` files in the package
     # tree.
-    "src/echovessel/runtime/llm/data/litellm_prices.json",
-    "src/echovessel/runtime/llm/data/LITELLM-LICENSE",
+    "src/echovessel/core/llm/data/litellm_prices.json",
+    "src/echovessel/core/llm/data/LITELLM-LICENSE",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -201,11 +201,11 @@ include = [
     # should land here too.
     "src/echovessel/resources/*.toml.sample",
     # Vendored LiteLLM pricing data + LICENSE — read by
-    # runtime/llm/prices.py via importlib.resources. Must ride along
+    # core/llm/prices.py via importlib.resources. Must ride along
     # in the sdist so a downstream `uv build` from the extracted
     # sdist produces a wheel that still has the JSON.
-    "src/echovessel/runtime/llm/data/litellm_prices.json",
-    "src/echovessel/runtime/llm/data/LITELLM-LICENSE",
+    "src/echovessel/core/llm/data/litellm_prices.json",
+    "src/echovessel/core/llm/data/LITELLM-LICENSE",
     # Include the hatch build hook + frontend build script so contributors
     # can rebuild the frontend from an extracted sdist if they have
     # Node.js installed.

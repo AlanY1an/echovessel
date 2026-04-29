@@ -1,4 +1,4 @@
-from echovessel.runtime.llm.catalog import PRESETS, PresetEntry, presets_for
+from echovessel.core.llm.catalog import PRESETS, PresetEntry, presets_for
 
 
 def test_presets_have_expected_anthropic_entries() -> None:

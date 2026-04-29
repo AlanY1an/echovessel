@@ -35,7 +35,7 @@ class ModelPrice:
 
 def _load_data() -> dict[str, dict[str, Any]]:
     raw_text = (
-        resources.files("echovessel.runtime.llm.data").joinpath("litellm_prices.json").read_text()
+        resources.files("echovessel.core.llm.data").joinpath("litellm_prices.json").read_text()
     )
     raw: dict[str, dict[str, Any]] = json.loads(raw_text)
     raw.pop("sample_spec", None)
