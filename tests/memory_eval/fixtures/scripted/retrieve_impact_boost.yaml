@@ -1,0 +1,20 @@
+fixture_id: retrieve_impact_boost
+version: scripted
+generated_at: null
+model: null
+scenario: with two events of equal relevance, the higher-impact event ranks first
+seed:
+  persona_block: 陪伴
+  seed_events:
+    - description: 用户提到工作压力
+      emotional_impact: -2
+    - description: 用户工作压力很大 · 想辞职
+      emotional_impact: -8
+retrieve:
+  query: 工作压力
+  top_k: 2
+invariants:
+  top_k_must_contain_descriptions_all:
+    - 想辞职
+  top_k_for_check: 1
+judge_prompts: []

@@ -1,0 +1,17 @@
+fixture_id: retrieve_cross_channel_no_filter
+version: scripted
+generated_at: null
+model: null
+scenario: event written from web channel must be retrievable when query is run from any channel
+seed:
+  persona_block: 陪伴
+  seed_events:
+    - description: 用户提到下周有期末考
+retrieve:
+  query: 期末考
+  top_k: 3
+invariants:
+  top_k_must_contain_descriptions_all:
+    - 期末考
+  top_k_for_check: 3
+judge_prompts: []
