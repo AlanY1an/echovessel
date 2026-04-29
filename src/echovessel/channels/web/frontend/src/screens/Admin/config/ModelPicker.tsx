@@ -49,6 +49,7 @@ const wrapperStyle = {
 export function ModelPicker({ provider, baseUrl, value, onChange }: Props) {
   const [catalog, setCatalog] = useState<ModelCatalogEntry[]>([])
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [customMode, setCustomMode] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -69,6 +70,12 @@ export function ModelPicker({ provider, baseUrl, value, onChange }: Props) {
   const presetModels = useMemo(() => catalog.map((e) => e.model), [catalog])
   const valueIsPreset = presetModels.includes(value)
 
+  useEffect(() => {
+    if (presetModels.length > 0 && value !== '' && !presetModels.includes(value)) {
+      setCustomMode(true)
+    }
+  }, [presetModels, value])
+
   if (!showPresets) {
     return (
       <div style={wrapperStyle}>
@@ -87,7 +94,9 @@ export function ModelPicker({ provider, baseUrl, value, onChange }: Props) {
     )
   }
 
-  const selectValue = valueIsPreset || value === '' ? value : CUSTOM_SENTINEL
+  const showCustomInput =
+    customMode || (value !== '' && !valueIsPreset && presetModels.length > 0)
+  const selectValue = showCustomInput ? CUSTOM_SENTINEL : valueIsPreset ? value : ''
 
   return (
     <div style={wrapperStyle}>
@@ -96,8 +105,12 @@ export function ModelPicker({ provider, baseUrl, value, onChange }: Props) {
         onChange={(e) => {
           const next = e.target.value
           if (next === CUSTOM_SENTINEL) {
-            onChange('')
+            setCustomMode(true)
+            if (valueIsPreset) {
+              onChange('')
+            }
           } else {
+            setCustomMode(false)
             onChange(next)
           }
         }}
@@ -121,7 +134,7 @@ export function ModelPicker({ provider, baseUrl, value, onChange }: Props) {
         })}
         <option value={CUSTOM_SENTINEL}>Custom…</option>
       </select>
-      {selectValue === CUSTOM_SENTINEL && (
+      {showCustomInput && (
         <input
           type="text"
           value={value}
