@@ -284,3 +284,42 @@ def test_top_k_must_contain_descriptions_all_fails_when_missing():
     violations = check_invariants(fix, res)
     assert len(violations) == 1
     assert "top_k_must_contain_descriptions_all" in violations[0]
+
+
+# ---------------------------------------------------------------------------
+# Field 10 · top_k_must_not_contain_descriptions_any
+# ---------------------------------------------------------------------------
+
+
+def test_top_k_must_not_contain_descriptions_any_passes():
+    res = _result(
+        retrieved=[
+            {"id": 1, "description": "用户喜欢爬山", "relevance": 0.9},
+            {"id": 2, "description": "用户喜欢做饭", "relevance": 0.7},
+        ]
+    )
+    fix = _fixture(
+        {
+            "top_k_must_not_contain_descriptions_any": ["旧事件"],
+            "top_k_for_check": 2,
+        }
+    )
+    assert check_invariants(fix, res) == []
+
+
+def test_top_k_must_not_contain_descriptions_any_fails_when_present():
+    res = _result(
+        retrieved=[
+            {"id": 1, "description": "旧事件 14 天前", "relevance": 0.9},
+            {"id": 2, "description": "用户喜欢做饭", "relevance": 0.7},
+        ]
+    )
+    fix = _fixture(
+        {
+            "top_k_must_not_contain_descriptions_any": ["旧事件"],
+            "top_k_for_check": 2,
+        }
+    )
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "top_k_must_not_contain_descriptions_any" in violations[0]
