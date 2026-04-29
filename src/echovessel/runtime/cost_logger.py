@@ -44,6 +44,7 @@ from sqlmodel import Field, SQLModel, select
 from sqlmodel import Session as DbSession
 
 from echovessel.runtime.llm.base import DEFAULT_ROLE, LLMProvider
+from echovessel.runtime.llm.pricing import estimate_cost
 from echovessel.runtime.llm.usage import Usage
 
 log = logging.getLogger(__name__)
@@ -55,34 +56,17 @@ Feature = Literal["chat", "import", "consolidate", "reflection", "proactive"]
 
 
 # ---------------------------------------------------------------------------
-# Pricing table — per-role rates in USD per 1K tokens
+# Legacy tier → role normalisation
 # ---------------------------------------------------------------------------
 
-# Rough 2026-04 OpenAI rates. Other providers (anthropic, openrouter, …)
-# use the same numbers — until the cost ledger grows a per-provider rate
-# matrix, treating every provider as gpt-4o-class is the honest default
-# (the front-end already labels these as estimates).
-#
-# Legacy tier keys (small / medium / large) are accepted too for back-compat
-# with old ``llm_calls`` rows; see ``_rate_for_role``.
-_ROLE_RATES_USD_PER_1K: dict[str, dict[str, float]] = {
-    "fast": {"in": 0.00015, "out": 0.00060},  # gpt-4o-mini class
-    "main": {"in": 0.0025, "out": 0.010},  # gpt-4o class
-    "judge": {"in": 0.0025, "out": 0.010},  # gpt-4o class
-}
-
 # Read-only alias kept so ledger rows persisted under legacy tier names still
-# resolve to a rate. Writes always use role keys.
+# resolve to a role. Writes always use role keys; per-call cost lookup lives
+# in ``runtime.llm.pricing.estimate_cost``.
 _LEGACY_TIER_TO_ROLE: dict[str, str] = {
     "small": "fast",
     "medium": "judge",
     "large": "main",
 }
-
-# Stub provider has zero billable cost. The wrapper short-circuits the
-# pricing math when it sees this provider name to avoid leaking fake
-# numbers into the ledger.
-_FREE_PROVIDERS: frozenset[str] = frozenset({"stub"})
 
 
 def _count_tokens(text: str) -> int:
@@ -107,25 +91,6 @@ def _count_tokens(text: str) -> int:
         return len(enc.encode(text))
     except Exception:  # noqa: BLE001
         return max(1, len(text) // 4)
-
-
-def _estimate_cost_usd(provider: str, model_role: str, tokens_in: int, tokens_out: int) -> float:
-    """Convert ``(tokens_in, tokens_out, model_role)`` into a USD estimate.
-
-    Accepts both new role keys (``fast`` / ``main`` / ``judge``) and
-    legacy tier keys (``small`` / ``medium`` / ``large``) — legacy rows
-    in old ledgers still resolve to a plausible rate. Unknown roles fall
-    back to the ``fast`` rate; stub provider returns 0.0. Rounded to 6
-    decimal places to keep the ledger column readable.
-    """
-
-    if provider in _FREE_PROVIDERS:
-        return 0.0
-    # Normalise legacy tier names to canonical roles before lookup.
-    role_key = _LEGACY_TIER_TO_ROLE.get(model_role, model_role)
-    rates = _ROLE_RATES_USD_PER_1K.get(role_key, _ROLE_RATES_USD_PER_1K["fast"])
-    cost = (tokens_in / 1000.0) * rates["in"] + (tokens_out / 1000.0) * rates["out"]
-    return round(cost, 6)
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +226,7 @@ class CostRecorder:
         input_text: str,
         output_text: str,
         turn_id: str | None = None,
+        base_url: str | None = None,
         timestamp: datetime | None = None,
         usage: Usage | None = None,  # Prefer SDK-reported usage over _count_tokens fallback
         tier: str | None = None,  # Deprecated alias for model_role; kept one release
@@ -278,7 +244,22 @@ class CostRecorder:
             tokens_in = _count_tokens(input_text)
             tokens_out = _count_tokens(output_text)
             cache_read = cache_create = 0
-        cost_usd = _estimate_cost_usd(provider, model_role, tokens_in, tokens_out)
+        # Normalise legacy tier names so ``pricing.estimate_cost`` only sees
+        # canonical role keys for its fallback path.
+        role_key = _LEGACY_TIER_TO_ROLE.get(model_role, model_role)
+        cost_usd = round(
+            estimate_cost(
+                provider=provider,
+                model=model,
+                model_role=role_key,
+                base_url=base_url,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cache_read=cache_read,
+                cache_creation=cache_create,
+            ),
+            6,
+        )
         ts = timestamp or datetime.now()
         # DB column is still named `tier` (free-text label) — we store the
         # role value there so historical tier-named rows and new role-named
@@ -400,6 +381,7 @@ class CostTrackingProvider:
                 input_text=f"{system}\n{user}",
                 output_text=output,
                 turn_id=turn_id,
+                base_url=getattr(self._inner, "base_url", None),
                 usage=usage,
             )
         except Exception as e:  # noqa: BLE001

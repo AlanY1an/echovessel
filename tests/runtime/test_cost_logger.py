@@ -438,3 +438,59 @@ async def test_feature_context_propagates_through_create_task() -> None:
         rows = list_recent(db, limit=5)
     assert len(rows) == 1
     assert rows[0].feature == "proactive"
+
+
+# ---------------------------------------------------------------------------
+# Per-model pricing (Task 4 migration to runtime.llm.pricing)
+# ---------------------------------------------------------------------------
+
+
+def test_recorder_costs_differ_by_model_for_same_role() -> None:
+    """Two calls with identical role + tokens but different model strings
+    must produce different cost_usd rows after the pricing migration.
+    Uses LiteLLM-confirmed dated model IDs so we hit the JSON path
+    rather than the role fallback."""
+    _engine, recorder = _build_engine_and_recorder()
+    sonnet_usage = Usage(input_tokens=1_000_000, output_tokens=1_000_000)
+    haiku_usage = Usage(input_tokens=1_000_000, output_tokens=1_000_000)
+    sonnet = recorder.record(
+        provider="anthropic",
+        model="claude-3-7-sonnet-20250219",
+        feature="chat",
+        model_role="main",
+        input_text="",
+        output_text="",
+        usage=sonnet_usage,
+    )
+    haiku = recorder.record(
+        provider="anthropic",
+        model="claude-3-haiku-20240307",
+        feature="chat",
+        model_role="fast",
+        input_text="",
+        output_text="",
+        usage=haiku_usage,
+    )
+    assert sonnet is not None
+    assert haiku is not None
+    assert sonnet.cost_usd > haiku.cost_usd
+    # As of the vendored snapshot: Sonnet ~$18 / Haiku ~$1.5 for 1M+1M tokens.
+    assert sonnet.cost_usd > 10.0
+    assert haiku.cost_usd > 1.0
+    assert haiku.cost_usd < sonnet.cost_usd
+
+
+def test_recorder_local_base_url_is_free() -> None:
+    _engine, recorder = _build_engine_and_recorder()
+    row = recorder.record(
+        provider="openai_compat",
+        model="llama-3.3-70b",
+        feature="chat",
+        model_role="main",
+        input_text="x" * 100,
+        output_text="y" * 100,
+        usage=Usage(input_tokens=10_000, output_tokens=10_000),
+        base_url="http://localhost:11434/v1",
+    )
+    assert row is not None
+    assert row.cost_usd == 0.0
