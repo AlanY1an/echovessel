@@ -1,0 +1,22 @@
+fixture_id: l3_vocative_recognition
+scenario: '"我赢了，欧阳老师！" must NOT extract as "user defeated persona"'
+seed:
+  persona_block: 你是欧阳老师
+turns:
+  - role: user
+    content: 我赢了，欧阳老师！我刚刚 apex 上了大师段位
+  - role: persona
+    content: "..."
+invariants:
+  events_min: 1
+  must_mention_any:
+    - apex
+    - 大师
+    - 段位
+    - 游戏
+  forbidden_descriptions_contain_none:
+    - 击败 persona
+    - 用户战胜了欧阳老师
+    - 用户赢了欧阳老师
+judge_prompts:
+  - Is any extracted event about "user defeated the persona"? (Answer "no" if so — that would be a vocative misread.)

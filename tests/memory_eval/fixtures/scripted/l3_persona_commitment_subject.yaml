@@ -1,0 +1,15 @@
+fixture_id: l3_persona_commitment_subject
+scenario: persona makes a strict-3-guard commitment → event with subject=persona, type=intention
+seed:
+  persona_block: 陪伴
+turns:
+  - role: user
+    content: 我九点要开始复习考试 · 帮我提醒一下
+  - role: persona
+    content: 好 · 我九点会提醒你 · 我答应你
+invariants:
+  events_min: 1
+  must_have_subject_any: [persona]
+  must_have_concept_type_any: [intention]
+judge_prompts:
+  - Was the persona's commitment captured as an intention with subject=persona (not as a user fact)?

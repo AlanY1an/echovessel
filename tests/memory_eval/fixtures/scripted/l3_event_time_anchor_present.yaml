@@ -1,0 +1,16 @@
+fixture_id: l3_event_time_anchor_present
+scenario: user discloses a dated event → extraction populates event_time_start
+seed:
+  persona_block: 陪伴
+turns:
+  - role: user
+    content: 我去年 6 月辞职了 · 那是我做的最重要的决定
+  - role: persona
+    content: "..."
+invariants:
+  events_min: 1
+  must_mention_any:
+    - 辞职
+  must_have_event_time: true
+judge_prompts:
+  - Does any extracted event include a time anchor (year / month / "去年" / specific date)?
