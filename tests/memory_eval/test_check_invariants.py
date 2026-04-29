@@ -129,3 +129,47 @@ def test_forbidden_descriptions_contain_none_fails_when_phrase_present():
     violations = check_invariants(fix, res)
     assert len(violations) == 1
     assert "forbidden_descriptions_contain_none" in violations[0]
+
+
+# ---------------------------------------------------------------------------
+# Field 5 · entity_count_eq + entity_count_max
+# ---------------------------------------------------------------------------
+
+
+def _entity(name: str, **overrides) -> dict:
+    base = {
+        "id": 1,
+        "canonical_name": name,
+        "kind": "person",
+        "merge_status": "confirmed",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_entity_count_eq_passes():
+    res = _result(entities=[_entity("Mochi")])
+    fix = _fixture({"entity_count_eq": 1})
+    assert check_invariants(fix, res) == []
+
+
+def test_entity_count_eq_fails_when_count_off():
+    res = _result(entities=[_entity("Mochi"), _entity("Alex", id=2)])
+    fix = _fixture({"entity_count_eq": 1})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "entity_count_eq" in violations[0]
+
+
+def test_entity_count_max_passes_when_under_cap():
+    res = _result(entities=[_entity("Mochi")])
+    fix = _fixture({"entity_count_max": 2})
+    assert check_invariants(fix, res) == []
+
+
+def test_entity_count_max_fails_when_over_cap():
+    res = _result(entities=[_entity("Mochi"), _entity("Alex", id=2)])
+    fix = _fixture({"entity_count_max": 1})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "entity_count_max" in violations[0]

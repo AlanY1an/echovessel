@@ -40,7 +40,7 @@ from echovessel.memory.consolidate import (
     consolidate_session,
 )
 from echovessel.memory.ingest import ingest_message
-from echovessel.memory.models import ConceptNode, ConceptNodeFilling, Session
+from echovessel.memory.models import ConceptNode, ConceptNodeFilling, Entity, Session
 from echovessel.memory.retrieve import retrieve
 from echovessel.memory.sessions import mark_session_closing
 from echovessel.runtime.config import load_config
@@ -292,6 +292,7 @@ class EvalResult:
     mood_block_after: str
     retrieved: list[dict[str, Any]]
     reflection_triggered: bool
+    entities: list[dict[str, Any]] = field(default_factory=list)
 
 
 async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
@@ -448,6 +449,20 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
             {"parent_id": r.parent_id, "child_id": r.child_id, "orphaned": r.orphaned}
             for r in db.exec(select(ConceptNodeFilling))
         ]
+        entities = [
+            {
+                "id": e.id,
+                "canonical_name": e.canonical_name,
+                "kind": getattr(e.kind, "value", e.kind),
+                "merge_status": getattr(e.merge_status, "value", e.merge_status),
+            }
+            for e in db.exec(
+                select(Entity).where(
+                    Entity.persona_id == persona_id,
+                    Entity.deleted_at.is_(None),  # type: ignore[union-attr]
+                )
+            )
+        ]
 
     return EvalResult(
         events=events_from_session if fixture.turns else events,
@@ -457,6 +472,7 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
         mood_block_after=mood_after,
         retrieved=retrieved,
         reflection_triggered=reflection_triggered,
+        entities=entities,
     )
 
 
@@ -594,6 +610,21 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
                         f"contains forbidden phrase {f!r}"
                     )
                     break
+
+    if (
+        inv.get("entity_count_eq") is not None
+        and len(result.entities) != inv["entity_count_eq"]
+    ):
+        violations.append(
+            f"entity_count_eq {inv['entity_count_eq']} != {len(result.entities)}"
+        )
+    if (
+        inv.get("entity_count_max") is not None
+        and len(result.entities) > inv["entity_count_max"]
+    ):
+        violations.append(
+            f"entity_count_max {inv['entity_count_max']} < {len(result.entities)}"
+        )
 
     if inv.get("filling_min") is not None:
         # Any SINGLE thought must cite at least ``filling_min`` events.
