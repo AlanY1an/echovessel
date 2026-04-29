@@ -1,0 +1,18 @@
+fixture_id: l6_neutral_session_no_mood_change
+version: scripted
+generated_at: null
+model: null
+scenario: chit-chat session with no emotional content → mood unchanged
+seed:
+  persona_block: 陪伴
+  episodic_state_initial:
+    mood: calm
+    energy: 5
+turns:
+  - {role: user, content: 今天天气不错}
+  - {role: persona, content: 嗯}
+  - {role: user, content: 我中午吃了拉面}
+  - {role: persona, content: 不错}
+invariants:
+  episodic_state_mood_unchanged: true
+judge_prompts: []
