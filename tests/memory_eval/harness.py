@@ -631,6 +631,10 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
         violations.append(
             f"thoughts_min {inv['thoughts_min']} > produced {n_thoughts}"
         )
+    if inv.get("thoughts_max") is not None and n_thoughts > inv["thoughts_max"]:
+        violations.append(
+            f"thoughts_max {inv['thoughts_max']} < produced {n_thoughts}"
+        )
 
     if inv.get("shock_event_present"):
         shocks = [
