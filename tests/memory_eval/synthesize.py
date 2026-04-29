@@ -153,14 +153,8 @@ def _build_synthesized_yaml(
         },
         "turns": synth["turns"],
     }
-    if scripted.seed.self_block:
-        doc["seed"]["self_block"] = scripted.seed.self_block
     if scripted.seed.user_block:
         doc["seed"]["user_block"] = scripted.seed.user_block
-    if scripted.seed.mood_block:
-        doc["seed"]["mood_block"] = scripted.seed.mood_block
-    if scripted.seed.relationship_block:
-        doc["seed"]["relationship_block"] = scripted.seed.relationship_block
     if scripted.seed.seed_events:
         doc["seed"]["seed_events"] = [
             {

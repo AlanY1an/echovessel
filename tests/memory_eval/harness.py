@@ -75,10 +75,7 @@ class SeedEvent:
 @dataclass(slots=True)
 class FixtureSeed:
     persona_block: str = ""
-    self_block: str = ""
     user_block: str = ""
-    mood_block: str = ""
-    relationship_block: str = ""
     style_block: str = ""
     persona_timezone: str | None = None
     persona_location: str | None = None
@@ -116,10 +113,7 @@ def load_fixture(path: Path) -> Fixture:
     seed_raw = raw.get("seed") or {}
     seed = FixtureSeed(
         persona_block=seed_raw.get("persona_block", ""),
-        self_block=seed_raw.get("self_block", ""),
         user_block=seed_raw.get("user_block", ""),
-        mood_block=seed_raw.get("mood_block", ""),
-        relationship_block=seed_raw.get("relationship_block", ""),
         style_block=seed_raw.get("style_block", ""),
         persona_timezone=seed_raw.get("persona_timezone"),
         persona_location=seed_raw.get("persona_location"),
