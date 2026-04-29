@@ -103,6 +103,7 @@ class FixtureTurn:
 class FixtureRetrieve:
     query: str
     top_k: int = 5
+    force_load_user_thoughts: int = 0
 
 
 @dataclass(slots=True)
@@ -164,6 +165,9 @@ def load_fixture(path: Path) -> Fixture:
         retrieve_spec = FixtureRetrieve(
             query=raw["retrieve"]["query"],
             top_k=int(raw["retrieve"].get("top_k", 5)),
+            force_load_user_thoughts=int(
+                raw["retrieve"].get("force_load_user_thoughts", 0)
+            ),
         )
     return Fixture(
         fixture_id=raw["fixture_id"],
@@ -478,6 +482,7 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
                 query_text=fixture.retrieve.query,
                 embed_fn=embed_fn,
                 top_k=fixture.retrieve.top_k,
+                force_load_user_thoughts=fixture.retrieve.force_load_user_thoughts,
             )
         retrieved = [
             {

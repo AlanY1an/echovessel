@@ -169,3 +169,46 @@ invariants: {}
     )
     fix = load_fixture(path)
     assert fix.seed.episodic_state_initial is None
+
+
+def test_force_load_user_thoughts_round_trips_through_load_fixture(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path,
+        """
+fixture_id: t_force_load
+version: scripted
+seed:
+  persona_block: 陪伴
+turns: []
+retrieve:
+  query: 任意查询
+  top_k: 5
+  force_load_user_thoughts: 2
+invariants: {}
+""",
+    )
+    fix = load_fixture(path)
+    assert fix.retrieve is not None
+    assert fix.retrieve.force_load_user_thoughts == 2
+
+
+def test_force_load_user_thoughts_defaults_to_zero(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+fixture_id: t_no_force_load
+version: scripted
+seed:
+  persona_block: 陪伴
+turns: []
+retrieve:
+  query: 任意查询
+  top_k: 5
+invariants: {}
+""",
+    )
+    fix = load_fixture(path)
+    assert fix.retrieve is not None
+    assert fix.retrieve.force_load_user_thoughts == 0
