@@ -325,6 +325,36 @@ def test_top_k_must_not_contain_descriptions_any_fails_when_present():
     assert "top_k_must_not_contain_descriptions_any" in violations[0]
 
 
+def test_top_k_must_contain_descriptions_all_defaults_to_full_retrieved():
+    res = _result(
+        retrieved=[
+            {"id": 1, "description": "用户喜欢爬山", "relevance": 0.9},
+            {"id": 2, "description": "用户喜欢做饭", "relevance": 0.8},
+            {"id": 3, "description": "用户喜欢看书", "relevance": 0.7},
+            {"id": 4, "description": "用户喜欢打球", "relevance": 0.6},
+            {"id": 5, "description": "用户养了 Mochi", "relevance": 0.5},
+        ]
+    )
+    fix = _fixture({"top_k_must_contain_descriptions_all": ["Mochi"]})
+    assert check_invariants(fix, res) == []
+
+
+def test_top_k_must_not_contain_descriptions_any_defaults_to_full_retrieved():
+    res = _result(
+        retrieved=[
+            {"id": 1, "description": "用户喜欢爬山", "relevance": 0.9},
+            {"id": 2, "description": "用户喜欢做饭", "relevance": 0.8},
+            {"id": 3, "description": "用户喜欢看书", "relevance": 0.7},
+            {"id": 4, "description": "用户喜欢打球", "relevance": 0.6},
+            {"id": 5, "description": "旧事件 14 天前", "relevance": 0.5},
+        ]
+    )
+    fix = _fixture({"top_k_must_not_contain_descriptions_any": ["旧事件"]})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "top_k_must_not_contain_descriptions_any" in violations[0]
+
+
 # ---------------------------------------------------------------------------
 # Field 11 · episodic_state_mood_changed
 # ---------------------------------------------------------------------------
