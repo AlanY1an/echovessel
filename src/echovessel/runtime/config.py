@@ -25,6 +25,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from echovessel.core.llm.endpoints import is_local_base_url
+
 # ---------------------------------------------------------------------------
 # Sections
 # ---------------------------------------------------------------------------
@@ -122,11 +124,6 @@ class LLMSection(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     timeout_seconds: int = Field(default=60, ge=1, le=600)
 
-    def _is_local_base_url(self) -> bool:
-        if not self.base_url:
-            return False
-        return any(loc in self.base_url for loc in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]"))
-
     def _has_custom_base_url(self) -> bool:
         """True if the base_url is not an official Anthropic/OpenAI endpoint."""
         if not self.base_url:
@@ -207,7 +204,7 @@ class LLMSection(BaseModel):
             )
 
         # 3. API key env var presence
-        needs_key = self.provider != "stub" and not self._is_local_base_url()
+        needs_key = self.provider != "stub" and not is_local_base_url(self.base_url)
         if needs_key:
             if not self.api_key_env:
                 raise ValueError(
