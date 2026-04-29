@@ -40,7 +40,13 @@ from echovessel.memory.consolidate import (
     consolidate_session,
 )
 from echovessel.memory.ingest import ingest_message
-from echovessel.memory.models import ConceptNode, ConceptNodeFilling, Entity, Session
+from echovessel.memory.models import (
+    ConceptNode,
+    ConceptNodeFilling,
+    Entity,
+    RecallMessage,
+    Session,
+)
 from echovessel.memory.retrieve import retrieve
 from echovessel.memory.sessions import mark_session_closing
 from echovessel.runtime.config import load_config
@@ -293,6 +299,7 @@ class EvalResult:
     retrieved: list[dict[str, Any]]
     reflection_triggered: bool
     entities: list[dict[str, Any]] = field(default_factory=list)
+    recall_count: int = 0
 
 
 async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
@@ -463,6 +470,16 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
                 )
             )
         ]
+        recall_count = len(
+            list(
+                db.exec(
+                    select(RecallMessage).where(
+                        RecallMessage.persona_id == persona_id,
+                        RecallMessage.deleted_at.is_(None),  # type: ignore[union-attr]
+                    )
+                )
+            )
+        )
 
     return EvalResult(
         events=events_from_session if fixture.turns else events,
@@ -473,6 +490,7 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
         retrieved=retrieved,
         reflection_triggered=reflection_triggered,
         entities=entities,
+        recall_count=recall_count,
     )
 
 
@@ -639,6 +657,15 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
                     f"entity_merge_status_eq: {name!r} status "
                     f"{ent.get('merge_status')!r} != {want!r}"
                 )
+
+    if (
+        inv.get("recall_message_count_eq") is not None
+        and result.recall_count != inv["recall_message_count_eq"]
+    ):
+        violations.append(
+            f"recall_message_count_eq {inv['recall_message_count_eq']} != "
+            f"{result.recall_count}"
+        )
 
     if inv.get("filling_min") is not None:
         # Any SINGLE thought must cite at least ``filling_min`` events.
