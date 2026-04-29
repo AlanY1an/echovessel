@@ -47,10 +47,10 @@
 ## L5 · Entities
 | ID | Behavior | Status |
 |---|---|---|
-| `l5_alias_exact_match_dedup` | "黄逸扬" + "黄逸扬" in two events → 1 entity | ➕ 🔧 |
-| `l5_embedding_dedup` | "Mochi" + "the cat Mochi" → 1 entity via L2 cosine | ➕ 🔧 |
-| `l5_ambiguous_surface_keeps_separate` | "Alex" appears twice w/ no other signal → 2 entities, merge_status=uncertain | ➕ 🔧 |
-| `l5_entity_anchored_retrieve_bonus` | query "Mochi" boosts entity-tagged events | ➕ 🔧 |
+| `l5_alias_exact_match_dedup` | "黄逸扬" + "黄逸扬" in two events → 1 entity | ✅ |
+| `l5_embedding_dedup` | "Mochi" + "the cat Mochi" → 1 entity via L2 cosine | ✅ |
+| `l5_ambiguous_surface_keeps_separate` | "Alex" appears twice w/ no other signal → 2 entities, merge_status=uncertain | ✅ |
+| `l5_entity_anchored_retrieve_bonus` | query "Mochi" boosts entity-tagged events | xfail · seed-event entity resolution gap; will pass once seed-event entity resolution wires in |
 
 ## L6 · Episodic state (mood)
 | ID | Behavior | Status |
