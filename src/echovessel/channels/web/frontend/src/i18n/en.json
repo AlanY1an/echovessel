@@ -487,7 +487,13 @@
       "system_lead": "The fields below cannot be changed online — <strong>data_dir</strong> and <strong>db_path</strong> determine where your database file lives; changing them requires stopping the daemon, editing config.toml manually, then restarting.",
       "system_no_file": "(no file)",
       "system_copied": "Path copied ✓",
-      "system_copy_cta": "Copy config.toml path"
+      "system_copy_cta": "Copy config.toml path",
+      "model_picker_placeholder_custom_input": "model id (e.g. openrouter/anthropic/claude-3.5-sonnet)",
+      "model_picker_hint_custom_base_url": "Custom base_url detected — pricing falls back to the role-based estimate.",
+      "model_picker_placeholder_select": "Select a model…",
+      "model_picker_option_custom": "Custom…",
+      "model_picker_placeholder_custom_input_simple": "custom model id",
+      "model_picker_error_load_catalog": "could not load catalog: {{err}}"
     },
     "channel_status": {
       "disabled": "Disabled",

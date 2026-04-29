@@ -487,7 +487,13 @@
       "system_lead": "以下字段不可在线改 —— <strong>data_dir</strong> 和 <strong>db_path</strong> 决定数据库文件位置,改动需要停 daemon,手动编辑 config.toml,再重启。",
       "system_no_file": "(无文件)",
       "system_copied": "已复制路径 ✓",
-      "system_copy_cta": "复制 config.toml 路径"
+      "system_copy_cta": "复制 config.toml 路径",
+      "model_picker_placeholder_custom_input": "model id(例如 openrouter/anthropic/claude-3.5-sonnet)",
+      "model_picker_hint_custom_base_url": "检测到自定义 base_url —— 价格回退到 role-based 估算。",
+      "model_picker_placeholder_select": "选择一个模型…",
+      "model_picker_option_custom": "自定义…",
+      "model_picker_placeholder_custom_input_simple": "自定义 model id",
+      "model_picker_error_load_catalog": "无法加载目录:{{err}}"
     },
     "channel_status": {
       "disabled": "未启用",
