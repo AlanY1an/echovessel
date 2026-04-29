@@ -79,6 +79,9 @@ class FixtureSeed:
     user_block: str = ""
     mood_block: str = ""
     relationship_block: str = ""
+    style_block: str = ""
+    persona_timezone: str | None = None
+    persona_location: str | None = None
     seed_events: list[SeedEvent] = field(default_factory=list)
 
 
@@ -117,6 +120,9 @@ def load_fixture(path: Path) -> Fixture:
         user_block=seed_raw.get("user_block", ""),
         mood_block=seed_raw.get("mood_block", ""),
         relationship_block=seed_raw.get("relationship_block", ""),
+        style_block=seed_raw.get("style_block", ""),
+        persona_timezone=seed_raw.get("persona_timezone"),
+        persona_location=seed_raw.get("persona_location"),
         seed_events=[
             SeedEvent(
                 description=e["description"],
@@ -322,21 +328,26 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
 
     # 1. seed persona + user + core blocks
     with DbSession(engine) as db:
-        db.add(Persona(id=persona_id, display_name="Eval"))
+        db.add(
+            Persona(
+                id=persona_id,
+                display_name="Eval",
+                timezone=fixture.seed.persona_timezone,
+                location=fixture.seed.persona_location,
+            )
+        )
         db.add(User(id=user_id, display_name="User"))
         db.commit()
 
         for label, content in [
             (BlockLabel.PERSONA, fixture.seed.persona_block),
-            (BlockLabel.SELF, fixture.seed.self_block),
             (BlockLabel.USER, fixture.seed.user_block),
-            (BlockLabel.MOOD, fixture.seed.mood_block),
-            (BlockLabel.RELATIONSHIP, fixture.seed.relationship_block),
+            (BlockLabel.STYLE, fixture.seed.style_block),
         ]:
             if not content:
                 continue
             row_user_id = None if label in (
-                BlockLabel.PERSONA, BlockLabel.SELF, BlockLabel.MOOD,
+                BlockLabel.PERSONA, BlockLabel.STYLE,
             ) else user_id
             append_to_core_block(
                 db,
