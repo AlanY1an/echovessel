@@ -190,6 +190,35 @@ def register_config_routes(router: APIRouter, *, runtime: Any) -> None:
                 detail=("unknown or read-only config fields: " + ", ".join(sorted(unknown))),
             )
 
+        # Compose the post-patch view of [llm] so we can validate env
+        # presence against the *intended* state (the user might patch
+        # only api_key_env without touching provider). A structured
+        # 422 is preferred over the Pydantic stringified error so the
+        # frontend can render the message inline next to the input.
+        llm_section = body.get("llm")
+        if isinstance(llm_section, dict):
+            current_llm = runtime.ctx.config.llm
+            proposed_provider = llm_section.get("provider", current_llm.provider)
+            proposed_env = llm_section.get("api_key_env", current_llm.api_key_env)
+            if (
+                proposed_provider != "stub"
+                and proposed_env
+                and os.environ.get(proposed_env) is None
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=[
+                        {
+                            "field": "llm.api_key_env",
+                            "msg": (
+                                f"env var {proposed_env!r} is not set in the "
+                                "daemon's environment; export it (or pick a "
+                                "different name) before saving"
+                            ),
+                        }
+                    ],
+                )
+
         # Delegate the atomic write + validate + reload path to the
         # runtime. ValueError → 422 (pydantic validation failed);
         # RuntimeError → 400 (config_override); OSError → 500.
