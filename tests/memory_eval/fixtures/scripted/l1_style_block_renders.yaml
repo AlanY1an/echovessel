@@ -1,0 +1,21 @@
+fixture_id: l1_style_block_renders
+version: scripted
+generated_at: null
+model: null
+scenario: STYLE block "不要哈哈开头" is honored on the next turn
+seed:
+  persona_block: 你是陪伴
+  user_block: ""
+  mood_block: ""
+  relationship_block: ""
+  self_block: ""
+  style_block: 不要以"哈哈"开头
+turns:
+  - role: user
+    content: 今天有点开心
+  - role: persona
+    content: "..."
+invariants:
+  events_max: 1
+judge_prompts:
+  - Does the persona reply START with "哈哈"? (Answer "no" if it DOES — STYLE block forbids this.)

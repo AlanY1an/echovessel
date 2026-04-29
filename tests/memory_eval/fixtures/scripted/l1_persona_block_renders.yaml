@@ -1,0 +1,20 @@
+fixture_id: l1_persona_block_renders
+version: scripted
+generated_at: null
+model: null
+scenario: persona block content surfaces in the LLM response when user asks about identity
+seed:
+  persona_block: 你是欧阳老师，一位安静的中学老师，住在台北。
+turns:
+  - role: user
+    content: 你能介绍一下你自己吗？
+  - role: persona
+    content: "..."
+invariants:
+  events_max: 2
+  must_mention_any:
+    - 老师
+    - 台北
+    - 欧阳
+judge_prompts:
+  - Did the persona reply incorporate at least one fact from its persona_block (occupation OR location OR name)?

@@ -1,0 +1,22 @@
+fixture_id: l1_never_auto_update
+version: scripted
+generated_at: null
+model: null
+scenario: heavy session with extraction + reflection MUST NOT mutate core_blocks
+seed:
+  persona_block: 你是陪伴
+  user_block: 用户叫小李 · 在念书
+turns:
+  - role: user
+    content: 我最近压力很大 · 期末考完了但是分数不好
+  - role: persona
+    content: "..."
+  - role: user
+    content: 我妈过世两年了 · 她最希望我读好书
+  - role: persona
+    content: "..."
+invariants:
+  events_min: 1
+  shock_event_present: true
+  core_blocks_unchanged: true
+judge_prompts: []

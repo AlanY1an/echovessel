@@ -1,0 +1,21 @@
+fixture_id: l1_user_block_third_person
+version: scripted
+generated_at: null
+model: null
+scenario: user_block content is third-person; persona reads it correctly without identity confusion
+seed:
+  persona_block: 你是温柔的陪伴
+  user_block: 这位用户是 Alan · 他在 Boston 念计算机 · 喜欢登山
+turns:
+  - role: user
+    content: 我前几天去爬山了
+  - role: persona
+    content: "..."
+invariants:
+  must_mention_any:
+    - 登山
+    - 爬山
+    - 山
+judge_prompts:
+  - Does the persona reply use second-person ("you") to address the user — never confused first-person ("I am Alan") or wrong-pronoun?
+  - Does the reply implicitly use the fact "user is in Boston / studies CS / likes hiking" without re-asking for it?
