@@ -7,7 +7,7 @@ from tests.memory_eval.harness import (
     EvalResult,
     Fixture,
     FixtureSeed,
-    check_invariants,  # noqa: F401 — used by per-field tests added in later commits
+    check_invariants,
 )
 
 
@@ -26,6 +26,20 @@ def _result(**kw) -> EvalResult:
     return EvalResult(**base)
 
 
+def _event(**overrides) -> dict:
+    base = {
+        "id": 1,
+        "type": "event",
+        "description": "...",
+        "emotional_impact": 0,
+        "emotion_tags": [],
+        "relational_tags": [],
+        "source_session_id": "s",
+    }
+    base.update(overrides)
+    return base
+
+
 def _fixture(invariants: dict) -> Fixture:
     return Fixture(
         fixture_id="t",
@@ -39,3 +53,22 @@ def _fixture(invariants: dict) -> Fixture:
         invariants=invariants,
         judge_prompts=[],
     )
+
+
+# ---------------------------------------------------------------------------
+# Field 1 · must_have_event_time
+# ---------------------------------------------------------------------------
+
+
+def test_must_have_event_time_passes_when_all_events_have_time():
+    res = _result(events=[_event(event_time_start="2026-04-20")])
+    fix = _fixture({"must_have_event_time": True})
+    assert check_invariants(fix, res) == []
+
+
+def test_must_have_event_time_fails_when_event_lacks_time():
+    res = _result(events=[_event()])
+    fix = _fixture({"must_have_event_time": True})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "event_time" in violations[0]
