@@ -1,0 +1,21 @@
+fixture_id: l5_entity_anchored_retrieve_bonus
+version: scripted
+generated_at: null
+model: null
+scenario: query "Mochi" boosts entity-anchored events to top of retrieve
+seed:
+  persona_block: 陪伴
+  seed_events:
+    - description: 用户养了一只猫叫 Mochi
+    - description: 用户最近在学吉他
+    - description: 用户喜欢做饭
+    - description: 用户的猫 Mochi 上周生病
+    - description: 用户喜欢爬山
+retrieve:
+  query: Mochi
+  top_k: 3
+invariants:
+  top_k_must_contain_descriptions_all:
+    - Mochi
+  top_k_for_check: 2
+judge_prompts: []

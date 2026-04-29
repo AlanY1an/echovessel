@@ -1,0 +1,22 @@
+fixture_id: l5_alias_exact_match_dedup
+version: scripted
+generated_at: null
+model: null
+scenario: two events both mention "黄逸扬" → dedup to one entity at Level 1 (alias exact match)
+seed:
+  persona_block: 陪伴
+turns:
+  - role: user
+    content: 我室友黄逸扬最近压力很大
+  - role: persona
+    content: "..."
+  - role: user
+    content: 黄逸扬其实是我大学同学 · 我们认识七八年了
+  - role: persona
+    content: "..."
+invariants:
+  events_min: 2
+  entity_count_eq: 1
+  entity_merge_status_eq:
+    黄逸扬: confirmed
+judge_prompts: []
