@@ -300,6 +300,8 @@ class EvalResult:
     reflection_triggered: bool
     entities: list[dict[str, Any]] = field(default_factory=list)
     recall_count: int = 0
+    core_block_snapshot_before: dict[str, str] = field(default_factory=dict)
+    core_block_snapshot_after: dict[str, str] = field(default_factory=dict)
 
 
 async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
@@ -364,6 +366,7 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
             backend.insert_vector(node.id, embed_fn(se.description))
 
     mood_before = _read_mood(engine, persona_id)
+    core_block_snapshot_before = _snapshot_core_blocks(engine, persona_id)
 
     # 3. ingest turns
     session_id: str | None = None
@@ -406,6 +409,7 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
         reflection_triggered = cons.reflection_reason is not None
 
     mood_after = _read_mood(engine, persona_id)
+    core_block_snapshot_after = _snapshot_core_blocks(engine, persona_id)
 
     # 5. retrieve (E6)
     retrieved: list[dict[str, Any]] = []
@@ -491,7 +495,26 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
         reflection_triggered=reflection_triggered,
         entities=entities,
         recall_count=recall_count,
+        core_block_snapshot_before=core_block_snapshot_before,
+        core_block_snapshot_after=core_block_snapshot_after,
     )
+
+
+def _snapshot_core_blocks(engine, persona_id: str) -> dict[str, str]:
+    import hashlib
+
+    out: dict[str, str] = {}
+    with DbSession(engine) as db:
+        for cb in db.exec(
+            select(CoreBlock).where(
+                CoreBlock.persona_id == persona_id,
+                CoreBlock.deleted_at.is_(None),  # type: ignore[union-attr]
+            )
+        ):
+            label = getattr(cb.label, "value", cb.label)
+            key = f"{label}|{cb.user_id or '_'}"
+            out[key] = hashlib.sha1(cb.content.encode()).hexdigest()[:8]
+    return out
 
 
 def _read_mood(engine, persona_id: str) -> str:
@@ -665,6 +688,17 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
         violations.append(
             f"recall_message_count_eq {inv['recall_message_count_eq']} != "
             f"{result.recall_count}"
+        )
+
+    if (
+        inv.get("core_block_count_unchanged")
+        and result.core_block_snapshot_before != result.core_block_snapshot_after
+    ):
+        diff = set(result.core_block_snapshot_after.items()) ^ set(
+            result.core_block_snapshot_before.items()
+        )
+        violations.append(
+            f"core_block_count_unchanged: blocks changed during consolidate · {diff}"
         )
 
     if inv.get("filling_min") is not None:

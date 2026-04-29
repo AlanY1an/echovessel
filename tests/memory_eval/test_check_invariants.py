@@ -219,3 +219,29 @@ def test_recall_message_count_eq_fails_on_mismatch():
     violations = check_invariants(fix, res)
     assert len(violations) == 1
     assert "recall_message_count_eq" in violations[0]
+
+
+# ---------------------------------------------------------------------------
+# Field 8 · core_block_count_unchanged
+# ---------------------------------------------------------------------------
+
+
+def test_core_block_count_unchanged_passes_when_identical():
+    snap = {"PERSONA|_": "deadbeef"}
+    res = _result(
+        core_block_snapshot_before=snap,
+        core_block_snapshot_after=dict(snap),
+    )
+    fix = _fixture({"core_block_count_unchanged": True})
+    assert check_invariants(fix, res) == []
+
+
+def test_core_block_count_unchanged_fails_when_content_drifts():
+    res = _result(
+        core_block_snapshot_before={"PERSONA|_": "aaaaaaaa"},
+        core_block_snapshot_after={"PERSONA|_": "bbbbbbbb"},
+    )
+    fix = _fixture({"core_block_count_unchanged": True})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "core_block_count_unchanged" in violations[0]
