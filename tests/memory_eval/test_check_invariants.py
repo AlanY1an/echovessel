@@ -110,3 +110,22 @@ def test_must_have_concept_type_any_fails_when_no_match():
     violations = check_invariants(fix, res)
     assert len(violations) == 1
     assert "must_have_concept_type_any" in violations[0]
+
+
+# ---------------------------------------------------------------------------
+# Field 4 · forbidden_descriptions_contain_none
+# ---------------------------------------------------------------------------
+
+
+def test_forbidden_descriptions_contain_none_passes_when_clean():
+    res = _result(events=[_event(description="用户养了一只猫")])
+    fix = _fixture({"forbidden_descriptions_contain_none": ["击败 persona"]})
+    assert check_invariants(fix, res) == []
+
+
+def test_forbidden_descriptions_contain_none_fails_when_phrase_present():
+    res = _result(events=[_event(description="用户击败 persona 在游戏里")])
+    fix = _fixture({"forbidden_descriptions_contain_none": ["击败 persona"]})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "forbidden_descriptions_contain_none" in violations[0]
