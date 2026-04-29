@@ -200,3 +200,22 @@ def test_entity_merge_status_eq_fails_when_entity_missing():
     violations = check_invariants(fix, res)
     assert len(violations) == 1
     assert "entity_merge_status_eq" in violations[0]
+
+
+# ---------------------------------------------------------------------------
+# Field 7 · recall_message_count_eq
+# ---------------------------------------------------------------------------
+
+
+def test_recall_message_count_eq_passes():
+    res = _result(recall_count=4)
+    fix = _fixture({"recall_message_count_eq": 4})
+    assert check_invariants(fix, res) == []
+
+
+def test_recall_message_count_eq_fails_on_mismatch():
+    res = _result(recall_count=3)
+    fix = _fixture({"recall_message_count_eq": 4})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "recall_message_count_eq" in violations[0]
