@@ -713,6 +713,18 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
                 f"from top-{len(top)}"
             )
 
+    if inv.get("top_k_must_not_contain_descriptions_any"):
+        forbidden = inv["top_k_must_not_contain_descriptions_any"]
+        top = result.retrieved[: inv.get("top_k_for_check", 3)]
+        leaked = [
+            f for f in forbidden if any(f in m["description"] for m in top)
+        ]
+        if leaked:
+            violations.append(
+                f"top_k_must_not_contain_descriptions_any: {leaked} leaked "
+                f"into top-{len(top)}"
+            )
+
     if inv.get("filling_min") is not None:
         # Any SINGLE thought must cite at least ``filling_min`` events.
         by_parent: dict[int, int] = {}
