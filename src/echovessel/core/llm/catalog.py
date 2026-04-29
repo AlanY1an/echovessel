@@ -1,7 +1,7 @@
 """Curated preset list of (provider, model) for the admin dropdown.
 
 This module ONLY decides what shows up in the picker — it carries no
-pricing. Cost is computed via `runtime.llm.prices.lookup_price`, which
+pricing. Cost is computed via `core.llm.prices.lookup_price`, which
 reads vendored LiteLLM rates and covers far more model strings than the
 preset list (including ones a user types via the "Custom…" option).
 

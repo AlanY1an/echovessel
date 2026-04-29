@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from echovessel.runtime.llm.prices import lookup_price
+from echovessel.core.llm.prices import lookup_price
 
 _FREE_PROVIDERS: frozenset[str] = frozenset({"stub"})
 

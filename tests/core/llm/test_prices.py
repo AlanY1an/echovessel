@@ -1,4 +1,4 @@
-from echovessel.runtime.llm.prices import ModelPrice, lookup_price
+from echovessel.core.llm.prices import ModelPrice, lookup_price
 
 
 def test_lookup_price_known_anthropic_model_returns_rates() -> None:
