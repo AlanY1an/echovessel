@@ -127,8 +127,11 @@ export function ModelPicker({ provider, baseUrl, value, onChange }: Props) {
           const hasPrice =
             entry.input_per_1k_usd !== null && entry.output_per_1k_usd !== null
           const label = hasPrice
-            ? `${entry.display_name} (in $${entry.input_per_1k_usd!.toFixed(5)} / out $${entry.output_per_1k_usd!.toFixed(5)} per 1K)`
-            : `${entry.display_name} (price unknown)`
+            ? `${entry.display_name} (${t("admin.config_tab.model_picker_price_per_1k", {
+                input: entry.input_per_1k_usd!.toFixed(5),
+                output: entry.output_per_1k_usd!.toFixed(5),
+              })})`
+            : `${entry.display_name} (${t("admin.config_tab.model_picker_price_unknown")})`
           return (
             <option key={entry.model} value={entry.model}>
               {label}
