@@ -17,8 +17,6 @@ def _result(**kw) -> EvalResult:
         "events": [],
         "thoughts": [],
         "filling": [],
-        "mood_block_before": "",
-        "mood_block_after": "",
         "retrieved": [],
         "reflection_triggered": False,
     }

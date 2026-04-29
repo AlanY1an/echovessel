@@ -300,8 +300,6 @@ class EvalResult:
     events: list[dict[str, Any]]
     thoughts: list[dict[str, Any]]
     filling: list[dict[str, Any]]
-    mood_block_before: str
-    mood_block_after: str
     retrieved: list[dict[str, Any]]
     reflection_triggered: bool
     entities: list[dict[str, Any]] = field(default_factory=list)
@@ -378,7 +376,6 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
             db.refresh(node)
             backend.insert_vector(node.id, embed_fn(se.description))
 
-    mood_before = _read_mood(engine, persona_id)
     core_block_snapshot_before = _snapshot_core_blocks(engine, persona_id)
     episodic_state_before = _read_episodic_state(engine, persona_id)
 
@@ -422,7 +419,6 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
             )
         reflection_triggered = cons.reflection_reason is not None
 
-    mood_after = _read_mood(engine, persona_id)
     core_block_snapshot_after = _snapshot_core_blocks(engine, persona_id)
     episodic_state_after = _read_episodic_state(engine, persona_id)
 
@@ -504,8 +500,6 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
         events=events_from_session if fixture.turns else events,
         thoughts=thoughts,
         filling=filling,
-        mood_block_before=mood_before,
-        mood_block_after=mood_after,
         retrieved=retrieved,
         reflection_triggered=reflection_triggered,
         entities=entities,
@@ -538,18 +532,6 @@ def _snapshot_core_blocks(engine, persona_id: str) -> dict[str, str]:
             key = f"{label}|{cb.user_id or '_'}"
             out[key] = hashlib.sha1(cb.content.encode()).hexdigest()[:8]
     return out
-
-
-def _read_mood(engine, persona_id: str) -> str:
-    with DbSession(engine) as db:
-        row = db.exec(
-            select(CoreBlock).where(
-                CoreBlock.persona_id == persona_id,
-                CoreBlock.label == BlockLabel.MOOD,
-                CoreBlock.deleted_at.is_(None),  # type: ignore[union-attr]
-            )
-        ).first()
-    return row.content if row else ""
 
 
 def _serialise_node(n: ConceptNode) -> dict[str, Any]:
@@ -608,14 +590,6 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
 
     if inv.get("reflection_triggered") and not result.reflection_triggered:
         violations.append("reflection_triggered: reflect_fn was never called")
-
-    if (
-        inv.get("mood_block_changed")
-        and result.mood_block_after == result.mood_block_before
-    ):
-        violations.append(
-            f"mood_block_changed: mood stayed {result.mood_block_before!r}"
-        )
 
     if inv.get("must_mention_any"):
         wanted = inv["must_mention_any"]
@@ -838,10 +812,6 @@ def render_evidence(fixture: Fixture, result: EvalResult) -> str:
             lines.append(
                 f"  rel={m['relevance']:.2f} · {m['description']}"
             )
-    lines.append("")
-    lines.append("--- Mood ---")
-    lines.append(f"before: {result.mood_block_before!r}")
-    lines.append(f"after:  {result.mood_block_after!r}")
     return "\n".join(lines)
 
 
