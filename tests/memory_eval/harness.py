@@ -715,7 +715,7 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
 
     if inv.get("top_k_must_contain_descriptions_all"):
         wanted = inv["top_k_must_contain_descriptions_all"]
-        top = result.retrieved[: inv.get("top_k_for_check", 3)]
+        top = result.retrieved[: inv.get("top_k_for_check", len(result.retrieved))]
         missing = [
             w for w in wanted if not any(w in m["description"] for m in top)
         ]
@@ -727,7 +727,7 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
 
     if inv.get("top_k_must_not_contain_descriptions_any"):
         forbidden = inv["top_k_must_not_contain_descriptions_any"]
-        top = result.retrieved[: inv.get("top_k_for_check", 3)]
+        top = result.retrieved[: inv.get("top_k_for_check", len(result.retrieved))]
         leaked = [
             f for f in forbidden if any(f in m["description"] for m in top)
         ]
