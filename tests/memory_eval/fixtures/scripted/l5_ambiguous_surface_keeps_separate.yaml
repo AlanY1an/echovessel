@@ -1,0 +1,22 @@
+fixture_id: l5_ambiguous_surface_keeps_separate
+version: scripted
+generated_at: null
+model: null
+scenario: 'Alex mentioned twice with no disambiguation signal → keep separate, merge_status=uncertain'
+seed:
+  persona_block: 陪伴
+turns:
+  - role: user
+    content: 我同事 Alex 今天又迟到了
+  - role: persona
+    content: "..."
+  - role: user
+    content: 顺便说，我表弟 Alex 这周末过来玩
+  - role: persona
+    content: "..."
+invariants:
+  events_min: 2
+  entity_count_eq: 2
+  entity_merge_status_eq:
+    Alex: uncertain
+judge_prompts: []

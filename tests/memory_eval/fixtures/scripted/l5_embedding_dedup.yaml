@@ -1,0 +1,21 @@
+fixture_id: l5_embedding_dedup
+version: scripted
+generated_at: null
+model: null
+scenario: 'Mochi + "the cat Mochi" → dedup at Level 2 (embedding cosine)'
+seed:
+  persona_block: 陪伴
+turns:
+  - role: user
+    content: 我最近养了一只猫叫 Mochi
+  - role: persona
+    content: "..."
+  - role: user
+    content: the cat Mochi 上周生病了 · 去了医院
+  - role: persona
+    content: "..."
+invariants:
+  events_min: 2
+  entity_count_eq: 1
+judge_prompts:
+  - Are both mentions linked to the same entity (one entity, not two)?
