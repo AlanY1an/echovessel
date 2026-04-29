@@ -16,6 +16,7 @@ from typing import Any
 from sqlmodel import Session as DbSession
 from sqlmodel import select
 
+from echovessel.channels.base import IncomingMessage
 from echovessel.core.types import BlockLabel, MessageRole, NodeType
 from echovessel.memory import (
     CoreBlock,
@@ -38,11 +39,18 @@ from echovessel.memory.models import (
 from echovessel.memory.retrieve import retrieve
 from echovessel.memory.sessions import mark_session_closing
 from echovessel.runtime.llm.base import LLMProvider
+from echovessel.runtime.turn.coordinator import TurnContext, assemble_turn
 from echovessel.runtime.wiring.prompts import make_extract_fn, make_reflect_fn
 from tests.memory_eval.embedders import REAL_CONFIG_PATH, build_eval_embedder
 from tests.memory_eval.schema import EvalResult, Fixture
 
 __all__ = ["REAL_CONFIG_PATH", "render_evidence", "run_fixture"]
+
+# Sentinel persona content that asks the runner to call the production
+# assemble_turn pipeline so the LLM produces a real reply against the
+# seeded prompt. Without this hook, the L1 fixtures would ingest a
+# literal "..." into L2 and consolidation would extract nothing useful.
+PERSONA_GENERATE_SENTINEL = "..."
 
 
 async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
@@ -162,13 +170,60 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
     core_block_snapshot_before = _snapshot_core_blocks(engine, persona_id)
     episodic_state_before = _read_episodic_state(engine, persona_id)
 
-    # 3. ingest turns under the per-turn channel (defaults to "web").
-    # Cross-channel fixtures rely on the per-turn override to seed events
-    # via one channel and verify retrieval (which has no channel filter)
-    # surfaces them regardless.
+    # 3. ingest turns
+    #
+    # Two paths:
+    #   - turn.content == "..." on a persona turn → delegate to the
+    #     production ``assemble_turn`` so the LLM actually generates a
+    #     reply against the seeded prompt. assemble_turn ingests BOTH the
+    #     user message and the persona reply with one call, so we skip
+    #     the explicit ingest_message for the immediately-preceding user
+    #     turn in that case.
+    #   - all other turns → straight ingest_message under the per-turn
+    #     channel (defaults to "web").
     session_id: str | None = None
     with DbSession(engine) as db:
-        for turn in fixture.turns:
+        i = 0
+        while i < len(fixture.turns):
+            turn = fixture.turns[i]
+            next_turn = fixture.turns[i + 1] if i + 1 < len(fixture.turns) else None
+            generate_next = (
+                turn.role == "user"
+                and next_turn is not None
+                and next_turn.role == "persona"
+                and next_turn.content == PERSONA_GENERATE_SENTINEL
+            )
+            if generate_next:
+                ctx = TurnContext(
+                    persona_id=persona_id,
+                    persona_display_name="Eval",
+                    db=db,
+                    backend=backend,
+                    embed_fn=embed_fn,
+                )
+                envelope = IncomingMessage(
+                    channel_id=turn.channel,
+                    user_id=user_id,
+                    content=turn.content,
+                    received_at=datetime.now(),
+                )
+                await assemble_turn(ctx, envelope, llm)
+                # After assemble_turn we need the open session so the
+                # later consolidate step can close it.
+                latest = db.exec(
+                    select(Session)
+                    .where(
+                        Session.persona_id == persona_id,
+                        Session.user_id == user_id,
+                        Session.channel_id == turn.channel,
+                    )
+                    .order_by(Session.last_message_at.desc())  # type: ignore[union-attr]
+                ).first()
+                if latest is not None:
+                    session_id = latest.id
+                i += 2
+                continue
+
             role = MessageRole.USER if turn.role == "user" else MessageRole.PERSONA
             result = ingest_message(
                 db,
@@ -179,6 +234,7 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
                 turn.content,
             )
             session_id = result.session.id
+            i += 1
         db.commit()
 
     reflection_triggered = False
