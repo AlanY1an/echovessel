@@ -73,12 +73,18 @@ class SeedEvent:
 
 
 @dataclass(slots=True)
+class SeedFillingSpec:
+    parent_description_contains: str
+
+
+@dataclass(slots=True)
 class SeedThought:
     description: str
     emotional_impact: int = 0
     emotion_tags: list[str] = field(default_factory=list)
     relational_tags: list[str] = field(default_factory=list)
     created_at_offset_hours: float = -1.0
+    filling: list[SeedFillingSpec] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -159,6 +165,12 @@ def load_fixture(path: Path) -> Fixture:
                 created_at_offset_hours=float(
                     t.get("created_at_offset_hours", -1.0)
                 ),
+                filling=[
+                    SeedFillingSpec(
+                        parent_description_contains=f["parent_description_contains"],
+                    )
+                    for f in (t.get("filling") or [])
+                ],
             )
             for t in (seed_raw.get("seed_thoughts") or [])
         ],
@@ -419,7 +431,7 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
             db.refresh(node)
             backend.insert_vector(node.id, embed_fn(se.description))
 
-        # 2b. pre-seed thoughts (L4 hard-limit fixtures)
+        # 2b. pre-seed thoughts (L4 hard-limit + forget fixtures)
         for st in fixture.seed.seed_thoughts:
             created = now + timedelta(hours=st.created_at_offset_hours)
             node = ConceptNode(
@@ -436,6 +448,33 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
             db.commit()
             db.refresh(node)
             backend.insert_vector(node.id, embed_fn(st.description))
+
+            # filling: link this thought (parent in the schema) to evidence
+            # events (child) that were seeded above.
+            for spec in st.filling:
+                evidence = next(
+                    (
+                        n
+                        for n in db.exec(
+                            select(ConceptNode).where(
+                                ConceptNode.persona_id == persona_id,
+                                ConceptNode.type == NodeType.EVENT.value,
+                                ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+                            )
+                        )
+                        if spec.parent_description_contains in n.description
+                    ),
+                    None,
+                )
+                if evidence is not None:
+                    db.add(
+                        ConceptNodeFilling(
+                            parent_id=node.id,
+                            child_id=evidence.id,
+                            orphaned=False,
+                        )
+                    )
+            db.commit()
 
     core_block_snapshot_before = _snapshot_core_blocks(engine, persona_id)
     episodic_state_before = _read_episodic_state(engine, persona_id)
@@ -949,6 +988,7 @@ __all__ = [
     "FixtureTurn",
     "FixtureRetrieve",
     "SeedEvent",
+    "SeedFillingSpec",
     "SeedThought",
     "EvalResult",
     "build_live_llm",
