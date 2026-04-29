@@ -1,0 +1,18 @@
+fixture_id: l1_facts_view_has_location_tz
+version: scripted
+generated_at: null
+model: null
+scenario: when user asks "what time is it for you", persona reasons from its set timezone
+seed:
+  persona_block: 你是陪伴
+  persona_timezone: Asia/Taipei
+  persona_location: 台北
+turns:
+  - role: user
+    content: 你那边现在大概几点了
+  - role: persona
+    content: "..."
+invariants:
+  events_max: 1
+judge_prompts:
+  - Does the persona's reply reference its own configured timezone or location (instead of inheriting the user's local time blindly)?
