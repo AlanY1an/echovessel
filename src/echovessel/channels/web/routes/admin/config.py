@@ -63,6 +63,10 @@ def register_config_routes(router: APIRouter, *, runtime: Any) -> None:
             "llm": {
                 "provider": llm.provider,
                 "model": llm.model,
+                # Empty string means "use SDK default" — the field is
+                # always returned so the picker can decide between the
+                # curated preset list and the free-text fallback.
+                "base_url": llm.base_url or "",
                 "api_key_env": llm.api_key_env,
                 "timeout_seconds": int(llm.timeout_seconds),
                 "temperature": float(llm.temperature),
