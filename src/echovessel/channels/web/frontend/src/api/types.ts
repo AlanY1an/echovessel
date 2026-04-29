@@ -1321,18 +1321,27 @@ export interface VoiceActivateResponse {
 /**
  * Thrown by the API client on any non-2xx response from the daemon.
  * `status` is the HTTP status code; `detail` is the `detail` field from
- * the server's JSON body (FastAPI convention), falling back to the
- * response status text if the body could not be parsed.
+ * the server's JSON body (FastAPI convention). Most routes return a
+ * plain string; admin PATCH routes that need to point the UI at a
+ * specific input field return an `AdminFieldError[]` — those errors
+ * are stringified for `detail` (so existing toast paths still work)
+ * and also surfaced verbatim on `fieldErrors` so a form can render the
+ * message inline next to the offending input.
  */
 export class ApiError extends Error {
   public readonly status: number
   public readonly detail: string
+  public readonly fieldErrors: AdminFieldError[] | null
 
-  constructor(status: number, detail: string) {
-    super(`[${status}] ${detail}`)
+  constructor(status: number, detail: string | AdminFieldError[]) {
+    const summary = Array.isArray(detail)
+      ? detail.map((d) => `${d.field}: ${d.msg}`).join('; ')
+      : detail
+    super(`[${status}] ${summary}`)
     this.name = 'ApiError'
     this.status = status
-    this.detail = detail
+    this.detail = summary
+    this.fieldErrors = Array.isArray(detail) ? detail : null
   }
 }
 

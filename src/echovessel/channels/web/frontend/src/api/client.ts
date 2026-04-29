@@ -17,6 +17,7 @@
  */
 
 import type {
+  AdminFieldError,
   ChannelsPatchPayload,
   ChannelsPatchResponse,
   ChatHistoryResponse,
@@ -80,18 +81,25 @@ import { ApiError } from './types'
 // ─── Internals ───────────────────────────────────────────────────────────
 
 interface ServerErrorBody {
-  detail?: string
+  detail?: string | AdminFieldError[]
 }
 
 /**
- * Extract a human-readable detail from a non-2xx response. FastAPI emits
- * `{ "detail": "..." }` by default. If the body is not JSON or has no
- * `detail` key, fall back to the HTTP status text.
+ * Extract the `detail` payload from a non-2xx response. FastAPI emits
+ * `{ "detail": "..." }` for plain errors; the admin PATCH routes return
+ * `{ "detail": [{field, msg}, ...] }` so the UI can render the message
+ * inline next to the offending input. Both shapes pass through
+ * unchanged; non-JSON / empty bodies fall back to the status text.
  */
-async function extractDetail(response: Response): Promise<string> {
+async function extractDetail(
+  response: Response,
+): Promise<string | AdminFieldError[]> {
   try {
     const body = (await response.json()) as ServerErrorBody
     if (body && typeof body.detail === 'string') {
+      return body.detail
+    }
+    if (body && Array.isArray(body.detail)) {
       return body.detail
     }
   } catch {
