@@ -20,7 +20,6 @@
 | ID | Behavior | Status |
 |---|---|---|
 | `l2_ingest_writes_recall` | user/persona ingest creates recall_messages rows | ➕ 🔧 |
-| `l2_fts_finds_literal_phrase` | FTS5 fallback retrieves a literal phrase | ➕ 🔧 |
 
 ## L3 · Events (extraction)
 | ID | Behavior | Status |
