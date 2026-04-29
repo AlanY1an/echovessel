@@ -128,7 +128,37 @@ provider    = "stub"
 api_key_env = ""
 ```
 
-### 管理面板 Cost 标签页
+### 管理面板:模型选择器
+
+Web admin 的 LLM 卡片提供一个混合选择器,常见 case 一键搞定 · 长尾 case 仍可自由文本:
+
+- 当 `provider = "anthropic"` 或 `provider = "openai_compat"` 且 `base_url` 为空或为**官方端点**(SDK 默认,即 `api.openai.com` / `api.anthropic.com`)时,`model` 字段渲染成由 `src/echovessel/core/llm/catalog.py` 驱动的目录下拉。每一项都会内联展示 1K token 的 in/out 美元价——价格来自 vendored 的 LiteLLM JSON(见下文「计费与成本追踪」)。下拉末尾的 "Custom…" 选项会切回自由文本输入,供目录之外的模型使用。
+- 当 `base_url` 是**非官方端点**(OpenRouter / Ollama / vLLM / LM Studio / 自建反代等)时,`model` 字段折叠成纯自由文本输入,并附上「检测到自定义 base_url」的提示——目录里的价格不适用于第三方路由,与其错给一个价,不如直接收起下拉。
+
+`base_url` 和 `api_key_env` 都可以在同一张卡片上直接编辑。`base_url` 留空表示「用 SDK 默认」;设为 OpenRouter / 本地 Ollama / 私有 vLLM 等的地址即可切换路由。`api_key_env` 字段填的是**存放 secret 的环境变量名**(沿用本页开头的 `_env` 约定);该环境变量当前的解析状态——存在 / 缺失——以一个状态点显示在字段的等宽标签旁。
+
+`PATCH /api/admin/config` 时 daemon 会先校验 `api_key_env` 在自己进程环境里能解析到非空值,才落盘。若环境变量缺失,接口返回 HTTP 422,前端把错误内联到该字段下方。`provider = "stub"`(根本不需要 key)和 `base_url` host 为 `localhost` / `127.0.0.1` / `0.0.0.0` / `::1` / `host.docker.internal`(本地推理无需鉴权)时跳过该校验。
+
+### 计费与成本追踪
+
+`llm_calls` ledger 每一行的 USD 成本按 `(provider, model)` 在 vendored 的 LiteLLM `model_prices_and_context_window.json` 里查表算出,**不**按 model role 算:
+
+- `src/echovessel/core/llm/data/litellm_prices.json` 是费率来源。LiteLLM 是 MIT 许可,对应许可证文本就在同目录的 `data/LITELLM-LICENSE`。
+- `src/echovessel/core/llm/catalog.py` 是 admin 下拉里那份精选 preset。下拉用 `lookup_price()` 把每一项和价格 JOIN 出来,让 admin 在选择前就看到 1K token 的 in/out 美元价。
+- LiteLLM 没收录的模型(真正长尾 / 自建端点 / 错拼)回退到 role-based 兜底费率(`fast` / `main` / `judge`)。新模型还没刷进 JSON 时 daemon 也照样能用。
+
+发版前刷新一次 vendored JSON:
+
+```bash
+uv run python scripts/refresh_litellm_prices.py
+```
+
+它会从 LiteLLM 的 `main` 分支拉最新快照并覆盖本地文件。脚本是手动的,没有定时;刷新出的 diff 提交进仓库,跟随 wheel 发布。
+
+两条自动短路到 `$0.0` 的路径:
+
+1. `provider = "stub"` —— 永远免费。
+2. `base_url` host 是 `localhost` / `127.0.0.1` / `0.0.0.0` / `::1` / `host.docker.internal` —— 本地推理不计费。
 
 Web UI 里 **Admin → Config → Cost** 卡片展示的是从 `llm_calls` 表里汇总出来的 LLM 预估成本。Token 计数优先使用 provider SDK 上报的 usage 数据;没有 provider 上报时退回到本地 token 估算。所有数字在 UI 里都标注为估算值——权威计费数据在 provider 的账单控制台里。
 
