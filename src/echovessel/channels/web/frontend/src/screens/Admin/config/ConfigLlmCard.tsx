@@ -1,23 +1,42 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { ApiError } from '../../../api/types'
 import type { ConfigPatchPayload } from '../../../api/types'
+import { ModelPicker } from './ModelPicker'
 import {
   configInputStyle,
   configKeyStyle,
   type ConfigCardProps,
 } from './ConfigTab'
 
+// `llm.base_url` is not surfaced through GET /api/admin/config; the picker
+// only needs it to decide whether to show curated presets. Empty string maps
+// to "official endpoint" in ModelPicker, which matches the default config
+// (sample omits base_url). Users with a custom base_url edit config.toml
+// manually and the picker will fall back to a free-text input on next load.
+const BASE_URL = ''
+
+const fieldErrorStyle = {
+  color: 'var(--accent)',
+  fontFamily: 'var(--mono)',
+  fontSize: 11,
+  margin: '4px 0 0',
+}
+
 export function ConfigLlmCard({ config, save, saving }: ConfigCardProps) {
   const { t } = useTranslation()
   const [provider, setProvider] = useState(config.llm.provider)
   const [model, setModel] = useState(config.llm.model ?? '')
+  const [apiKeyEnv, setApiKeyEnv] = useState(config.llm.api_key_env)
   const [temperature, setTemperature] = useState(config.llm.temperature)
   const [maxTokens, setMaxTokens] = useState(config.llm.max_tokens)
   const [timeout, setTimeoutS] = useState(config.llm.timeout_seconds)
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   useEffect(() => {
     setProvider(config.llm.provider)
     setModel(config.llm.model ?? '')
+    setApiKeyEnv(config.llm.api_key_env)
     setTemperature(config.llm.temperature)
     setMaxTokens(config.llm.max_tokens)
     setTimeoutS(config.llm.timeout_seconds)
@@ -25,6 +44,7 @@ export function ConfigLlmCard({ config, save, saving }: ConfigCardProps) {
   const dirty =
     provider !== config.llm.provider ||
     model !== (config.llm.model ?? '') ||
+    apiKeyEnv !== config.llm.api_key_env ||
     temperature !== config.llm.temperature ||
     maxTokens !== config.llm.max_tokens ||
     timeout !== config.llm.timeout_seconds
@@ -33,12 +53,22 @@ export function ConfigLlmCard({ config, save, saving }: ConfigCardProps) {
     const patch: ConfigPatchPayload = { llm: {} }
     if (provider !== config.llm.provider) patch.llm!.provider = provider
     if (model !== (config.llm.model ?? '')) patch.llm!.model = model
+    if (apiKeyEnv !== config.llm.api_key_env) patch.llm!.api_key_env = apiKeyEnv
     if (temperature !== config.llm.temperature)
       patch.llm!.temperature = temperature
     if (maxTokens !== config.llm.max_tokens) patch.llm!.max_tokens = maxTokens
     if (timeout !== config.llm.timeout_seconds)
       patch.llm!.timeout_seconds = timeout
-    void save(patch).catch(() => {})
+    setFieldErrors({})
+    void save(patch).catch((e: unknown) => {
+      if (e instanceof ApiError && e.status === 422 && e.fieldErrors) {
+        const errs: Record<string, string> = {}
+        for (const item of e.fieldErrors) {
+          errs[item.field] = item.msg
+        }
+        setFieldErrors(errs)
+      }
+    })
   }
 
   return (
@@ -88,12 +118,24 @@ export function ConfigLlmCard({ config, save, saving }: ConfigCardProps) {
           <option value="stub">stub</option>
         </select>
         <div style={configKeyStyle}>model</div>
-        <input
+        <ModelPicker
+          provider={provider}
+          baseUrl={BASE_URL}
           value={model}
-          onChange={(e) => setModel(e.target.value)}
-          disabled={saving}
-          style={configInputStyle}
+          onChange={(next) => setModel(next)}
         />
+        <div style={configKeyStyle}>api_key_env</div>
+        <div>
+          <input
+            value={apiKeyEnv}
+            onChange={(e) => setApiKeyEnv(e.target.value)}
+            disabled={saving}
+            style={{ ...configInputStyle, width: '100%' }}
+          />
+          {fieldErrors['llm.api_key_env'] && (
+            <p style={fieldErrorStyle}>{fieldErrors['llm.api_key_env']}</p>
+          )}
+        </div>
         <div style={configKeyStyle}>temperature</div>
         <div className="row g-2" style={{ alignItems: 'center' }}>
           <input
