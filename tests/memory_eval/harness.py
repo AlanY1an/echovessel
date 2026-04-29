@@ -721,17 +721,22 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
         )
 
     if inv.get("entity_merge_status_eq"):
-        by_name = {e["canonical_name"]: e for e in result.entities}
-        for name, want in inv["entity_merge_status_eq"].items():
-            ent = by_name.get(name)
-            if ent is None:
+        wanted = inv["entity_merge_status_eq"]
+        by_name: dict[str, list[dict]] = {}
+        for e in result.entities:
+            by_name.setdefault(e["canonical_name"], []).append(e)
+        for name, want in wanted.items():
+            matches = by_name.get(name, [])
+            if not matches:
                 violations.append(
                     f"entity_merge_status_eq: entity {name!r} not found"
                 )
-            elif ent.get("merge_status") != want:
+                continue
+            bad = [m for m in matches if m.get("merge_status") != want]
+            if bad:
                 violations.append(
-                    f"entity_merge_status_eq: {name!r} status "
-                    f"{ent.get('merge_status')!r} != {want!r}"
+                    f"entity_merge_status_eq: {name!r} has {len(bad)}/{len(matches)} "
+                    f"entities with status != {want!r}"
                 )
 
     if (

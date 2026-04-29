@@ -200,6 +200,24 @@ def test_entity_merge_status_eq_fails_when_entity_missing():
     assert "entity_merge_status_eq" in violations[0]
 
 
+def test_entity_merge_status_eq_fails_when_duplicate_name_has_one_bad():
+    # Two entities share canonical_name but only one carries the wanted
+    # merge_status; the dict-comprehension implementation silently dropped
+    # one, so a wrong-status duplicate would slip through. Every match must
+    # satisfy the invariant.
+    res = _result(
+        entities=[
+            _entity("Mochi", id=1, merge_status="confirmed"),
+            _entity("Mochi", id=2, merge_status="uncertain"),
+        ]
+    )
+    fix = _fixture({"entity_merge_status_eq": {"Mochi": "confirmed"}})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "entity_merge_status_eq" in violations[0]
+    assert "1/2" in violations[0]
+
+
 # ---------------------------------------------------------------------------
 # Field 7 · recall_message_count_eq
 # ---------------------------------------------------------------------------
