@@ -107,6 +107,12 @@ class FixtureRetrieve:
 
 
 @dataclass(slots=True)
+class DeleteAction:
+    target_description_contains: str
+    choice: str  # "ORPHAN" | "CASCADE"
+
+
+@dataclass(slots=True)
 class Fixture:
     fixture_id: str
     version: str
@@ -118,6 +124,7 @@ class Fixture:
     retrieve: FixtureRetrieve | None
     invariants: dict[str, Any]
     judge_prompts: list[str]
+    post_consolidate_actions: list[DeleteAction] = field(default_factory=list)
 
 
 def load_fixture(path: Path) -> Fixture:
@@ -169,6 +176,15 @@ def load_fixture(path: Path) -> Fixture:
                 raw["retrieve"].get("force_load_user_thoughts", 0)
             ),
         )
+    actions: list[DeleteAction] = []
+    for a in raw.get("post_consolidate_actions") or []:
+        if a.get("kind") == "delete":
+            actions.append(
+                DeleteAction(
+                    target_description_contains=a["target_description_contains"],
+                    choice=a.get("choice", "ORPHAN").upper(),
+                )
+            )
     return Fixture(
         fixture_id=raw["fixture_id"],
         version=raw.get("version", "scripted"),
@@ -180,6 +196,7 @@ def load_fixture(path: Path) -> Fixture:
         retrieve=retrieve_spec,
         invariants=raw.get("invariants") or {},
         judge_prompts=list(raw.get("judge_prompts") or []),
+        post_consolidate_actions=actions,
     )
 
 
@@ -465,6 +482,34 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
 
     core_block_snapshot_after = _snapshot_core_blocks(engine, persona_id)
     episodic_state_after = _read_episodic_state(engine, persona_id)
+
+    # 4b. forget actions — applied after consolidate so seeded events with
+    # filling links to seed thoughts can be deleted via ORPHAN/CASCADE.
+    if fixture.post_consolidate_actions:
+        from echovessel.memory.forget import DeletionChoice, delete_concept_node
+
+        with DbSession(engine) as db:
+            for act in fixture.post_consolidate_actions:
+                target = next(
+                    (
+                        n
+                        for n in db.exec(
+                            select(ConceptNode).where(
+                                ConceptNode.persona_id == persona_id,
+                                ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+                            )
+                        )
+                        if act.target_description_contains in n.description
+                    ),
+                    None,
+                )
+                if target is not None:
+                    delete_concept_node(
+                        db=db,
+                        node_id=target.id,
+                        choice=DeletionChoice[act.choice],
+                        backend=backend,
+                    )
 
     # 5. retrieve (E6). Vector hits come first; FTS fallback rows are
     # appended after so callers that index by position can rely on
@@ -898,6 +943,7 @@ def render_evidence(fixture: Fixture, result: EvalResult) -> str:
 
 __all__ = [
     "FIXTURE_ROOT",
+    "DeleteAction",
     "Fixture",
     "FixtureSeed",
     "FixtureTurn",

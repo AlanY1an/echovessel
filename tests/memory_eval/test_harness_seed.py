@@ -212,3 +212,43 @@ invariants: {}
     fix = load_fixture(path)
     assert fix.retrieve is not None
     assert fix.retrieve.force_load_user_thoughts == 0
+
+
+def test_post_consolidate_actions_round_trips_through_load_fixture(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path,
+        """
+fixture_id: t_post_actions
+version: scripted
+seed:
+  persona_block: 陪伴
+turns: []
+post_consolidate_actions:
+  - kind: delete
+    target_description_contains: foo
+    choice: ORPHAN
+invariants: {}
+""",
+    )
+    fix = load_fixture(path)
+    assert len(fix.post_consolidate_actions) == 1
+    assert fix.post_consolidate_actions[0].target_description_contains == "foo"
+    assert fix.post_consolidate_actions[0].choice == "ORPHAN"
+
+
+def test_post_consolidate_actions_defaults_to_empty(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+fixture_id: t_no_post_actions
+version: scripted
+seed:
+  persona_block: 陪伴
+turns: []
+invariants: {}
+""",
+    )
+    fix = load_fixture(path)
+    assert fix.post_consolidate_actions == []
