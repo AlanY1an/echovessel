@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { getModelCatalog } from '../../../api/client'
 import type { ModelCatalogEntry } from '../../../api/types'
@@ -47,6 +48,7 @@ const wrapperStyle = {
 }
 
 export function ModelPicker({ provider, baseUrl, value, onChange }: Props) {
+  const { t } = useTranslation()
   const [catalog, setCatalog] = useState<ModelCatalogEntry[]>([])
   const [loadError, setLoadError] = useState<string | null>(null)
   const [customMode, setCustomMode] = useState(false)
@@ -59,7 +61,8 @@ export function ModelPicker({ provider, baseUrl, value, onChange }: Props) {
         if (!cancelled) setCatalog(rows)
       })
       .catch((err) => {
-        if (!cancelled) setLoadError(String(err))
+        if (!cancelled)
+          setLoadError(err instanceof Error ? err.message : String(err))
       })
     return () => {
       cancelled = true
@@ -83,12 +86,12 @@ export function ModelPicker({ provider, baseUrl, value, onChange }: Props) {
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="model id (e.g. openrouter/anthropic/claude-3.5-sonnet)"
+          placeholder={t('admin.config_tab.model_picker_placeholder_custom_input')}
           aria-label="model"
           style={configInputStyle}
         />
         <p style={hintStyle}>
-          Custom base_url detected — pricing falls back to the role-based estimate.
+          {t('admin.config_tab.model_picker_hint_custom_base_url')}
         </p>
       </div>
     )
@@ -118,7 +121,7 @@ export function ModelPicker({ provider, baseUrl, value, onChange }: Props) {
         style={configInputStyle}
       >
         <option value="" disabled>
-          Select a model…
+          {t('admin.config_tab.model_picker_placeholder_select')}
         </option>
         {catalog.map((entry) => {
           const hasPrice =
@@ -132,19 +135,25 @@ export function ModelPicker({ provider, baseUrl, value, onChange }: Props) {
             </option>
           )
         })}
-        <option value={CUSTOM_SENTINEL}>Custom…</option>
+        <option value={CUSTOM_SENTINEL}>
+          {t('admin.config_tab.model_picker_option_custom')}
+        </option>
       </select>
       {showCustomInput && (
         <input
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="custom model id"
+          placeholder={t('admin.config_tab.model_picker_placeholder_custom_input_simple')}
           aria-label="custom model"
           style={configInputStyle}
         />
       )}
-      {loadError && <p style={errorStyle}>could not load catalog: {loadError}</p>}
+      {loadError && (
+        <p style={errorStyle}>
+          {t('admin.config_tab.model_picker_error_load_catalog', { err: loadError })}
+        </p>
+      )}
     </div>
   )
 }
