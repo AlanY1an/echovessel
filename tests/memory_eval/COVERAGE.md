@@ -2,8 +2,8 @@
 
 > Each row maps to one YAML fixture under `fixtures/scripted/` (single-session)
 > or `fixtures/multi_session/` (Phase 4). Status legend:
-> - `✅` shipped
-> - `➕` planned in `develop-docs/initiatives/_active/2026-04-memory-eval-suite/plan.md`
+> - `✅` shipped + verified against a live LLM run
+> - `➕` fixture YAML written; awaiting live-LLM verification
 > - `🌐` requires multi-session runner
 > - `🔧` needs new invariant field (added in Task 2 of plan)
 
