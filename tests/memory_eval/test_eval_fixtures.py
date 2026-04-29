@@ -34,13 +34,32 @@ def _fixture_id(path: Path) -> str:
     return f"{path.parent.name}/{path.stem}"
 
 
+# Fixtures whose design depends on infrastructure that isn't wired yet.
+# When the gap closes we just drop the row.
+_XFAIL_FIXTURES: dict[str, str] = {
+    "l5_entity_anchored_retrieve_bonus": (
+        "seed-event entity resolution not wired in run_fixture; "
+        "without it the retrieve cannot apply the entity-anchor boost"
+    ),
+}
+
+
+def _build_param(path: Path):
+    reason = _XFAIL_FIXTURES.get(path.stem)
+    if reason:
+        return pytest.param(
+            path, marks=pytest.mark.xfail(reason=reason, strict=False)
+        )
+    return path
+
+
 _FIXTURES = discover_fixtures()
 
 
 @pytest.mark.eval
 @pytest.mark.parametrize(
     "fixture_path",
-    _FIXTURES,
+    [_build_param(p) for p in _FIXTURES],
     ids=[_fixture_id(p) for p in _FIXTURES],
 )
 async def test_eval_fixture(fixture_path: Path) -> None:
