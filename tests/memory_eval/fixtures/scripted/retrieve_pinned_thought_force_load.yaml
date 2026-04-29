@@ -1,0 +1,22 @@
+fixture_id: retrieve_pinned_thought_force_load
+version: scripted
+generated_at: null
+model: null
+scenario: force_load_user_thoughts=2 always returns 2 user thoughts regardless of query
+seed:
+  persona_block: 陪伴
+  seed_thoughts:
+    - description: pinned thought A
+      relational_tags: [pinned]
+    - description: pinned thought B
+      relational_tags: [pinned]
+retrieve:
+  query: 完全无关的查询
+  top_k: 5
+  force_load_user_thoughts: 2
+invariants:
+  top_k_must_contain_descriptions_all:
+    - pinned thought A
+    - pinned thought B
+  top_k_for_check: 5
+judge_prompts: []

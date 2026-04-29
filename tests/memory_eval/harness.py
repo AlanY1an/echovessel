@@ -502,6 +502,15 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
             }
             for rm in r.fts_fallback
         )
+        retrieved.extend(
+            {
+                "id": n.id,
+                "description": n.description,
+                "relevance": 0.0,
+                "source": "pinned",
+            }
+            for n in r.pinned_thoughts
+        )
 
     # 6. collect everything we just wrote
     with DbSession(engine) as db:

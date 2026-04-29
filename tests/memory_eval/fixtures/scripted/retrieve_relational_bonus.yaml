@@ -1,0 +1,20 @@
+fixture_id: retrieve_relational_bonus
+version: scripted
+generated_at: null
+model: null
+scenario: identity-bearing event ranks above neutral on tied query
+seed:
+  persona_block: 陪伴
+  seed_events:
+    - description: 用户养了一只猫
+      relational_tags: []
+    - description: 用户是兽医 · 在动物医院工作
+      relational_tags: [identity-bearing]
+retrieve:
+  query: 用户和动物的关系
+  top_k: 2
+invariants:
+  top_k_must_contain_descriptions_all:
+    - 兽医
+  top_k_for_check: 1
+judge_prompts: []
