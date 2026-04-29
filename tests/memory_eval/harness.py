@@ -745,6 +745,15 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
                 f"episodic_state_mood_changed: mood stayed {before!r}"
             )
 
+    if inv.get("episodic_state_mood_unchanged"):
+        before = (result.episodic_state_before or {}).get("mood")
+        after = (result.episodic_state_after or {}).get("mood")
+        if before != after:
+            violations.append(
+                f"episodic_state_mood_unchanged: mood drifted "
+                f"{before!r} -> {after!r}"
+            )
+
     if inv.get("filling_min") is not None:
         # Any SINGLE thought must cite at least ``filling_min`` events.
         by_parent: dict[int, int] = {}

@@ -348,3 +348,28 @@ def test_episodic_state_mood_changed_fails_when_unchanged():
     violations = check_invariants(fix, res)
     assert len(violations) == 1
     assert "episodic_state_mood_changed" in violations[0]
+
+
+# ---------------------------------------------------------------------------
+# Field 12 · episodic_state_mood_unchanged
+# ---------------------------------------------------------------------------
+
+
+def test_episodic_state_mood_unchanged_passes():
+    res = _result(
+        episodic_state_before={"mood": "calm"},
+        episodic_state_after={"mood": "calm"},
+    )
+    fix = _fixture({"episodic_state_mood_unchanged": True})
+    assert check_invariants(fix, res) == []
+
+
+def test_episodic_state_mood_unchanged_fails_when_drifted():
+    res = _result(
+        episodic_state_before={"mood": "calm"},
+        episodic_state_after={"mood": "anxious"},
+    )
+    fix = _fixture({"episodic_state_mood_unchanged": True})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "episodic_state_mood_unchanged" in violations[0]
