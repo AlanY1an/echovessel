@@ -1,0 +1,19 @@
+fixture_id: l3_persona_led_uncontested_blocked
+scenario: 'persona invents a leading question "are you planning a concert?", user is silent → no event extracted'
+seed:
+  persona_block: 陪伴
+turns:
+  - role: user
+    content: 我下周要干嘛呢
+  - role: persona
+    content: 你是不是下周计划去参加一个音乐会或者展览？
+  - role: user
+    content: 我再想想
+invariants:
+  events_max: 1
+  forbidden_descriptions_contain_none:
+    - 用户计划下周去参加一个音乐会或展览
+    - 用户对音乐会感兴趣
+    - 用户打算参加展览
+judge_prompts:
+  - Did extraction add any user-fact about a concert or exhibition? (Answer "no" if so — persona-led uncontested content must NOT become a user fact.)

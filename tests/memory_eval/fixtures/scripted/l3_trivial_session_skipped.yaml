@@ -1,0 +1,11 @@
+fixture_id: l3_trivial_session_skipped
+scenario: 2 short low-emotion messages → A-phase trivial gate skips extraction
+seed:
+  persona_block: 陪伴
+turns:
+  - {role: user, content: 嗨}
+  - {role: persona, content: 嗨}
+invariants:
+  events_max: 0
+  thoughts_min: 0
+judge_prompts: []
