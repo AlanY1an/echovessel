@@ -291,3 +291,66 @@ def test_patch_empty_body_returns_400(tmp_path: Path) -> None:
     with client:
         resp = client.patch("/api/admin/config", json={})
     assert resp.status_code == 400, resp.text
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/admin/config — env-var presence check (Task 6)
+# ---------------------------------------------------------------------------
+
+
+def test_patch_rejects_missing_env_var(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the patch sets `llm.api_key_env` to a name that isn't in os.environ,
+    the server returns 422 with a field-targeted error so the UI can flag
+    the input. We do NOT want the patch to silently succeed and have the
+    next LLM call fail at runtime instead."""
+    monkeypatch.delenv("DEFINITELY_NOT_SET_KEY", raising=False)
+    rt, client, _ = _build(tmp_path)
+    with client:
+        resp = client.patch(
+            "/api/admin/config",
+            json={
+                "llm": {
+                    "provider": "anthropic",
+                    "api_key_env": "DEFINITELY_NOT_SET_KEY",
+                }
+            },
+        )
+    assert resp.status_code == 422, resp.text
+    body = resp.json()
+    detail = body["detail"]
+    assert any(
+        err.get("field") == "llm.api_key_env" and "DEFINITELY_NOT_SET_KEY" in err.get("msg", "")
+        for err in detail
+    )
+
+
+def test_patch_accepts_present_env_var(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_KEY_THAT_EXISTS", "stub-value")
+    rt, client, _ = _build(tmp_path)
+    with client:
+        resp = client.patch(
+            "/api/admin/config",
+            json={
+                "llm": {
+                    "provider": "anthropic",
+                    "api_key_env": "FAKE_KEY_THAT_EXISTS",
+                }
+            },
+        )
+    assert resp.status_code == 200, resp.text
+
+
+def test_patch_skips_env_check_for_stub_provider(tmp_path: Path) -> None:
+    rt, client, _ = _build(tmp_path)
+    with client:
+        resp = client.patch(
+            "/api/admin/config",
+            json={"llm": {"provider": "stub", "api_key_env": ""}},
+        )
+    assert resp.status_code == 200, resp.text
