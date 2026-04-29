@@ -95,6 +95,10 @@ class TestReloadMatrixLLM:
             ("temperature = 0.7", "temperature = 0.9"),
             ("max_tokens = 1024", "max_tokens = 4096"),
             ("timeout_seconds = 30", "timeout_seconds = 60"),
+            (
+                'api_key_env = ""',
+                'base_url = "http://localhost:11434/v1"\napi_key_env = ""',
+            ),
         ],
     )
     async def test_llm_field_triggers_provider_rebuild(self, tmp_path, monkeypatch, replacement):
@@ -262,6 +266,7 @@ class TestReloadMatrixAllowlistInventory:
             "llm.provider",
             "llm.model",
             "llm.api_key_env",
+            "llm.base_url",
             "llm.timeout_seconds",
             "llm.temperature",
             "llm.max_tokens",

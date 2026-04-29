@@ -21,6 +21,7 @@ HOT_RELOADABLE_CONFIG_PATHS: frozenset[str] = frozenset(
         "llm.provider",
         "llm.model",
         "llm.api_key_env",
+        "llm.base_url",
         "llm.timeout_seconds",
         "llm.temperature",
         "llm.max_tokens",

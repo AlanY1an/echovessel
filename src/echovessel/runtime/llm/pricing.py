@@ -2,7 +2,7 @@
 
 Lookup precedence:
 1. `provider == "stub"` -> 0.0 (stub is always free)
-2. `base_url` host in `_LOCAL_HOSTS` -> 0.0 (local-only inference)
+2. `base_url` host is a loopback / dev address -> 0.0 (local-only inference)
 3. `prices.lookup_price(provider, model)` is not None -> use those rates
 4. Else -> legacy role-based rate (`fast`/`main`/`judge`), falling back
    to `fast` if the role is unrecognized
@@ -16,31 +16,16 @@ add the model upstream in LiteLLM (or refresh the vendored JSON).
 
 from __future__ import annotations
 
-from urllib.parse import urlparse
-
+from echovessel.core.llm.endpoints import is_local_base_url
 from echovessel.core.llm.prices import lookup_price
 
 _FREE_PROVIDERS: frozenset[str] = frozenset({"stub"})
-
-_LOCAL_HOSTS: frozenset[str] = frozenset(
-    {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "::1"}
-)
 
 _ROLE_RATES_USD_PER_1K: dict[str, dict[str, float]] = {
     "fast": {"in": 0.00015, "out": 0.00060},
     "main": {"in": 0.0025, "out": 0.010},
     "judge": {"in": 0.0025, "out": 0.010},
 }
-
-
-def _is_local(base_url: str | None) -> bool:
-    if not base_url:
-        return False
-    try:
-        host = (urlparse(base_url).hostname or "").lower()
-    except ValueError:
-        return False
-    return host in _LOCAL_HOSTS
 
 
 def estimate_cost(
@@ -56,7 +41,7 @@ def estimate_cost(
 ) -> float:
     if provider in _FREE_PROVIDERS:
         return 0.0
-    if _is_local(base_url):
+    if is_local_base_url(base_url):
         return 0.0
 
     price = lookup_price(provider, model)
