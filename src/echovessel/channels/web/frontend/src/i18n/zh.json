@@ -493,7 +493,9 @@
       "model_picker_placeholder_select": "选择一个模型…",
       "model_picker_option_custom": "自定义…",
       "model_picker_placeholder_custom_input_simple": "自定义 model id",
-      "model_picker_error_load_catalog": "无法加载目录:{{err}}"
+      "model_picker_error_load_catalog": "无法加载目录:{{err}}",
+      "model_picker_price_per_1k": "输入 ${{input}} / 输出 ${{output}} / 1K",
+      "model_picker_price_unknown": "价格未知"
     },
     "channel_status": {
       "disabled": "未启用",

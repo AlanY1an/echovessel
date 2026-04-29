@@ -493,7 +493,9 @@
       "model_picker_placeholder_select": "Select a model…",
       "model_picker_option_custom": "Custom…",
       "model_picker_placeholder_custom_input_simple": "custom model id",
-      "model_picker_error_load_catalog": "could not load catalog: {{err}}"
+      "model_picker_error_load_catalog": "could not load catalog: {{err}}",
+      "model_picker_price_per_1k": "in ${{input}} / out ${{output}} per 1K",
+      "model_picker_price_unknown": "price unknown"
     },
     "channel_status": {
       "disabled": "Disabled",
