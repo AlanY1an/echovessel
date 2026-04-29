@@ -60,11 +60,9 @@ def lookup_price(provider: str, model: str | None) -> ModelPrice | None:
     litellm_prov = _OUR_TO_LITELLM_PROVIDER.get(provider)
     if litellm_prov is None:
         return None
-    for key in (model, f"{litellm_prov}/{model}"):
-        entry = _DATA.get(key)
-        if entry is None:
-            continue
-        if entry.get("litellm_provider") != litellm_prov:
-            continue
-        return _entry_to_price(entry)
-    return None
+    entry = _DATA.get(model)
+    if entry is None:
+        return None
+    if entry.get("litellm_provider") != litellm_prov:
+        return None
+    return _entry_to_price(entry)

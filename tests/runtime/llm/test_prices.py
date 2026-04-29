@@ -16,13 +16,6 @@ def test_lookup_price_known_openai_model_returns_rates() -> None:
     assert price.output_per_1k_usd > 0
 
 
-def test_lookup_price_handles_provider_prefixed_key() -> None:
-    """LiteLLM sometimes only keys models under `<provider>/<model>`.
-    Our loader must try both forms."""
-    price = lookup_price("anthropic", "claude-3-opus-20240229")
-    assert isinstance(price, ModelPrice)
-
-
 def test_lookup_price_unknown_model_returns_none() -> None:
     assert lookup_price("anthropic", "claude-imaginary-9-9") is None
 
