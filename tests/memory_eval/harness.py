@@ -584,6 +584,17 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
                 f"got {sorted(got)}"
             )
 
+    if inv.get("forbidden_descriptions_contain_none"):
+        forbidden = inv["forbidden_descriptions_contain_none"]
+        for e in result.events:
+            for f in forbidden:
+                if f in e["description"]:
+                    violations.append(
+                        f"forbidden_descriptions_contain_none: event {e['id']} "
+                        f"contains forbidden phrase {f!r}"
+                    )
+                    break
+
     if inv.get("filling_min") is not None:
         # Any SINGLE thought must cite at least ``filling_min`` events.
         by_parent: dict[int, int] = {}
