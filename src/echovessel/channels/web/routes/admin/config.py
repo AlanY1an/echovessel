@@ -20,6 +20,8 @@ from echovessel.core.config_paths import (
     HOT_RELOADABLE_CONFIG_PATHS,
     RESTART_REQUIRED_CONFIG_PATHS,
 )
+from echovessel.core.llm.catalog import PRESETS, presets_for
+from echovessel.core.llm.prices import lookup_price
 
 
 def register_config_routes(router: APIRouter, *, runtime: Any) -> None:
@@ -96,6 +98,35 @@ def register_config_routes(router: APIRouter, *, runtime: Any) -> None:
             },
             "channels": channels_section,
         }
+
+    # ---- GET /api/admin/config/models ----------------------------------
+    #
+    # Curated preset list used by the admin Model picker. Each row joins
+    # the (provider, model, display_name) tuple with the LiteLLM-derived
+    # price fields so the UI can render rates next to the option without
+    # a second round trip. Unknown models surface as null prices — the
+    # caller can still display them and fall back to the role rate.
+
+    @router.get("/api/admin/config/models")
+    async def get_model_catalog(provider: str | None = None) -> list[dict[str, object]]:
+        entries = presets_for(provider) if provider else PRESETS
+        rows: list[dict[str, object]] = []
+        for e in entries:
+            price = lookup_price(e.provider, e.model)
+            rows.append(
+                {
+                    "provider": e.provider,
+                    "model": e.model,
+                    "display_name": e.display_name,
+                    "input_per_1k_usd": price.input_per_1k_usd if price else None,
+                    "output_per_1k_usd": price.output_per_1k_usd if price else None,
+                    "cache_read_per_1k_usd": price.cache_read_per_1k_usd if price else None,
+                    "cache_creation_per_1k_usd": (
+                        price.cache_creation_per_1k_usd if price else None
+                    ),
+                }
+            )
+        return rows
 
     # ---- PATCH /api/admin/config ---------------------------------------
     #
