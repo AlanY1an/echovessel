@@ -482,6 +482,12 @@ def _serialise_node(n: ConceptNode) -> dict[str, Any]:
         "emotion_tags": list(n.emotion_tags or []),
         "relational_tags": list(n.relational_tags or []),
         "source_session_id": n.source_session_id,
+        "event_time_start": (
+            n.event_time_start.isoformat() if n.event_time_start else None
+        ),
+        "event_time_end": (
+            n.event_time_end.isoformat() if n.event_time_end else None
+        ),
     }
 
 
@@ -547,6 +553,16 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
             violations.append(
                 f"must_have_relational_tag_any: wanted any of {sorted(wanted)} "
                 f"· got {sorted(got)}"
+            )
+
+    if inv.get("must_have_event_time"):
+        events_without_time = [
+            e for e in result.events if not e.get("event_time_start")
+        ]
+        if events_without_time:
+            violations.append(
+                f"must_have_event_time: {len(events_without_time)} event(s) "
+                f"lack event_time_start"
             )
 
     if inv.get("filling_min") is not None:
