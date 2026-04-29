@@ -626,6 +626,20 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
             f"entity_count_max {inv['entity_count_max']} < {len(result.entities)}"
         )
 
+    if inv.get("entity_merge_status_eq"):
+        by_name = {e["canonical_name"]: e for e in result.entities}
+        for name, want in inv["entity_merge_status_eq"].items():
+            ent = by_name.get(name)
+            if ent is None:
+                violations.append(
+                    f"entity_merge_status_eq: entity {name!r} not found"
+                )
+            elif ent.get("merge_status") != want:
+                violations.append(
+                    f"entity_merge_status_eq: {name!r} status "
+                    f"{ent.get('merge_status')!r} != {want!r}"
+                )
+
     if inv.get("filling_min") is not None:
         # Any SINGLE thought must cite at least ``filling_min`` events.
         by_parent: dict[int, int] = {}
