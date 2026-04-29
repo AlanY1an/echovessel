@@ -656,11 +656,11 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
     if inv.get("forbidden_descriptions_contain_none"):
         forbidden = inv["forbidden_descriptions_contain_none"]
         for e in result.events:
-            for f in forbidden:
-                if f in e["description"]:
+            for phrase in forbidden:
+                if phrase in e["description"]:
                     violations.append(
                         f"forbidden_descriptions_contain_none: event {e['id']} "
-                        f"contains forbidden phrase {f!r}"
+                        f"contains forbidden phrase {phrase!r}"
                     )
                     break
 
