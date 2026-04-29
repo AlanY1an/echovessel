@@ -1,0 +1,23 @@
+fixture_id: l2_fts_finds_literal_phrase
+version: scripted
+generated_at: null
+model: null
+scenario: query word appears only in raw recall_messages, never in extracted events → FTS fallback finds it
+seed:
+  persona_block: 陪伴
+  seed_events:
+    - description: 用户喜欢做饭
+    - description: 用户养了一只狗
+turns:
+  - role: user
+    content: 我昨天买了个 raspberry-pi-4 想搭家庭服务器
+  - role: persona
+    content: "..."
+retrieve:
+  query: raspberry-pi-4
+  top_k: 5
+invariants:
+  events_min: 0
+  top_k_must_contain_descriptions_all:
+    - raspberry-pi-4
+judge_prompts: []
