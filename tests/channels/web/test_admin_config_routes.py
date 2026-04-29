@@ -354,3 +354,43 @@ def test_patch_skips_env_check_for_stub_provider(tmp_path: Path) -> None:
             json={"llm": {"provider": "stub", "api_key_env": ""}},
         )
     assert resp.status_code == 200, resp.text
+
+
+def test_patch_local_base_url_skips_env_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A local-host base_url means we're talking to Ollama / llama.cpp /
+    similar — no API key required, env var validation must not 422."""
+    monkeypatch.delenv("DEFINITELY_NOT_SET_KEY", raising=False)
+    rt, client, _ = _build(tmp_path)
+    with client:
+        resp = client.patch(
+            "/api/admin/config",
+            json={
+                "llm": {
+                    "provider": "openai_compat",
+                    "base_url": "http://localhost:11434/v1",
+                    "api_key_env": "DEFINITELY_NOT_SET_KEY",
+                }
+            },
+        )
+    assert resp.status_code == 200, resp.text
+
+
+def test_patch_rejects_empty_api_key_env_for_non_stub(tmp_path: Path) -> None:
+    """Flipping provider to anthropic with no api_key_env name must 422
+    with the same field-targeted shape as the missing-env-var case."""
+    rt, client, _ = _build(tmp_path)
+    with client:
+        resp = client.patch(
+            "/api/admin/config",
+            json={"llm": {"provider": "anthropic", "api_key_env": ""}},
+        )
+    assert resp.status_code == 422, resp.text
+    body = resp.json()
+    detail = body["detail"]
+    assert any(
+        err.get("field") == "llm.api_key_env" and "anthropic" in err.get("msg", "")
+        for err in detail
+    )

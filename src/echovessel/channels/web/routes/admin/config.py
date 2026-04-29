@@ -21,6 +21,7 @@ from echovessel.core.config_paths import (
     RESTART_REQUIRED_CONFIG_PATHS,
 )
 from echovessel.core.llm.catalog import PRESETS, presets_for
+from echovessel.core.llm.endpoints import is_local_base_url
 from echovessel.core.llm.prices import lookup_price
 
 
@@ -195,13 +196,18 @@ def register_config_routes(router: APIRouter, *, runtime: Any) -> None:
         # only api_key_env without touching provider). A structured
         # 422 is preferred over the Pydantic stringified error so the
         # frontend can render the message inline next to the input.
+        # Field-targeted detail shape (`detail: [{field, msg}]`) is deliberate
+        # here; other 4xx in this file use plain string detail. The frontend's
+        # admin form branches on detail type to render inline-vs-toast errors.
         llm_section = body.get("llm")
         if isinstance(llm_section, dict):
             current_llm = runtime.ctx.config.llm
             proposed_provider = llm_section.get("provider", current_llm.provider)
             proposed_env = llm_section.get("api_key_env", current_llm.api_key_env)
+            proposed_base_url = llm_section.get("base_url", current_llm.base_url)
             if (
                 proposed_provider != "stub"
+                and not is_local_base_url(proposed_base_url)
                 and proposed_env
                 and os.environ.get(proposed_env) is None
             ):
@@ -214,6 +220,24 @@ def register_config_routes(router: APIRouter, *, runtime: Any) -> None:
                                 f"env var {proposed_env!r} is not set in the "
                                 "daemon's environment; export it (or pick a "
                                 "different name) before saving"
+                            ),
+                        }
+                    ],
+                )
+            if (
+                proposed_provider != "stub"
+                and not is_local_base_url(proposed_base_url)
+                and not proposed_env
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=[
+                        {
+                            "field": "llm.api_key_env",
+                            "msg": (
+                                f"provider {proposed_provider!r} requires "
+                                "llm.api_key_env to name an env var holding the "
+                                "API key; this field is currently empty"
                             ),
                         }
                     ],
