@@ -338,6 +338,31 @@ def test_top_k_must_contain_descriptions_all_defaults_to_full_retrieved():
     assert check_invariants(fix, res) == []
 
 
+def test_top_k_must_contain_descriptions_all_matches_fts_source_entries():
+    # FTS fallback entries surface in ``retrieved`` with ``source: "fts"``
+    # and ``relevance: 0.0`` — the description-substring invariant should
+    # still match them so a query word that lives only in raw recall
+    # messages can satisfy ``top_k_must_contain_descriptions_all``.
+    res = _result(
+        retrieved=[
+            {
+                "id": 1,
+                "description": "用户喜欢做饭",
+                "relevance": 0.6,
+                "source": "vector",
+            },
+            {
+                "id": 2,
+                "description": "我昨天买了个 raspberry-pi-4",
+                "relevance": 0.0,
+                "source": "fts",
+            },
+        ]
+    )
+    fix = _fixture({"top_k_must_contain_descriptions_all": ["raspberry-pi-4"]})
+    assert check_invariants(fix, res) == []
+
+
 def test_top_k_must_not_contain_descriptions_any_defaults_to_full_retrieved():
     res = _result(
         retrieved=[
