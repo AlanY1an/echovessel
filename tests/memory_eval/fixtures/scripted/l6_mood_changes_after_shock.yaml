@@ -1,0 +1,21 @@
+fixture_id: l6_mood_changes_after_shock
+version: scripted
+generated_at: null
+model: null
+scenario: session containing heavy emotional disclosure updates persona.episodic_state.mood
+seed:
+  persona_block: 陪伴
+  episodic_state_initial:
+    mood: neutral
+    energy: 5
+turns:
+  - role: user
+    content: 我妈刚刚走了 · 三天前 · 还没缓过来
+  - role: persona
+    content: "..."
+invariants:
+  events_min: 1
+  shock_event_present: true
+  episodic_state_mood_changed: true
+judge_prompts:
+  - Is the new mood somber / grieving / heavy (not "neutral" or "happy")?
