@@ -427,3 +427,36 @@ def test_episodic_state_mood_unchanged_fails_when_drifted():
     violations = check_invariants(fix, res)
     assert len(violations) == 1
     assert "episodic_state_mood_unchanged" in violations[0]
+
+
+# ---------------------------------------------------------------------------
+# Field 13 · thoughts_max
+# ---------------------------------------------------------------------------
+
+
+def _thought(**overrides) -> dict:
+    base = {
+        "id": 1,
+        "type": "thought",
+        "description": "...",
+        "emotional_impact": 0,
+        "emotion_tags": [],
+        "relational_tags": [],
+        "source_session_id": "s",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_thoughts_max_passes_when_under_limit():
+    res = _result(thoughts=[_thought()])
+    fix = _fixture({"thoughts_max": 1})
+    assert check_invariants(fix, res) == []
+
+
+def test_thoughts_max_fails_when_over_limit():
+    res = _result(thoughts=[_thought(id=1), _thought(id=2)])
+    fix = _fixture({"thoughts_max": 1})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "thoughts_max" in violations[0]
