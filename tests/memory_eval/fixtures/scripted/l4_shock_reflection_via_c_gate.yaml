@@ -1,0 +1,19 @@
+fixture_id: l4_shock_reflection_via_c_gate
+version: scripted
+generated_at: null
+model: null
+scenario: a SHOCK-level disclosure (impact=-9) triggers immediate reflection via C → E gate
+seed:
+  persona_block: 陪伴
+turns:
+  - role: user
+    content: 我刚刚发现我得了癌症 · 还没有跟任何人说
+  - role: persona
+    content: "..."
+invariants:
+  events_min: 1
+  shock_event_present: true
+  reflection_triggered: true
+  thoughts_min: 1
+judge_prompts:
+  - Does the generated thought reflect on the gravity of this disclosure (not just paraphrase the event)?

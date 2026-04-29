@@ -1,0 +1,28 @@
+fixture_id: l4_hard_limit_3_per_24h
+version: scripted
+generated_at: null
+model: null
+scenario: 3 thoughts already exist in the last 24h · a 4th SHOCK in this session is suppressed
+seed:
+  persona_block: 陪伴
+  seed_thoughts:
+    - description: 用户最近在思考职业方向
+      emotional_impact: -3
+      created_at_offset_hours: -10
+    - description: 用户对未来感到迷茫
+      emotional_impact: -4
+      created_at_offset_hours: -6
+    - description: 用户在自我怀疑
+      emotional_impact: -5
+      created_at_offset_hours: -2
+turns:
+  - role: user
+    content: 我刚刚被开除了 · 完全没想到
+  - role: persona
+    content: "..."
+invariants:
+  events_min: 1
+  shock_event_present: true
+  thoughts_min: 0
+  thoughts_max: 3
+judge_prompts: []
