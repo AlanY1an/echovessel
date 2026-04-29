@@ -72,3 +72,22 @@ def test_must_have_event_time_fails_when_event_lacks_time():
     violations = check_invariants(fix, res)
     assert len(violations) == 1
     assert "event_time" in violations[0]
+
+
+# ---------------------------------------------------------------------------
+# Field 2 · must_have_subject_any
+# ---------------------------------------------------------------------------
+
+
+def test_must_have_subject_any_passes():
+    res = _result(events=[_event(subject="persona")])
+    fix = _fixture({"must_have_subject_any": ["persona"]})
+    assert check_invariants(fix, res) == []
+
+
+def test_must_have_subject_any_fails_when_no_match():
+    res = _result(events=[_event(subject="user")])
+    fix = _fixture({"must_have_subject_any": ["persona"]})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "must_have_subject_any" in violations[0]
