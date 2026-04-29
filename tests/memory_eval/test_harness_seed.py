@@ -82,3 +82,53 @@ invariants: {}
     fix = load_fixture(path)
     assert fix.seed.persona_timezone is None
     assert fix.seed.persona_location is None
+
+
+def test_seed_thoughts_round_trips_through_load_fixture(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+fixture_id: t_seed_thoughts
+version: scripted
+seed:
+  persona_block: 陪伴
+  seed_thoughts:
+    - description: 用户最近在思考职业方向
+      emotional_impact: -3
+      emotion_tags: [anxious]
+      relational_tags: [unresolved]
+      created_at_offset_hours: -10
+    - description: 用户对未来感到迷茫
+      emotional_impact: -4
+      created_at_offset_hours: -6
+turns: []
+invariants: {}
+""",
+    )
+    fix = load_fixture(path)
+    assert len(fix.seed.seed_thoughts) == 2
+    first, second = fix.seed.seed_thoughts
+    assert first.description == "用户最近在思考职业方向"
+    assert first.emotional_impact == -3
+    assert first.emotion_tags == ["anxious"]
+    assert first.relational_tags == ["unresolved"]
+    assert first.created_at_offset_hours == -10.0
+    assert second.description == "用户对未来感到迷茫"
+    assert second.emotional_impact == -4
+    assert second.created_at_offset_hours == -6.0
+
+
+def test_seed_thoughts_defaults_to_empty(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+fixture_id: t_no_seed_thoughts
+version: scripted
+seed:
+  persona_block: 陪伴
+turns: []
+invariants: {}
+""",
+    )
+    fix = load_fixture(path)
+    assert fix.seed.seed_thoughts == []
