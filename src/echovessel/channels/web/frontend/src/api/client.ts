@@ -50,6 +50,7 @@ import type {
   MemorySearchType,
   MemoryThought,
   MemoryTimelineResponse,
+  ModelCatalogEntry,
   OnboardingPayload,
   OnboardingResponse,
   PersonaBootstrapRequest,
@@ -456,6 +457,20 @@ export async function patchConfig(
     method: 'PATCH',
     body: JSON.stringify(payload),
   })
+}
+
+/**
+ * GET /api/admin/config/models — vendored LiteLLM preset catalog. Pass
+ * ``provider`` to filter to one provider's rows; omit for the full list.
+ * Price fields are null when the preset isn't in the bundled JSON snapshot.
+ */
+export async function getModelCatalog(
+  provider?: string,
+): Promise<ModelCatalogEntry[]> {
+  const url = provider
+    ? `/api/admin/config/models?provider=${encodeURIComponent(provider)}`
+    : '/api/admin/config/models'
+  return fetchJson<ModelCatalogEntry[]>(url)
 }
 
 /**
