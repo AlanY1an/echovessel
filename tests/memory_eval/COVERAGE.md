@@ -33,6 +33,7 @@
 | `l3_event_time_anchor_present` | extracted event has event_time_start/end (R4) | ➕ 🔧 |
 | `l3_persona_commitment_subject` | "我答应你 9 点提醒" → event subject=persona, type=intention (R3 PART C) | ➕ 🔧 |
 | `l3_trivial_session_skipped` | trivial gate (A phase) skips short low-emotion session | ➕ 🔧 |
+| `e8_bilingual` | mixed Chinese / English input → extraction follows majority language (zh) | ➕ |
 
 ## L4 · Thoughts (reflection)
 | ID | Behavior | Status |
