@@ -245,3 +245,42 @@ def test_core_block_count_unchanged_fails_when_content_drifts():
     violations = check_invariants(fix, res)
     assert len(violations) == 1
     assert "core_block_count_unchanged" in violations[0]
+
+
+# ---------------------------------------------------------------------------
+# Field 9 · top_k_must_contain_descriptions_all
+# ---------------------------------------------------------------------------
+
+
+def test_top_k_must_contain_descriptions_all_passes():
+    res = _result(
+        retrieved=[
+            {"id": 1, "description": "用户养了 Mochi", "relevance": 0.9},
+            {"id": 2, "description": "用户喜欢爬山", "relevance": 0.7},
+        ]
+    )
+    fix = _fixture(
+        {
+            "top_k_must_contain_descriptions_all": ["Mochi"],
+            "top_k_for_check": 2,
+        }
+    )
+    assert check_invariants(fix, res) == []
+
+
+def test_top_k_must_contain_descriptions_all_fails_when_missing():
+    res = _result(
+        retrieved=[
+            {"id": 1, "description": "用户喜欢做饭", "relevance": 0.9},
+            {"id": 2, "description": "用户喜欢爬山", "relevance": 0.7},
+        ]
+    )
+    fix = _fixture(
+        {
+            "top_k_must_contain_descriptions_all": ["Mochi"],
+            "top_k_for_check": 2,
+        }
+    )
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "top_k_must_contain_descriptions_all" in violations[0]

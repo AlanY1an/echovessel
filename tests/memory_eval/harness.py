@@ -701,6 +701,18 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
             f"core_block_count_unchanged: blocks changed during consolidate · {diff}"
         )
 
+    if inv.get("top_k_must_contain_descriptions_all"):
+        wanted = inv["top_k_must_contain_descriptions_all"]
+        top = result.retrieved[: inv.get("top_k_for_check", 3)]
+        missing = [
+            w for w in wanted if not any(w in m["description"] for m in top)
+        ]
+        if missing:
+            violations.append(
+                f"top_k_must_contain_descriptions_all: missing {missing} "
+                f"from top-{len(top)}"
+            )
+
     if inv.get("filling_min") is not None:
         # Any SINGLE thought must cite at least ``filling_min`` events.
         by_parent: dict[int, int] = {}
