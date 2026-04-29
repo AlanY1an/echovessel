@@ -73,6 +73,15 @@ class SeedEvent:
 
 
 @dataclass(slots=True)
+class SeedThought:
+    description: str
+    emotional_impact: int = 0
+    emotion_tags: list[str] = field(default_factory=list)
+    relational_tags: list[str] = field(default_factory=list)
+    created_at_offset_hours: float = -1.0
+
+
+@dataclass(slots=True)
 class FixtureSeed:
     persona_block: str = ""
     user_block: str = ""
@@ -80,6 +89,7 @@ class FixtureSeed:
     persona_timezone: str | None = None
     persona_location: str | None = None
     seed_events: list[SeedEvent] = field(default_factory=list)
+    seed_thoughts: list[SeedThought] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -128,6 +138,18 @@ def load_fixture(path: Path) -> Fixture:
                 ),
             )
             for e in (seed_raw.get("seed_events") or [])
+        ],
+        seed_thoughts=[
+            SeedThought(
+                description=t["description"],
+                emotional_impact=int(t.get("emotional_impact", 0)),
+                emotion_tags=list(t.get("emotion_tags") or []),
+                relational_tags=list(t.get("relational_tags") or []),
+                created_at_offset_hours=float(
+                    t.get("created_at_offset_hours", -1.0)
+                ),
+            )
+            for t in (seed_raw.get("seed_thoughts") or [])
         ],
     )
     turns = [
@@ -369,6 +391,24 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
             db.commit()
             db.refresh(node)
             backend.insert_vector(node.id, embed_fn(se.description))
+
+        # 2b. pre-seed thoughts (L4 hard-limit fixtures)
+        for st in fixture.seed.seed_thoughts:
+            created = now + timedelta(hours=st.created_at_offset_hours)
+            node = ConceptNode(
+                persona_id=persona_id,
+                user_id=user_id,
+                type=NodeType.THOUGHT,
+                description=st.description,
+                emotional_impact=st.emotional_impact,
+                emotion_tags=st.emotion_tags,
+                relational_tags=st.relational_tags,
+                created_at=created,
+            )
+            db.add(node)
+            db.commit()
+            db.refresh(node)
+            backend.insert_vector(node.id, embed_fn(st.description))
 
     core_block_snapshot_before = _snapshot_core_blocks(engine, persona_id)
     episodic_state_before = _read_episodic_state(engine, persona_id)
@@ -834,6 +874,7 @@ __all__ = [
     "FixtureTurn",
     "FixtureRetrieve",
     "SeedEvent",
+    "SeedThought",
     "EvalResult",
     "build_live_llm",
     "check_invariants",
