@@ -488,6 +488,7 @@ def _serialise_node(n: ConceptNode) -> dict[str, Any]:
         "event_time_end": (
             n.event_time_end.isoformat() if n.event_time_end else None
         ),
+        "subject": n.subject,
     }
 
 
@@ -563,6 +564,15 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
             violations.append(
                 f"must_have_event_time: {len(events_without_time)} event(s) "
                 f"lack event_time_start"
+            )
+
+    if inv.get("must_have_subject_any"):
+        wanted = set(inv["must_have_subject_any"])
+        got = {e.get("subject") for e in result.events if e.get("subject")}
+        if not wanted & got:
+            violations.append(
+                f"must_have_subject_any: wanted any of {sorted(wanted)} · "
+                f"got {sorted(got)}"
             )
 
     if inv.get("filling_min") is not None:
