@@ -1,0 +1,24 @@
+fixture_id: forget_orphan_keeps_thoughts
+version: scripted
+generated_at: null
+model: null
+scenario: delete event with ORPHAN → linked thoughts survive marked orphaned
+seed:
+  persona_block: 陪伴
+  seed_events:
+    - description: 用户养了一只猫叫 Mochi
+  seed_thoughts:
+    - description: 用户对宠物有很深的情感连结
+      filling:
+        - parent_description_contains: Mochi
+turns:
+  - {role: user, content: 嗨}
+  - {role: persona, content: 嗨}
+post_consolidate_actions:
+  - kind: delete
+    target_description_contains: Mochi
+    choice: ORPHAN
+invariants:
+  events_max: 0
+  thoughts_min: 1
+judge_prompts: []
