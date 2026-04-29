@@ -173,3 +173,30 @@ def test_entity_count_max_fails_when_over_cap():
     violations = check_invariants(fix, res)
     assert len(violations) == 1
     assert "entity_count_max" in violations[0]
+
+
+# ---------------------------------------------------------------------------
+# Field 6 · entity_merge_status_eq
+# ---------------------------------------------------------------------------
+
+
+def test_entity_merge_status_eq_passes():
+    res = _result(entities=[_entity("Mochi", merge_status="confirmed")])
+    fix = _fixture({"entity_merge_status_eq": {"Mochi": "confirmed"}})
+    assert check_invariants(fix, res) == []
+
+
+def test_entity_merge_status_eq_fails_on_mismatch():
+    res = _result(entities=[_entity("Mochi", merge_status="uncertain")])
+    fix = _fixture({"entity_merge_status_eq": {"Mochi": "confirmed"}})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "entity_merge_status_eq" in violations[0]
+
+
+def test_entity_merge_status_eq_fails_when_entity_missing():
+    res = _result(entities=[])
+    fix = _fixture({"entity_merge_status_eq": {"Mochi": "confirmed"}})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "entity_merge_status_eq" in violations[0]
