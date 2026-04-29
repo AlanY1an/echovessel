@@ -1257,6 +1257,24 @@ export interface ConfigPatchResponse {
   restart_required: string[]
 }
 
+// Price fields are nullable: a preset may not yet exist in the
+// vendored LiteLLM JSON snapshot. The picker renders the price in
+// the option label only when it's present.
+export interface ModelCatalogEntry {
+  provider: string
+  model: string
+  display_name: string
+  input_per_1k_usd: number | null
+  output_per_1k_usd: number | null
+  cache_read_per_1k_usd: number | null
+  cache_creation_per_1k_usd: number | null
+}
+
+export interface AdminFieldError {
+  field: string
+  msg: string
+}
+
 // ─── Voice clone wizard (Worker λ) ──────────────────────────────────────
 
 /**
