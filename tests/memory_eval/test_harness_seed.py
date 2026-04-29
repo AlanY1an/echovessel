@@ -214,6 +214,49 @@ invariants: {}
     assert fix.retrieve.force_load_user_thoughts == 0
 
 
+def test_seed_thought_filling_round_trips_through_load_fixture(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path,
+        """
+fixture_id: t_seed_filling
+version: scripted
+seed:
+  persona_block: 陪伴
+  seed_thoughts:
+    - description: 用户对宠物有很深的情感连结
+      filling:
+        - parent_description_contains: Mochi
+turns: []
+invariants: {}
+""",
+    )
+    fix = load_fixture(path)
+    assert len(fix.seed.seed_thoughts) == 1
+    thought = fix.seed.seed_thoughts[0]
+    assert len(thought.filling) == 1
+    assert thought.filling[0].parent_description_contains == "Mochi"
+
+
+def test_seed_thought_filling_defaults_to_empty(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+fixture_id: t_no_seed_filling
+version: scripted
+seed:
+  persona_block: 陪伴
+  seed_thoughts:
+    - description: 任意想法
+turns: []
+invariants: {}
+""",
+    )
+    fix = load_fixture(path)
+    assert fix.seed.seed_thoughts[0].filling == []
+
+
 def test_post_consolidate_actions_round_trips_through_load_fixture(
     tmp_path: Path,
 ) -> None:
