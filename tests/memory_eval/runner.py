@@ -162,7 +162,10 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
     core_block_snapshot_before = _snapshot_core_blocks(engine, persona_id)
     episodic_state_before = _read_episodic_state(engine, persona_id)
 
-    # 3. ingest turns
+    # 3. ingest turns under the per-turn channel (defaults to "web").
+    # Cross-channel fixtures rely on the per-turn override to seed events
+    # via one channel and verify retrieval (which has no channel filter)
+    # surfaces them regardless.
     session_id: str | None = None
     with DbSession(engine) as db:
         for turn in fixture.turns:
@@ -171,7 +174,7 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
                 db,
                 persona_id,
                 user_id,
-                "web",
+                turn.channel,
                 role,
                 turn.content,
             )

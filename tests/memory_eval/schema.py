@@ -23,6 +23,7 @@ class SeedEvent:
     emotion_tags: list[str] = field(default_factory=list)
     relational_tags: list[str] = field(default_factory=list)
     created_at_offset_hours: float = -1.0
+    channel: str | None = None
 
 
 @dataclass(slots=True)
@@ -56,6 +57,7 @@ class FixtureSeed:
 class FixtureTurn:
     role: str
     content: str
+    channel: str = "web"
 
 
 @dataclass(slots=True)
@@ -121,6 +123,7 @@ def load_fixture(path: Path) -> Fixture:
                 created_at_offset_hours=float(
                     e.get("created_at_offset_hours", -1.0)
                 ),
+                channel=e.get("channel"),
             )
             for e in (seed_raw.get("seed_events") or [])
         ],
@@ -144,7 +147,11 @@ def load_fixture(path: Path) -> Fixture:
         ],
     )
     turns = [
-        FixtureTurn(role=t["role"], content=t["content"])
+        FixtureTurn(
+            role=t["role"],
+            content=t["content"],
+            channel=t.get("channel", "web"),
+        )
         for t in (raw.get("turns") or [])
     ]
     retrieve_spec = None

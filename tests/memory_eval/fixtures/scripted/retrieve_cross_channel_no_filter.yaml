@@ -2,11 +2,19 @@ fixture_id: retrieve_cross_channel_no_filter
 version: scripted
 generated_at: null
 model: null
-scenario: event written from web channel must be retrievable when query is run from any channel
+scenario: events ingested via discord must surface for a query that runs without a channel filter (memory-layer 铁律 D4)
 seed:
   persona_block: 陪伴
   seed_events:
     - description: 用户提到下周有期末考
+      channel: discord
+turns:
+  - role: user
+    content: 我下周有期末考 · 周二第一场
+    channel: discord
+  - role: persona
+    content: "..."
+    channel: discord
 retrieve:
   query: 期末考
   top_k: 3

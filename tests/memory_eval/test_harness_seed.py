@@ -295,3 +295,48 @@ invariants: {}
     )
     fix = load_fixture(path)
     assert fix.post_consolidate_actions == []
+
+
+def test_turn_channel_round_trips_through_load_fixture(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+fixture_id: t_turn_channel
+version: scripted
+seed:
+  persona_block: 陪伴
+turns:
+  - role: user
+    content: hello from discord
+    channel: discord
+  - role: persona
+    content: hi
+invariants: {}
+""",
+    )
+    fix = load_fixture(path)
+    assert len(fix.turns) == 2
+    assert fix.turns[0].channel == "discord"
+    # Default holds when the field is omitted.
+    assert fix.turns[1].channel == "web"
+
+
+def test_seed_event_channel_round_trips_through_load_fixture(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+fixture_id: t_seed_channel
+version: scripted
+seed:
+  persona_block: 陪伴
+  seed_events:
+    - description: discord-disclosed fact
+      channel: discord
+    - description: untagged event
+turns: []
+invariants: {}
+""",
+    )
+    fix = load_fixture(path)
+    assert fix.seed.seed_events[0].channel == "discord"
+    assert fix.seed.seed_events[1].channel is None
