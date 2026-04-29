@@ -702,16 +702,19 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
             f"{result.recall_count}"
         )
 
-    if (
-        inv.get("core_block_count_unchanged")
-        and result.core_block_snapshot_before != result.core_block_snapshot_after
-    ):
-        diff = set(result.core_block_snapshot_after.items()) ^ set(
-            result.core_block_snapshot_before.items()
-        )
-        violations.append(
-            f"core_block_count_unchanged: blocks changed during consolidate · {diff}"
-        )
+    if inv.get("core_blocks_unchanged"):
+        before = result.core_block_snapshot_before
+        after = result.core_block_snapshot_after
+        if before != after:
+            all_keys = set(before) | set(after)
+            changes = [
+                f"{k}: {before.get(k, '<absent>')} -> {after.get(k, '<absent>')}"
+                for k in sorted(all_keys)
+                if before.get(k) != after.get(k)
+            ]
+            violations.append(
+                "core_blocks_unchanged: " + " · ".join(changes)
+            )
 
     if inv.get("top_k_must_contain_descriptions_all"):
         wanted = inv["top_k_must_contain_descriptions_all"]
