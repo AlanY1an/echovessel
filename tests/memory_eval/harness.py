@@ -732,7 +732,7 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
         forbidden = inv["top_k_must_not_contain_descriptions_any"]
         top = result.retrieved[: inv.get("top_k_for_check", len(result.retrieved))]
         leaked = [
-            f for f in forbidden if any(f in m["description"] for m in top)
+            phrase for phrase in forbidden if any(phrase in m["description"] for m in top)
         ]
         if leaked:
             violations.append(
