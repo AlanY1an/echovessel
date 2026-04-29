@@ -132,3 +132,40 @@ invariants: {}
     )
     fix = load_fixture(path)
     assert fix.seed.seed_thoughts == []
+
+
+def test_episodic_state_initial_round_trips_through_load_fixture(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path,
+        """
+fixture_id: t_episodic_initial
+version: scripted
+seed:
+  persona_block: 陪伴
+  episodic_state_initial:
+    mood: somber
+    energy: 3
+turns: []
+invariants: {}
+""",
+    )
+    fix = load_fixture(path)
+    assert fix.seed.episodic_state_initial == {"mood": "somber", "energy": 3}
+
+
+def test_episodic_state_initial_defaults_to_none(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+fixture_id: t_no_episodic_initial
+version: scripted
+seed:
+  persona_block: 陪伴
+turns: []
+invariants: {}
+""",
+    )
+    fix = load_fixture(path)
+    assert fix.seed.episodic_state_initial is None
