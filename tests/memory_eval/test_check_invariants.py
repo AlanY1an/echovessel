@@ -323,3 +323,28 @@ def test_top_k_must_not_contain_descriptions_any_fails_when_present():
     violations = check_invariants(fix, res)
     assert len(violations) == 1
     assert "top_k_must_not_contain_descriptions_any" in violations[0]
+
+
+# ---------------------------------------------------------------------------
+# Field 11 · episodic_state_mood_changed
+# ---------------------------------------------------------------------------
+
+
+def test_episodic_state_mood_changed_passes():
+    res = _result(
+        episodic_state_before={"mood": "neutral"},
+        episodic_state_after={"mood": "grieving"},
+    )
+    fix = _fixture({"episodic_state_mood_changed": True})
+    assert check_invariants(fix, res) == []
+
+
+def test_episodic_state_mood_changed_fails_when_unchanged():
+    res = _result(
+        episodic_state_before={"mood": "neutral"},
+        episodic_state_after={"mood": "neutral"},
+    )
+    fix = _fixture({"episodic_state_mood_changed": True})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "episodic_state_mood_changed" in violations[0]

@@ -302,6 +302,8 @@ class EvalResult:
     recall_count: int = 0
     core_block_snapshot_before: dict[str, str] = field(default_factory=dict)
     core_block_snapshot_after: dict[str, str] = field(default_factory=dict)
+    episodic_state_before: dict[str, Any] = field(default_factory=dict)
+    episodic_state_after: dict[str, Any] = field(default_factory=dict)
 
 
 async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
@@ -367,6 +369,7 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
 
     mood_before = _read_mood(engine, persona_id)
     core_block_snapshot_before = _snapshot_core_blocks(engine, persona_id)
+    episodic_state_before = _read_episodic_state(engine, persona_id)
 
     # 3. ingest turns
     session_id: str | None = None
@@ -410,6 +413,7 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
 
     mood_after = _read_mood(engine, persona_id)
     core_block_snapshot_after = _snapshot_core_blocks(engine, persona_id)
+    episodic_state_after = _read_episodic_state(engine, persona_id)
 
     # 5. retrieve (E6)
     retrieved: list[dict[str, Any]] = []
@@ -497,7 +501,15 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
         recall_count=recall_count,
         core_block_snapshot_before=core_block_snapshot_before,
         core_block_snapshot_after=core_block_snapshot_after,
+        episodic_state_before=episodic_state_before,
+        episodic_state_after=episodic_state_after,
     )
+
+
+def _read_episodic_state(engine, persona_id: str) -> dict[str, Any]:
+    with DbSession(engine) as db:
+        p = db.get(Persona, persona_id)
+    return dict(p.episodic_state or {}) if p else {}
 
 
 def _snapshot_core_blocks(engine, persona_id: str) -> dict[str, str]:
@@ -723,6 +735,14 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
             violations.append(
                 f"top_k_must_not_contain_descriptions_any: {leaked} leaked "
                 f"into top-{len(top)}"
+            )
+
+    if inv.get("episodic_state_mood_changed"):
+        before = (result.episodic_state_before or {}).get("mood")
+        after = (result.episodic_state_after or {}).get("mood")
+        if before == after:
+            violations.append(
+                f"episodic_state_mood_changed: mood stayed {before!r}"
             )
 
     if inv.get("filling_min") is not None:
