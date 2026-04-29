@@ -128,7 +128,37 @@ provider    = "stub"
 api_key_env = ""
 ```
 
-### Admin Cost tab
+### Admin UI: model picker
+
+The Web admin's LLM card surfaces a hybrid picker so the common case is a click and the long-tail case stays a free-text edit:
+
+- For `provider = "anthropic"` or `provider = "openai_compat"` with an empty or **official** `base_url` (the SDK default — i.e. `api.openai.com` / `api.anthropic.com`), the `model` field renders as a curated dropdown built from `src/echovessel/core/llm/catalog.py`. Each entry shows the in/out USD per 1K tokens inline, looked up from the vendored LiteLLM JSON (see Pricing & cost tracking below). A trailing "Custom…" option drops to a free-text input for anything not on the list.
+- For any **non-official** `base_url` (OpenRouter, Ollama, vLLM, LM Studio, custom proxies, etc.) the `model` field collapses to a free-text input only, with a "custom base_url detected" hint — the catalog's pricing wouldn't apply to a third-party route, so the dropdown is suppressed rather than shown wrong.
+
+`base_url` and `api_key_env` are both editable inline on the same card. Empty `base_url` means "use SDK default"; set it to point at OpenRouter, a local Ollama, a private vLLM, etc. The `api_key_env` field is the **name** of the environment variable that holds the secret (see the `_env` convention up top), and its current resolution status — present / missing — shows as a presence dot next to the field's mono label.
+
+On `PATCH /api/admin/config`, the daemon validates that the configured `api_key_env` actually resolves to a non-empty environment variable before applying the patch. A missing env var returns HTTP 422 and the field is flagged inline. Validation is skipped for `provider = "stub"` (no key needed) and for any `base_url` whose host is `localhost`, `127.0.0.1`, `0.0.0.0`, `::1`, or `host.docker.internal` (local inference doesn't authenticate).
+
+### Pricing & cost tracking
+
+USD cost on each row of the `llm_calls` ledger is computed per `(provider, model)` from a vendored copy of LiteLLM's `model_prices_and_context_window.json`, not from the model's role:
+
+- `src/echovessel/core/llm/data/litellm_prices.json` is the rate source. LiteLLM is MIT-licensed; their notice is in the same directory at `data/LITELLM-LICENSE`.
+- `src/echovessel/core/llm/catalog.py` is the curated preset list shown in the admin dropdown. Each entry is joined with `lookup_price()` so the admin sees the in/out USD per 1K inline before picking.
+- A model the JSON doesn't track (truly long-tail / custom-endpoint / typo'd) falls through to a role-based fallback rate (`fast` / `main` / `judge`). The daemon stays usable even if a brand-new model lands before the next refresh.
+
+Refresh the vendored JSON before a release with:
+
+```bash
+uv run python scripts/refresh_litellm_prices.py
+```
+
+This pulls the latest snapshot from LiteLLM's `main` branch and overwrites the local file. The script is manual, not on a schedule — commit the diff so it ships with the wheel.
+
+Two automatic short-circuits to `$0.0`:
+
+1. `provider = "stub"` — always free.
+2. `base_url` host is `localhost`, `127.0.0.1`, `0.0.0.0`, `::1`, or `host.docker.internal` — local inference, not billed.
 
 The **Admin → Config → Cost** card in the Web UI shows estimated LLM spending drawn from the `llm_calls` table. Token counts are taken directly from the SDK's usage response when the provider returns one; calls with no provider-reported usage fall back to a local token estimate. All figures are labelled as estimates in the UI — authoritative billing lives on the provider's own dashboard.
 
