@@ -416,7 +416,11 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
     core_block_snapshot_after = _snapshot_core_blocks(engine, persona_id)
     episodic_state_after = _read_episodic_state(engine, persona_id)
 
-    # 5. retrieve (E6)
+    # 5. retrieve (E6). Vector hits come first; FTS fallback rows are
+    # appended after so callers that index by position can rely on
+    # "vector before FTS." ``relevance: 0.0`` on FTS rows is a sentinel
+    # — there's no vector score to report — and ``source`` lets callers
+    # disambiguate without a separate field.
     retrieved: list[dict[str, Any]] = []
     if fixture.retrieve is not None:
         with DbSession(engine) as db:
@@ -430,9 +434,23 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
                 top_k=fixture.retrieve.top_k,
             )
         retrieved = [
-            {"id": m.node.id, "description": m.node.description, "relevance": m.relevance}
+            {
+                "id": m.node.id,
+                "description": m.node.description,
+                "relevance": m.relevance,
+                "source": "vector",
+            }
             for m in r.memories
         ]
+        retrieved.extend(
+            {
+                "id": rm.id,
+                "description": rm.content,
+                "relevance": 0.0,
+                "source": "fts",
+            }
+            for rm in r.fts_fallback
+        )
 
     # 6. collect everything we just wrote
     with DbSession(engine) as db:
