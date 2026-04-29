@@ -13,7 +13,7 @@ from pathlib import Path
 
 REPO_RAW = "https://raw.githubusercontent.com/BerriAI/litellm/main"
 DATA_DIR = (
-    Path(__file__).resolve().parent.parent / "src" / "echovessel" / "runtime" / "llm" / "data"
+    Path(__file__).resolve().parent.parent / "src" / "echovessel" / "core" / "llm" / "data"
 )
 
 ASSETS: tuple[tuple[str, str], ...] = (

@@ -108,9 +108,9 @@ def register_config_routes(router: APIRouter, *, runtime: Any) -> None:
     # caller can still display them and fall back to the role rate.
 
     @router.get("/api/admin/config/models")
-    async def get_model_catalog(provider: str | None = None) -> list[dict[str, object]]:
+    async def get_model_catalog(provider: str | None = None) -> list[dict[str, Any]]:
         entries = presets_for(provider) if provider else PRESETS
-        rows: list[dict[str, object]] = []
+        rows: list[dict[str, Any]] = []
         for e in entries:
             price = lookup_price(e.provider, e.model)
             rows.append(
