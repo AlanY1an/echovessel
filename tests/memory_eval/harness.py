@@ -575,6 +575,15 @@ def check_invariants(fixture: Fixture, result: EvalResult) -> list[str]:
                 f"got {sorted(got)}"
             )
 
+    if inv.get("must_have_concept_type_any"):
+        wanted = set(inv["must_have_concept_type_any"])
+        got = {e.get("type") for e in result.events if e.get("type")}
+        if not wanted & got:
+            violations.append(
+                f"must_have_concept_type_any: wanted any of {sorted(wanted)} · "
+                f"got {sorted(got)}"
+            )
+
     if inv.get("filling_min") is not None:
         # Any SINGLE thought must cite at least ``filling_min`` events.
         by_parent: dict[int, int] = {}

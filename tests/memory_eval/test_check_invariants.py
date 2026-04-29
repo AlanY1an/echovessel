@@ -91,3 +91,22 @@ def test_must_have_subject_any_fails_when_no_match():
     violations = check_invariants(fix, res)
     assert len(violations) == 1
     assert "must_have_subject_any" in violations[0]
+
+
+# ---------------------------------------------------------------------------
+# Field 3 · must_have_concept_type_any
+# ---------------------------------------------------------------------------
+
+
+def test_must_have_concept_type_any_passes():
+    res = _result(events=[_event(type="intention")])
+    fix = _fixture({"must_have_concept_type_any": ["intention"]})
+    assert check_invariants(fix, res) == []
+
+
+def test_must_have_concept_type_any_fails_when_no_match():
+    res = _result(events=[_event(type="event")])
+    fix = _fixture({"must_have_concept_type_any": ["intention"]})
+    violations = check_invariants(fix, res)
+    assert len(violations) == 1
+    assert "must_have_concept_type_any" in violations[0]
