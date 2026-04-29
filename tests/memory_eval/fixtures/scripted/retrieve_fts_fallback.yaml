@@ -1,4 +1,4 @@
-fixture_id: l2_fts_finds_literal_phrase
+fixture_id: retrieve_fts_fallback
 version: scripted
 generated_at: null
 model: null
