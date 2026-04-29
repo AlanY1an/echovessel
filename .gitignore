@@ -76,6 +76,7 @@ Thumbs.db
 .claude/
 .aider*
 .cursor/
+.worktrees/
 
 # --- Logs / local data -----------------------------------------------------
 *.log
