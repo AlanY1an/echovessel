@@ -1094,6 +1094,7 @@ export interface ImportProgressSnapshot {
 export interface ConfigLlmSection {
   provider: string
   model: string | null
+  base_url: string
   api_key_env: string
   timeout_seconds: number
   temperature: number
@@ -1193,6 +1194,7 @@ export interface ConfigPatchPayload {
   llm?: Partial<{
     provider: string
     model: string
+    base_url: string
     api_key_env: string
     timeout_seconds: number
     temperature: number

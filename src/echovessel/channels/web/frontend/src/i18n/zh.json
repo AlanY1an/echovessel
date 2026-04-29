@@ -473,6 +473,8 @@
       "llm_max_tokens_sub": "单次回复上限,64 – 32000",
       "llm_timeout_sub": "超时丢弃本次调用,1 – 600",
       "llm_api_key_sub": "只读 · env var 名字 · 密钥本身在 .env / 系统环境",
+      "llm_label_base_url": "base_url",
+      "llm_placeholder_base_url": "例如 https://openrouter.ai/api/v1(留空 = SDK 默认)",
       "memory_section_title": "记忆调优",
       "memory_lead": "控制每次对话时 persona 调用多少条\"发生过的事\"和\"长期印象\"作为上下文。",
       "memory_retrieve_k_sub": "取回 {{value}} 条记忆 · 1 – 30",

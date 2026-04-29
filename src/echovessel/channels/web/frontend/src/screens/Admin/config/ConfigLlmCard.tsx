@@ -10,13 +10,6 @@ import {
   type ConfigCardProps,
 } from './ConfigTab'
 
-// `llm.base_url` is not surfaced through GET /api/admin/config; the picker
-// only needs it to decide whether to show curated presets. Empty string maps
-// to "official endpoint" in ModelPicker, which matches the default config
-// (sample omits base_url). Users with a custom base_url edit config.toml
-// manually and the picker will fall back to a free-text input on next load.
-const BASE_URL = ''
-
 const fieldErrorStyle = {
   color: 'var(--accent)',
   fontFamily: 'var(--mono)',
@@ -28,6 +21,7 @@ export function ConfigLlmCard({ config, save, saving }: ConfigCardProps) {
   const { t } = useTranslation()
   const [provider, setProvider] = useState(config.llm.provider)
   const [model, setModel] = useState(config.llm.model ?? '')
+  const [baseUrl, setBaseUrl] = useState(config.llm.base_url)
   const [apiKeyEnv, setApiKeyEnv] = useState(config.llm.api_key_env)
   const [temperature, setTemperature] = useState(config.llm.temperature)
   const [maxTokens, setMaxTokens] = useState(config.llm.max_tokens)
@@ -36,6 +30,7 @@ export function ConfigLlmCard({ config, save, saving }: ConfigCardProps) {
   useEffect(() => {
     setProvider(config.llm.provider)
     setModel(config.llm.model ?? '')
+    setBaseUrl(config.llm.base_url)
     setApiKeyEnv(config.llm.api_key_env)
     setTemperature(config.llm.temperature)
     setMaxTokens(config.llm.max_tokens)
@@ -44,6 +39,7 @@ export function ConfigLlmCard({ config, save, saving }: ConfigCardProps) {
   const dirty =
     provider !== config.llm.provider ||
     model !== (config.llm.model ?? '') ||
+    baseUrl !== config.llm.base_url ||
     apiKeyEnv !== config.llm.api_key_env ||
     temperature !== config.llm.temperature ||
     maxTokens !== config.llm.max_tokens ||
@@ -53,6 +49,7 @@ export function ConfigLlmCard({ config, save, saving }: ConfigCardProps) {
     const patch: ConfigPatchPayload = { llm: {} }
     if (provider !== config.llm.provider) patch.llm!.provider = provider
     if (model !== (config.llm.model ?? '')) patch.llm!.model = model
+    if (baseUrl !== config.llm.base_url) patch.llm!.base_url = baseUrl
     if (apiKeyEnv !== config.llm.api_key_env) patch.llm!.api_key_env = apiKeyEnv
     if (temperature !== config.llm.temperature)
       patch.llm!.temperature = temperature
@@ -120,9 +117,18 @@ export function ConfigLlmCard({ config, save, saving }: ConfigCardProps) {
         <div style={configKeyStyle}>model</div>
         <ModelPicker
           provider={provider}
-          baseUrl={BASE_URL}
+          baseUrl={baseUrl}
           value={model}
           onChange={(next) => setModel(next)}
+        />
+        <div style={configKeyStyle}>{t('admin.config_tab.llm_label_base_url')}</div>
+        <input
+          type="text"
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          disabled={saving}
+          placeholder={t('admin.config_tab.llm_placeholder_base_url')}
+          style={{ ...configInputStyle, width: '100%' }}
         />
         <div style={configKeyStyle}>api_key_env</div>
         <div>

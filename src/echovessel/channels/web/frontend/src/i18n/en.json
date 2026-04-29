@@ -473,6 +473,8 @@
       "llm_max_tokens_sub": "Per-reply upper bound, 64 – 32000",
       "llm_timeout_sub": "Abort a call after this many seconds, 1 – 600",
       "llm_api_key_sub": "Read-only · env var name · the secret itself lives in .env / the system environment",
+      "llm_label_base_url": "base_url",
+      "llm_placeholder_base_url": "e.g. https://openrouter.ai/api/v1 (empty = SDK default)",
       "memory_section_title": "Memory tuning",
       "memory_lead": "Controls how many events and thoughts the persona pulls in as context each turn.",
       "memory_retrieve_k_sub": "Retrieve {{value}} memories · 1 – 30",
