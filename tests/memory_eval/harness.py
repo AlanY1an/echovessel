@@ -90,6 +90,7 @@ class FixtureSeed:
     persona_location: str | None = None
     seed_events: list[SeedEvent] = field(default_factory=list)
     seed_thoughts: list[SeedThought] = field(default_factory=list)
+    episodic_state_initial: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -121,12 +122,14 @@ class Fixture:
 def load_fixture(path: Path) -> Fixture:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     seed_raw = raw.get("seed") or {}
+    episodic_initial = seed_raw.get("episodic_state_initial")
     seed = FixtureSeed(
         persona_block=seed_raw.get("persona_block", ""),
         user_block=seed_raw.get("user_block", ""),
         style_block=seed_raw.get("style_block", ""),
         persona_timezone=seed_raw.get("persona_timezone"),
         persona_location=seed_raw.get("persona_location"),
+        episodic_state_initial=dict(episodic_initial) if episodic_initial else None,
         seed_events=[
             SeedEvent(
                 description=e["description"],
@@ -342,14 +345,17 @@ async def run_fixture(fixture: Fixture, *, llm: LLMProvider) -> EvalResult:
 
     # 1. seed persona + user + core blocks
     with DbSession(engine) as db:
-        db.add(
-            Persona(
-                id=persona_id,
-                display_name="Eval",
-                timezone=fixture.seed.persona_timezone,
-                location=fixture.seed.persona_location,
+        persona_kwargs: dict[str, Any] = {
+            "id": persona_id,
+            "display_name": "Eval",
+            "timezone": fixture.seed.persona_timezone,
+            "location": fixture.seed.persona_location,
+        }
+        if fixture.seed.episodic_state_initial is not None:
+            persona_kwargs["episodic_state"] = dict(
+                fixture.seed.episodic_state_initial
             )
-        )
+        db.add(Persona(**persona_kwargs))
         db.add(User(id=user_id, display_name="User"))
         db.commit()
 
