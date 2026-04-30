@@ -69,20 +69,23 @@ Any PR that crosses these layers fails `uv run lint-imports`. Don't add a shim t
 
 ## Docs convention (single source of truth)
 
-Per-module reference lives in **bilingual** pairs under `docs/`. Both files are canonical and must stay in sync:
+Three doc trees serve different audiences. **Code is the source of truth** — every tree is a view onto it, not a clone of another tree.
 
-- `docs/en/<module>.md` — English
-- `docs/zh/<module>.md` — 中文
+- **`docs/en/<module>.md` + `docs/zh/<module>.md`** — for human readers. Bilingual prose, design rationale, onboarding flow.
+- **`docs/ai/<system>/`** — for AI agents working on this repo. Structured, grep-first, progressive-disclosure (read `docs/ai/README.md` for the routing table first, then drill into the system folder you need).
 
-Modules covered: `channels`, `memory`, `runtime`, `voice`, `proactive`, `import`, `configuration`, `contributing`, `first-time-setup`.
+**Agents (Claude Code sessions, cloud routines) should start at `docs/ai/README.md`, not the human docs.** Human docs are prose-first and waste context tokens for grep-first lookups.
+
+Modules covered (en/zh): `channels`, `memory`, `runtime`, `voice`, `proactive`, `import`, `configuration`, `contributing`, `first-time-setup`.
 
 **Rules:**
 
 1. **Update in place.** No `architecture-v0.3.md` / `schema-v0.4.md` filenames — git log is the version history. A version suffix in a doc filename is a smell.
-2. **Bilingual sync.** Any change to `docs/en/<module>.md` must land with the matching change to `docs/zh/<module>.md` in the same commit. If you can't do both, split the change — don't merge half.
-3. **`docs/README.md` is the nav root** with the EN / 中文 split. Keep the TOC current.
-4. **HTML visualizations** (`docs/architecture.html`, `docs/architecture-flow.html`, `docs/memory/layers.html`) link via the published URL `https://alanyian.com/projects/echovessel/docs/<file>.html`, never repo-relative paths. GitHub serves `.html` as raw source and drops readers into source view if linked relatively. HTML-to-HTML internal links stay relative (they resolve both on site and in local clone).
-5. **Design rationale belongs in `docs/`**, not hidden. If a decision is worth preserving ("we tried X, it broke Y, so now we do Z"), write it into the module's canonical doc. Public docs carry the why, not just the what.
+2. **Bilingual sync applies to en/zh only.** Any change to `docs/en/<module>.md` must land with the matching change to `docs/zh/<module>.md` in the same commit. `docs/ai/` is independent — no en/zh/ai sync requirement.
+3. **Trees are independent views, not synced clones.** Duplication between `docs/ai/` and `docs/en|zh/` is fine and expected; they serve different audiences. Don't cross-reference forcing readers to bounce between trees. The single source of truth is code (and guard tests for invariants), not another doc.
+4. **`docs/README.md` is the nav root** with the EN / 中文 split. Keep the TOC current.
+5. **HTML visualizations** (`docs/architecture.html`, `docs/architecture-flow.html`, `docs/memory/layers.html`) link via the published URL `https://alanyian.com/projects/echovessel/docs/<file>.html`, never repo-relative paths. GitHub serves `.html` as raw source and drops readers into source view if linked relatively. HTML-to-HTML internal links stay relative (they resolve both on site and in local clone).
+6. **Design rationale belongs in `docs/`**, not hidden. If a decision is worth preserving ("we tried X, it broke Y, so now we do Z"), write it into the module's canonical doc. Public docs carry the why, not just the what.
 
 ---
 
@@ -126,6 +129,12 @@ Before claiming work is done: run `pytest`, `ruff check`, and `lint-imports` —
 - **Three green before committing:** `pytest`, `ruff check`, `lint-imports`.
 - **Prefer Conventional Commits prefix** for single-area changes: `feat:` / `fix:` / `docs:` / `refactor:` / `test:` / `chore:` / `perf:`, optionally with scope — `fix(memory): ...`. Milestones / cross-module pushes use free-form `Name · description`.
 - No CI enforcement; the reviewer is the checker. See `docs/en/contributing.md` § Commit messages for full rules.
+
+---
+
+## Branches & PRs
+
+`main` is protected. Direct push is rejected for everyone, including admin. All work — even the smallest change — goes through a feature branch and a PR. Squash or rebase merge only (linear history is enforced). See `docs/en/contributing.md` § Branch protection for the full workflow.
 
 ---
 

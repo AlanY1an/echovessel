@@ -154,6 +154,30 @@ For milestones or cross-module pushes that don't fit a single prefix, a free-for
 
 No commit-msg hook, no CI enforcement, no DCO sign-off, no issue-number trailer. The reviewer (and future you) is the checker.
 
+## Branch protection
+
+`main` is protected. Every change — even the smallest — lands through a pull request. There is no direct-push path, even for the repo owner.
+
+What's enforced on `main`:
+
+- **PR required.** `git push origin main` is rejected.
+- **Linear history.** Squash or rebase merge only; merge commits are blocked.
+- **No force push. No branch deletion.** History on `main` is append-only.
+- **Admins included.** The owner cannot bypass these rules — the same workflow applies to everyone.
+
+The everyday flow:
+
+```bash
+git checkout -b fix/something
+# edit, commit
+git push -u origin fix/something
+gh pr create --fill && gh pr merge --squash --delete-branch
+```
+
+Status checks are not part of the merge gate. CI runs a minimal subset of the project's checks; the three-green rule (`pytest` / `ruff check` / `lint-imports`) is upheld by the author and reviewer, not by GitHub.
+
+Emergencies are rare and intentionally inconvenient. If you genuinely must push directly to `main`, temporarily remove the protection (`gh api -X DELETE repos/AlanY1an/echovessel/branches/main/protection`), push, then re-apply it. The friction is the point — it should be a deliberate choice, not a habit.
+
 ## Submitting a pull request
 
 A good PR:
