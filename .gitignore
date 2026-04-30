@@ -73,7 +73,14 @@ Thumbs.db
 !.env.example
 
 # --- Local tooling state ---------------------------------------------------
-.claude/
+# .claude/ holds project policy (settings.json, agents/, commands/) that
+# IS tracked, plus per-machine state (settings.local.json, *.lock) that
+# is not. Use an allowlist so new auto-generated files default to ignored.
+.claude/*
+!.claude/settings.json
+!.claude/agents/
+!.claude/commands/
+!.claude/hooks/
 .aider*
 .cursor/
 .worktrees/

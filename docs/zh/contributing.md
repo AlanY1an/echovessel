@@ -154,6 +154,30 @@ Guard test 在 `tests/runtime/test_f10_no_channel_in_prompt.py`。它从 fixture
 
 不装 commit-msg hook、不做 CI 强制、不要 DCO sign-off、不要 issue trailer。审核者是 reviewer(和未来的你)。
 
+## 分支保护
+
+`main` 受保护。任何改动——再小都不例外——都必须走 pull request。没有直接 push 的路径,所有者也不例外。
+
+`main` 上强制的规则:
+
+- **必须 PR。** `git push origin main` 会被拒绝。
+- **Linear history。** 只允许 squash 或 rebase merge,merge commit 被阻止。
+- **不允许 force push。不允许删除分支。** `main` 的历史只增不删。
+- **管理员一视同仁。** 仓库所有者也不能绕过——同一套流程对所有人生效。
+
+日常工作流:
+
+```bash
+git checkout -b fix/something
+# 修改、commit
+git push -u origin fix/something
+gh pr create --fill && gh pr merge --squash --delete-branch
+```
+
+Status check 不在合并门槛中。CI 只跑项目检查的一小部分;三绿规则(`pytest` / `ruff check` / `lint-imports`)由作者和 reviewer 自行守住,不由 GitHub 强制。
+
+紧急情况罕见且刻意做得不方便。如果你真的必须直接 push 到 `main`,临时移除保护(`gh api -X DELETE repos/AlanY1an/echovessel/branches/main/protection`),push 完再重新加上。摩擦本身就是设计意图——它应该是一次有意识的选择,不是习惯。
+
 ## 提交 PR
 
 好 PR 的样子:
