@@ -440,6 +440,18 @@ class ConceptNode(SQLModel, table=True):
     event_time_start: datetime | None = Field(default=None)
     event_time_end: datetime | None = Field(default=None)
 
+    # v0.7 · proactive follow-up annotation. NULL = no follow-up scheduled.
+    # follow_up_at + follow_up_hint set together; advance_*_hours optional
+    # (NULL = scanner default; 0 = reminder semantics).
+    follow_up_at: datetime | None = Field(default=None)
+    follow_up_hint: str | None = Field(default=None)
+    estimated_arc_days: int | None = Field(default=None)
+    advance_pre_hours: int | None = Field(default=None)
+    advance_post_hours: int | None = Field(default=None)
+    # v0.7 · user-set "don't bring this up". Mutually exclusive with
+    # natural close via superseded_by_id (latter is system-determined).
+    proactive_suppressed_at: datetime | None = Field(default=None)
+
     # v0.4 · first-person attribution (R3). 'user' | 'persona' | 'shared'.
     # Existing rows backfill to 'user' via SQL DEFAULT in migration.
     subject: str = Field(default="user")
