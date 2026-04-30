@@ -223,3 +223,167 @@ async def test_reminder_zero_advance_hours(consolidate_fixture):
         node = db.get(ConceptNode, result.events_created[0].id)
         assert node.advance_pre_hours == 0
         assert node.advance_post_hours == 0
+
+
+@pytest.mark.parametrize(
+    "scenario,expected",
+    [
+        pytest.param(
+            ExtractedEvent(
+                description="user has interview Monday 10am",
+                subject="user",
+                emotional_impact=4,
+                emotion_tags=["anxiety"],
+                relational_tags=["unresolved"],
+                event_time=EventTime(
+                    start=datetime(2026, 5, 4, 10, 0),
+                    end=datetime(2026, 5, 4, 10, 0),
+                ),
+                superseded_event_ids=[],
+                follow_up_at=datetime(2026, 5, 4, 10, 0),
+                follow_up_hint="面试结果",
+                estimated_arc_days=14,
+                advance_pre_hours=24,
+                advance_post_hours=24,
+            ),
+            {"follow_up_at_hour": 10, "advance_pre_hours": 24, "advance_post_hours": 24},
+            id="interview_monday",
+        ),
+        pytest.param(
+            ExtractedEvent(
+                description="user has medical checkup Wednesday",
+                subject="user",
+                emotional_impact=2,
+                emotion_tags=[],
+                relational_tags=[],
+                event_time=EventTime(
+                    start=datetime(2026, 5, 6, 9, 0),
+                    end=datetime(2026, 5, 6, 9, 0),
+                ),
+                superseded_event_ids=[],
+                follow_up_at=datetime(2026, 5, 6, 9, 0),
+                follow_up_hint="体检结果",
+                estimated_arc_days=7,
+                advance_pre_hours=4,
+                advance_post_hours=3,
+            ),
+            {"advance_pre_hours_range": (2, 6), "advance_post_hours_range": (2, 4)},
+            id="medical_checkup",
+        ),
+        pytest.param(
+            ExtractedEvent(
+                description="user has surgery Monday",
+                subject="user",
+                emotional_impact=-3,
+                emotion_tags=["anxiety", "fear"],
+                relational_tags=["unresolved"],
+                event_time=EventTime(
+                    start=datetime(2026, 5, 4, 10, 0),
+                    end=datetime(2026, 5, 4, 10, 0),
+                ),
+                superseded_event_ids=[],
+                follow_up_at=datetime(2026, 5, 4, 10, 0),
+                follow_up_hint="手术准备",
+                estimated_arc_days=14,
+                advance_pre_hours=72,
+                advance_post_hours=0,
+            ),
+            {"advance_pre_hours_min": 48, "advance_post_hours": 0},
+            id="surgery_post_zero",
+        ),
+        pytest.param(
+            ExtractedEvent(
+                description="reminder: 提醒用户吃药",
+                subject="persona",
+                emotional_impact=0,
+                emotion_tags=[],
+                relational_tags=["commitment"],
+                event_time=EventTime(
+                    start=datetime(2026, 4, 29, 22, 40),
+                    end=datetime(2026, 4, 29, 22, 40),
+                ),
+                superseded_event_ids=[],
+                follow_up_at=datetime(2026, 4, 29, 22, 40),
+                follow_up_hint="提醒吃药",
+                estimated_arc_days=1,
+                advance_pre_hours=0,
+                advance_post_hours=0,
+            ),
+            {"advance_pre_hours": 0, "advance_post_hours": 0, "subject": "persona"},
+            id="reminder_request",
+        ),
+        pytest.param(
+            ExtractedEvent(
+                description="user is preparing thesis",
+                subject="user",
+                emotional_impact=2,
+                emotion_tags=[],
+                relational_tags=["unresolved"],
+                event_time=EventTime(
+                    start=datetime(2026, 4, 29, 22, 0),
+                    end=None,
+                ),
+                superseded_event_ids=[],
+                follow_up_at=datetime(2026, 5, 4, 22, 0),
+                follow_up_hint="论文进展",
+                estimated_arc_days=30,
+                advance_pre_hours=None,
+                advance_post_hours=None,
+            ),
+            {"event_time_end": None, "advance_pre_hours": None},
+            id="ongoing_thesis",
+        ),
+        pytest.param(
+            ExtractedEvent(
+                description="user ate sandwich at noon",
+                subject="user",
+                emotional_impact=1,
+                emotion_tags=[],
+                relational_tags=[],
+                event_time=None,
+                superseded_event_ids=[],
+                follow_up_at=None,
+                follow_up_hint=None,
+                estimated_arc_days=None,
+                advance_pre_hours=None,
+                advance_post_hours=None,
+            ),
+            {"follow_up_at": None},
+            id="trivial_past_event",
+        ),
+    ],
+)
+async def test_phase_b_extraction_scenarios(consolidate_fixture, scenario, expected):
+    """Parametric coverage of Phase B follow-up annotation across event kinds."""
+
+    extract_fn = _wrap([scenario])
+    result = await consolidate_session(
+        db=consolidate_fixture.db,
+        backend=consolidate_fixture.backend,
+        session=consolidate_fixture.session,
+        extract_fn=extract_fn,
+        reflect_fn=AsyncMock(return_value=[]),
+        embed_fn=consolidate_fixture.embed_fn,
+        now=datetime(2026, 4, 29),
+    )
+
+    assert len(result.events_created) == 1
+    event_id = result.events_created[0].id
+
+    with consolidate_fixture.db_factory() as db:
+        node = db.get(ConceptNode, event_id)
+        for key, value in expected.items():
+            if key.endswith("_range"):
+                actual_field = key.replace("_range", "")
+                actual = getattr(node, actual_field)
+                assert value[0] <= actual <= value[1], f"{actual_field}={actual} not in {value}"
+            elif key.endswith("_min"):
+                actual_field = key.replace("_min", "")
+                actual = getattr(node, actual_field)
+                assert actual >= value, f"{actual_field}={actual} < {value}"
+            elif key == "follow_up_at_hour":
+                assert node.follow_up_at.hour == value
+            else:
+                assert getattr(node, key) == value, (
+                    f"{key} mismatch: got {getattr(node, key)}, expected {value}"
+                )
