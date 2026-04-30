@@ -1,43 +1,34 @@
-"""Policy engine · proactive v2 · Stage 4 (atomic 5-gate rewrite).
+"""Policy engine · proactive v3 · 5-gate evaluator over follow-up events.
 
-Replaces the v1 ``cold_user_gate`` / trigger-matching flow. The
-``evaluate(events, ...)`` signature is preserved on purpose so the
-v1 scheduler can keep calling it through the Stage 3 transition
-without having to land scheduler changes in the same commit.
-
-Internally the engine now:
-
-1. Picks the first **fireable** event from the queue — currently
-   ``THREAD_DUE`` or ``HIGH_EMOTIONAL_EVENT`` (the v2 lanes), with a
-   transitional fallback for ``EVENT_EXTRACTED`` events whose payload
-   carries ``|emotional_impact| >= SHOCK_IMPACT`` (this is what the
-   ``test_round2_delivery_inheritance`` suite still drives through).
-   No fireable event ⇒ ``NO_TRIGGER_MATCH`` skip.
-2. Walks the new 5-gate sequence:
+The engine takes a list of ``ProactiveEvent`` items (the ``evaluate``
+signature is unchanged from v2 so the scheduler does not move) and
+walks a fixed 5-gate sequence:
 
        1. quiet_hours        (PersonaProfile.quiet_hours)
-       2. forbidden_topics   (PersonaProfile.forbidden_topics, only
-                              meaningful for THREAD_DUE; closes the
-                              thread on hit so the same anchor doesn't
-                              re-trigger every cooldown)
+       2. forbidden_topics   (PersonaProfile.forbidden_topics matched
+                              against the ConceptNode's
+                              ``follow_up_hint``; on hit, sets
+                              ``proactive_suppressed_at`` on the event
+                              so the same anchor can't re-trigger.)
        3. in_flight_turn     (injected predicate)
        4. rate_limit         (24h SQL count over proactive_decisions)
-       5. engagement_score   (ProactiveState; soft, bypassed by
-                              ``thread.confidence ≥ 0.8`` OR
-                              ``event.critical``).
+       5. engagement_score   (ProactiveState; soft, bypassed when the
+                              backing memory event has a high-confidence
+                              relational tag (``commitment`` /
+                              ``vulnerability``) OR
+                              ``|emotional_impact| >= 7``, OR the
+                              ProactiveEvent itself is ``critical``.)
 
-The HIGH_EMOTIONAL_EVENT path is **atomic-replaced** (pre-flight
-A): the v1 ``_match_trigger`` payload-driven branch is gone, but the
-new flow still fires the same event via the same gate sequence — no
-delete-then-add window where high-impact is dead.
+Stage 3.1 swapped the v2 ``FollowUpThread`` lookup for a direct read
+of ``ConceptNode`` (memory events with ``follow_up_at`` annotated by
+Phase B). v3 has a single fireable event type: ``FOLLOW_UP_DUE``.
 
-The v1 ``cold_user`` gate is removed. Coverage proof: any scenario
+The legacy ``cold_user`` gate is gone. Coverage proof: any scenario
 that v1 caught (N consecutive unanswered fires) is now caught by
 ``engagement_score < 0.4`` because every unanswered fire decays
 engagement by ``-0.15``. Two unanswered fires drop a fresh-baseline
-``0.7`` score to ``0.4`` — the same boundary the v1 default
-``cold_user_threshold=2`` was set at. See Stage 4 tracker §
-"cold_user → engagement coverage".
+``0.7`` score to ``0.4`` — the boundary the legacy default
+``cold_user_threshold=2`` was set at.
 """
 
 from __future__ import annotations
@@ -51,6 +42,7 @@ from typing import Any
 
 from sqlmodel import Session, func, select
 
+from echovessel.memory.models import ConceptNode
 from echovessel.proactive.core.base import (
     CONFIG_VERSION,
     ActionType,
@@ -77,12 +69,14 @@ log = logging.getLogger(__name__)
 SHOCK_IMPACT = 8
 
 # Engagement_score gate thresholds. ``ENGAGEMENT_PASS`` is the soft
-# block boundary; ``HIGH_CONFIDENCE_BYPASS`` is the per-thread escape
-# hatch — a thread with ``confidence ≥ 0.8`` overrides the engagement
-# block (the LLM was confident enough about the future-branch that we
-# should not be deterred by recent silence).
+# block boundary; the high-confidence escape hatch fires when the
+# memory event carries a strong relational tag (``commitment`` /
+# ``vulnerability``) or its absolute emotional impact reaches
+# ``HIGH_CONFIDENCE_IMPACT`` — both signals say the LLM was confident
+# enough about this anchor that recent silence shouldn't suppress it.
 ENGAGEMENT_PASS = 0.4
-HIGH_CONFIDENCE_BYPASS = 0.8
+HIGH_CONFIDENCE_BYPASS_TAGS = frozenset({"commitment", "vulnerability"})
+HIGH_CONFIDENCE_IMPACT = 7
 
 _FORBIDDEN_TOPIC_REASON = "forbidden_topic"
 _LOW_ENGAGEMENT_REASON = "low_engagement"
@@ -149,7 +143,7 @@ class PolicyEngine:
         # Load shared state once. The DB-backed gates short-circuit
         # gracefully when ``db_factory`` is unwired (legacy tests).
         profile = self._load_profile(persona_id)
-        thread = self._load_thread(target)
+        memory_event = self._load_event(target)
         state = self._load_or_init_state(persona_id, user_id, now)
 
         # Gate 1 · quiet_hours
@@ -160,13 +154,15 @@ class PolicyEngine:
                 skip_reason=SkipReason.QUIET_HOURS,
             )
 
-        # Gate 2 · forbidden_topics (only meaningful for THREAD_DUE)
+        # Gate 2 · forbidden_topics (matched against the memory event's
+        # ``follow_up_hint``; on hit, set ``proactive_suppressed_at``
+        # so the same anchor doesn't re-arm on the next phase tick).
         if (
             profile is not None
-            and thread is not None
-            and _matches_forbidden(thread.anchor_text, profile.forbidden_topics)
+            and memory_event is not None
+            and _matches_forbidden(memory_event.follow_up_hint or "", profile.forbidden_topics)
         ):
-            self._close_thread(thread, now)
+            self._suppress_event(memory_event, now)
             return self._fill_skip_with_reason(
                 decision,
                 trigger=TriggerReason.NO_TRIGGER_MATCH,
@@ -200,7 +196,7 @@ class PolicyEngine:
             )
 
         # Gate 5 · engagement_score (soft, bypassed by high-confidence
-        # thread or critical event).
+        # memory event or critical ProactiveEvent).
         #
         # Boundary uses ``<=`` so the suppress side INCLUDES exact
         # equality with the threshold. The check guards against the
@@ -211,9 +207,7 @@ class PolicyEngine:
         # "at-or-below threshold ⇒ suppress" semantics is explicit
         # rather than dependent on FP coincidence.
         if state.engagement_score <= ENGAGEMENT_PASS:
-            high_confidence = (
-                thread is not None and thread.confidence >= HIGH_CONFIDENCE_BYPASS
-            )
+            high_confidence = _is_high_confidence(memory_event)
             is_critical = bool(target.critical)
             if not (high_confidence or is_critical):
                 return self._fill_skip_with_reason(
@@ -243,20 +237,25 @@ class PolicyEngine:
             log.warning("policy: PersonaProfile load failed: %s", e)
             return None
 
-    def _load_thread(self, event: ProactiveEvent) -> FollowUpThread | None:  # noqa: F821
-        # FollowUpThread removed in v3 · this path is rewritten in Stage 3.1.
+    def _load_event(self, event: ProactiveEvent) -> ConceptNode | None:
+        """Load the backing ``ConceptNode`` for a ``FOLLOW_UP_DUE`` event.
+
+        Other event types carry no memory backing — the caller treats
+        the gate inputs as ``None`` and lets the event-agnostic gates
+        (quiet_hours / in_flight / rate_limit / engagement) decide.
+        """
         if self.db_factory is None:
             return None
-        if event.event_type != EventType.THREAD_DUE:
+        if event.event_type != EventType.FOLLOW_UP_DUE:
             return None
-        thread_id = event.payload.get("thread_id")
-        if thread_id is None:
+        event_id = event.payload.get("event_id")
+        if event_id is None:
             return None
         try:
             with self.db_factory() as db:
-                return db.get(FollowUpThread, thread_id)  # noqa: F821
+                return db.get(ConceptNode, event_id)
         except Exception as e:  # noqa: BLE001
-            log.warning("policy: FollowUpThread load failed: %s", e)
+            log.warning("policy: ConceptNode load failed: %s", e)
             return None
 
     def _load_or_init_state(
@@ -328,32 +327,32 @@ class PolicyEngine:
             log.warning("policy: rate_limit count failed: %s", e)
             return 0
 
-    def _close_thread(self, thread: FollowUpThread, now: datetime) -> None:  # noqa: F821
-        """Close a thread when the forbidden gate hits — the anchor is
-        permanently disallowed, no point cooling-down-and-retrying.
+    def _suppress_event(self, memory_event: ConceptNode, now: datetime) -> None:
+        """Set ``proactive_suppressed_at`` on a forbidden-topic event.
 
-        FollowUpThread removed in v3 · this path is rewritten in Stage 3.1.
+        v3 closes a follow-up by marking the source ``ConceptNode``
+        suppressed (the FollowUpScheduler ``_eligible`` filter excludes
+        suppressed nodes from re-arming). No retry, no cooldown — the
+        anchor is permanently disallowed for proactive follow-up.
         """
-        if self.db_factory is None or thread.id is None:
+        if self.db_factory is None or memory_event.id is None:
             return
         try:
             with self.db_factory() as db:
-                row = db.get(FollowUpThread, thread.id)  # noqa: F821
+                row = db.get(ConceptNode, memory_event.id)
                 if row is None:
                     return
-                row.closed_at = now
+                row.proactive_suppressed_at = now
                 db.add(row)
                 db.commit()
         except Exception as e:  # noqa: BLE001
-            log.warning("policy: forbidden_topic thread close failed: %s", e)
+            log.warning("policy: forbidden_topic suppress failed: %s", e)
 
     # ------------------------------------------------------------------
     # Decision skeleton helpers
     # ------------------------------------------------------------------
 
-    def _skeleton(
-        self, persona_id: str, user_id: str, now: datetime
-    ) -> ProactiveDecision:
+    def _skeleton(self, persona_id: str, user_id: str, now: datetime) -> ProactiveDecision:
         return ProactiveDecision(
             decision_id=str(uuid.uuid4()),
             persona_id=persona_id,
@@ -365,7 +364,8 @@ class PolicyEngine:
             policy_snapshot={
                 "max_per_24h": self.config.max_per_24h,
                 "engagement_pass": ENGAGEMENT_PASS,
-                "high_confidence_bypass": HIGH_CONFIDENCE_BYPASS,
+                "high_confidence_bypass_tags": sorted(HIGH_CONFIDENCE_BYPASS_TAGS),
+                "high_confidence_impact": HIGH_CONFIDENCE_IMPACT,
             },
             config_version=CONFIG_VERSION,
         )
@@ -404,14 +404,16 @@ class PolicyEngine:
 
 
 def _pick_fireable(events: list[ProactiveEvent]) -> ProactiveEvent | None:
-    """Return the first event the v2 policy is willing to fire on."""
+    """Return the first event the v3 policy is willing to fire on.
+
+    v3 has a single fireable lane: ``FOLLOW_UP_DUE`` (emitted by the
+    FollowUpScheduler when a memory event's phase wakes). A
+    transitional ``EVENT_EXTRACTED`` branch stays for legacy tests
+    that pre-load ``emotional_impact`` directly into the payload.
+    """
     for ev in events:
-        if ev.event_type == EventType.THREAD_DUE:
+        if ev.event_type == EventType.FOLLOW_UP_DUE:
             return ev
-        # Transitional: legacy ``EVENT_EXTRACTED`` payload-driven path.
-        # Stage 3 left tests + integration calling ``scheduler.notify``
-        # with EVENT_EXTRACTED+impact pre-set; this branch keeps them
-        # firing through the new gates without a separate code path.
         if ev.event_type == EventType.EVENT_EXTRACTED:
             impact = int(ev.payload.get("emotional_impact", 0) or 0)
             if abs(impact) >= SHOCK_IMPACT:
@@ -421,12 +423,14 @@ def _pick_fireable(events: list[ProactiveEvent]) -> ProactiveEvent | None:
 
 def _trigger_for(event: ProactiveEvent) -> TriggerReason:
     """Map the fireable event back to a ``TriggerReason`` value for
-    the audit row."""
-    if event.event_type == EventType.EVENT_EXTRACTED:
-        return TriggerReason.HIGH_EMOTIONAL_EVENT  # transitional
-    # THREAD_DUE: spec 05 routes via ``trigger_type`` column on the
-    # SQLite audit row; the legacy ``trigger`` field on the
-    # dataclass keeps HIGH_EMOTIONAL_EVENT as its closest match.
+    the audit row.
+
+    The ``trigger`` field on the dataclass is a legacy free-form
+    string; the canonical routing column on the persisted row is
+    ``trigger_type``. ``HIGH_EMOTIONAL_EVENT`` is the closest match
+    here for both the new ``FOLLOW_UP_DUE`` lane and the transitional
+    ``EVENT_EXTRACTED`` shock path.
+    """
     return TriggerReason.HIGH_EMOTIONAL_EVENT
 
 
@@ -445,19 +449,32 @@ def _in_quiet_hours(now: datetime, quiet_hours: list[int]) -> bool:
     return h >= start or h < end
 
 
-def _matches_forbidden(anchor_text: str, forbidden: list[str]) -> bool:
+def _matches_forbidden(hint: str, forbidden: list[str]) -> bool:
     """Case-insensitive substring match. Keyword filter, not a
-    semantic gate — the LLM's anchor_text writer is responsible for
-    not creating obvious bypasses."""
+    semantic gate — the LLM's ``follow_up_hint`` writer is responsible
+    for not creating obvious bypasses."""
     if not forbidden:
         return False
-    text = (anchor_text or "").lower()
+    text = (hint or "").lower()
     return any(t.lower() in text for t in forbidden if t)
+
+
+def _is_high_confidence(memory_event: ConceptNode | None) -> bool:
+    """High-confidence bypass for the engagement gate. v3 uses two
+    proxies on the backing ``ConceptNode``: a strong relational tag
+    (``commitment`` / ``vulnerability``) or a high absolute emotional
+    impact (``|impact| >= 7``)."""
+    if memory_event is None:
+        return False
+    if any(t in HIGH_CONFIDENCE_BYPASS_TAGS for t in memory_event.relational_tags):
+        return True
+    return abs(memory_event.emotional_impact) >= HIGH_CONFIDENCE_IMPACT
 
 
 __all__ = [
     "ENGAGEMENT_PASS",
-    "HIGH_CONFIDENCE_BYPASS",
+    "HIGH_CONFIDENCE_BYPASS_TAGS",
+    "HIGH_CONFIDENCE_IMPACT",
     "PolicyEngine",
     "SHOCK_IMPACT",
     "TriggerMatch",

@@ -1,54 +1,46 @@
-"""Policy v2 · 5-gate atomic rewrite tests · Stage 4.3.
+"""Policy · 5-gate evaluator tests over the v3 follow-up event shape.
 
-Replaces the v1 trigger-matching cold_user / quiet_hours / rate_limit
-flow. Gates evaluated in order:
+Gates evaluated in order:
 
-1. quiet_hours        (profile-driven)
-2. forbidden_topics   (only for THREAD_DUE events)
+1. quiet_hours        (PersonaProfile.quiet_hours)
+2. forbidden_topics   (matched against ConceptNode.follow_up_hint;
+                       hit sets ``proactive_suppressed_at`` on the event)
 3. in_flight_turn     (predicate)
 4. rate_limit         (24h SQL count over proactive_decisions)
-5. engagement_score   (soft, bypassed by thread.confidence ≥ 0.8 OR critical event)
+5. engagement_score   (soft, bypassed by high-confidence relational
+                       tag / emotional_impact OR critical event)
 
-The v1 ``evaluate(events, ...)`` signature stays so the scheduler does
-not change. The HIGH_EMOTIONAL_EVENT path is **atomic-replaced**,
-not delete-then-add — the user's pre-flight pitfall A.
+Stage 3.1 swapped the v2 ``FollowUpThread`` shape for a direct read
+of ``ConceptNode`` (memory event with ``follow_up_at``).
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import pytest
+from sqlmodel import Session
 
-pytest.skip(
-    "FollowUpThread removed in v3 · policy refactored in Stage 3.1",
-    allow_module_level=True,
-)
-
-from datetime import datetime, timedelta  # noqa: E402
-
-from sqlmodel import Session  # noqa: E402
-
-from echovessel.memory import create_all_tables, create_engine  # noqa: E402
-from echovessel.memory.models import (  # noqa: E402
-    FollowUpThread,
-    Persona,
-    PersonaProfile,
-    ProactiveState,
-    User,
-)
-from echovessel.memory.models import (  # noqa: E402
-    ProactiveDecision as PersistedDecision,
-)
-from echovessel.proactive.core.base import (  # noqa: E402
+from echovessel.core.types import NodeType
+from echovessel.memory import create_all_tables, create_engine
+from echovessel.memory.models import ConceptNode, Persona, User
+from echovessel.proactive.core.base import (
     ActionType,
     EventType,
     ProactiveEvent,
     SkipReason,
-    TriggerReason,
 )
-from echovessel.proactive.core.config import ProactiveConfig  # noqa: E402
-from echovessel.proactive.engines.policy import PolicyEngine  # noqa: E402
-from echovessel.proactive.execution.audit import SQLiteAuditSink  # noqa: E402
-from tests.proactive.fakes import InMemoryMemoryApi  # noqa: E402
+from echovessel.proactive.core.config import ProactiveConfig
+from echovessel.proactive.core.models import (
+    PersonaProfile,
+    ProactiveState,
+)
+from echovessel.proactive.core.models import (
+    ProactiveDecision as PersistedDecision,
+)
+from echovessel.proactive.engines.policy import PolicyEngine
+from echovessel.proactive.execution.audit import SQLiteAuditSink
+from tests.proactive.fakes import InMemoryMemoryApi
 
 _NOW = datetime(2026, 5, 1, 14, 0, 0)
 
@@ -87,21 +79,28 @@ def _state(*, score: float = 0.7) -> ProactiveState:
     )
 
 
-def _thread(
+def _event(
     *,
-    confidence: float = 0.85,
-    anchor_text: str = "提前关心面试",
-    thread_id: int = 1,
-) -> FollowUpThread:
-    return FollowUpThread(
-        id=thread_id,
+    event_id: int = 1,
+    follow_up_hint: str = "提前关心面试",
+    relational_tags: list[str] | None = None,
+    emotional_impact: int = 4,
+) -> ConceptNode:
+    return ConceptNode(
+        id=event_id,
         persona_id="p",
         user_id="self",
-        source_event_id=1,
-        anchor_text=anchor_text,
-        kind="point_event_pre",
-        due_at=_NOW - timedelta(minutes=1),
-        confidence=confidence,
+        type=NodeType.EVENT,
+        description="面试 · 周一",
+        emotional_impact=emotional_impact,
+        relational_tags=relational_tags if relational_tags is not None else ["unresolved"],
+        follow_up_at=_NOW - timedelta(minutes=1),
+        follow_up_hint=follow_up_hint,
+        advance_pre_hours=24,
+        advance_post_hours=24,
+        estimated_arc_days=14,
+        event_time_start=_NOW + timedelta(days=1),
+        event_time_end=_NOW + timedelta(days=1, hours=2),
         created_at=_NOW - timedelta(days=1),
     )
 
@@ -127,27 +126,15 @@ def _build_engine(
     )
 
 
-def _thread_due_event(thread_id: int = 1) -> ProactiveEvent:
+def _follow_up_event(
+    event_id: int = 1, *, phase: str = "pre", critical: bool = False
+) -> ProactiveEvent:
     return ProactiveEvent(
-        event_type=EventType.THREAD_DUE,
+        event_type=EventType.FOLLOW_UP_DUE,
         persona_id="p",
         user_id="self",
         created_at=_NOW,
-        payload={"thread_id": thread_id, "decision_id": "d1"},
-    )
-
-
-def _high_impact_event(critical: bool = True) -> ProactiveEvent:
-    return ProactiveEvent(
-        event_type=EventType.HIGH_EMOTIONAL_EVENT,
-        persona_id="p",
-        user_id="self",
-        created_at=_NOW,
-        payload={
-            "source_event_id": 7,
-            "emotional_impact": -9,
-            "decision_id": "d-shock",
-        },
+        payload={"event_id": event_id, "phase": phase, "decision_id": "d1"},
         critical=critical,
     )
 
@@ -157,18 +144,18 @@ def _high_impact_event(critical: bool = True) -> ProactiveEvent:
 # ---------------------------------------------------------------------------
 
 
-def test_thread_due_fires_when_all_gates_pass():
+def test_follow_up_due_fires_when_all_gates_pass():
     engine = create_engine(":memory:")
     create_all_tables(engine)
     _seed(engine, profile=_profile())
     with Session(engine) as db:
         db.add(_state(score=0.7))
-        db.add(_thread(confidence=0.85))
+        db.add(_event(relational_tags=["commitment"]))
         db.commit()
 
     pol = _build_engine(engine)
     decision = pol.evaluate(
-        [_thread_due_event()],
+        [_follow_up_event()],
         persona_id="p",
         user_id="self",
         now=datetime(2026, 5, 1, 12, 0),
@@ -176,26 +163,6 @@ def test_thread_due_fires_when_all_gates_pass():
 
     assert decision.action == ActionType.SEND.value
     assert decision.skip_reason is None
-
-
-def test_high_emotional_event_fires_when_all_gates_pass():
-    engine = create_engine(":memory:")
-    create_all_tables(engine)
-    _seed(engine, profile=_profile())
-    with Session(engine) as db:
-        db.add(_state(score=0.7))
-        db.commit()
-
-    pol = _build_engine(engine)
-    decision = pol.evaluate(
-        [_high_impact_event(critical=True)],
-        persona_id="p",
-        user_id="self",
-        now=datetime(2026, 5, 1, 12, 0),
-    )
-
-    assert decision.action == ActionType.SEND.value
-    assert decision.trigger == TriggerReason.HIGH_EMOTIONAL_EVENT.value
 
 
 def test_no_fireable_event_returns_no_trigger_match():
@@ -236,12 +203,12 @@ def test_quiet_hours_gate(now_hour: int, quiet: list[int], expect_block: bool):
     _seed(engine, profile=_profile(quiet_hours=quiet))
     with Session(engine) as db:
         db.add(_state(score=0.7))
-        db.add(_thread(confidence=0.85))
+        db.add(_event(relational_tags=["commitment"]))
         db.commit()
 
     pol = _build_engine(engine)
     decision = pol.evaluate(
-        [_thread_due_event()],
+        [_follow_up_event()],
         persona_id="p",
         user_id="self",
         now=datetime(2026, 5, 1, now_hour, 0),
@@ -259,18 +226,18 @@ def test_quiet_hours_gate(now_hour: int, quiet: list[int], expect_block: bool):
 # ---------------------------------------------------------------------------
 
 
-def test_forbidden_topics_blocks_thread_on_anchor_match():
+def test_forbidden_topics_blocks_event_on_hint_match():
     engine = create_engine(":memory:")
     create_all_tables(engine)
     _seed(engine, profile=_profile(forbidden_topics=["politics"]))
     with Session(engine) as db:
         db.add(_state(score=0.7))
-        db.add(_thread(anchor_text="想跟你聊聊 politics"))
+        db.add(_event(follow_up_hint="想跟你聊聊 politics"))
         db.commit()
 
     pol = _build_engine(engine)
     decision = pol.evaluate(
-        [_thread_due_event()],
+        [_follow_up_event()],
         persona_id="p",
         user_id="self",
         now=datetime(2026, 5, 1, 12, 0),
@@ -280,43 +247,45 @@ def test_forbidden_topics_blocks_thread_on_anchor_match():
     assert decision.skip_reason == "forbidden_topic"
 
 
-def test_forbidden_topics_closes_thread_when_blocked():
-    """spec 05: forbidden is a hard veto that ALSO closes the thread
-    so the same anchor doesn't re-trigger every cooldown."""
+def test_forbidden_topics_suppresses_event_when_blocked():
+    """Forbidden is a hard veto that ALSO sets ``proactive_suppressed_at``
+    on the source event so the same anchor doesn't re-arm on the next
+    phase tick."""
     engine = create_engine(":memory:")
     create_all_tables(engine)
     _seed(engine, profile=_profile(forbidden_topics=["politics"]))
     with Session(engine) as db:
         db.add(_state(score=0.7))
-        db.add(_thread(anchor_text="想跟你聊聊 politics"))
+        db.add(_event(follow_up_hint="想跟你聊聊 politics"))
         db.commit()
 
     pol = _build_engine(engine)
     pol.evaluate(
-        [_thread_due_event()],
+        [_follow_up_event()],
         persona_id="p",
         user_id="self",
         now=datetime(2026, 5, 1, 12, 0),
     )
 
     with Session(engine) as db:
-        thread = db.get(FollowUpThread, 1)
-    assert thread.closed_at is not None
+        row = db.get(ConceptNode, 1)
+    assert row.proactive_suppressed_at is not None
 
 
-def test_forbidden_topics_inapplicable_to_high_emotional_event():
-    """High-emotional events have no anchor_text — gate cannot
-    suppress them on this rule."""
+def test_forbidden_topics_inapplicable_when_event_missing():
+    """No backing memory event (orphan FOLLOW_UP_DUE) → forbidden gate
+    has nothing to match and falls through. Critical flag carries the
+    decision past gate 5."""
     engine = create_engine(":memory:")
     create_all_tables(engine)
     _seed(engine, profile=_profile(forbidden_topics=["politics"]))
     with Session(engine) as db:
-        db.add(_state(score=0.7))
+        db.add(_state(score=0.2))
         db.commit()
 
     pol = _build_engine(engine)
     decision = pol.evaluate(
-        [_high_impact_event(critical=True)],
+        [_follow_up_event(event_id=999, critical=True)],
         persona_id="p",
         user_id="self",
         now=datetime(2026, 5, 1, 12, 0),
@@ -325,7 +294,7 @@ def test_forbidden_topics_inapplicable_to_high_emotional_event():
 
 
 # ---------------------------------------------------------------------------
-# Gate 3 · in_flight (recover the test coverage Stage 3 lost)
+# Gate 3 · in_flight
 # ---------------------------------------------------------------------------
 
 
@@ -335,12 +304,12 @@ def test_in_flight_predicate_blocks_decision():
     _seed(engine, profile=_profile())
     with Session(engine) as db:
         db.add(_state(score=0.7))
-        db.add(_thread())
+        db.add(_event())
         db.commit()
 
     pol = _build_engine(engine, is_turn_in_flight=lambda: True)
     decision = pol.evaluate(
-        [_thread_due_event()],
+        [_follow_up_event()],
         persona_id="p",
         user_id="self",
         now=datetime(2026, 5, 1, 12, 0),
@@ -355,7 +324,7 @@ def test_in_flight_predicate_raises_treated_as_in_flight():
     _seed(engine, profile=_profile())
     with Session(engine) as db:
         db.add(_state(score=0.7))
-        db.add(_thread())
+        db.add(_event())
         db.commit()
 
     def _boom() -> bool:
@@ -363,7 +332,7 @@ def test_in_flight_predicate_raises_treated_as_in_flight():
 
     pol = _build_engine(engine, is_turn_in_flight=_boom)
     decision = pol.evaluate(
-        [_thread_due_event()],
+        [_follow_up_event()],
         persona_id="p",
         user_id="self",
         now=datetime(2026, 5, 1, 12, 0),
@@ -383,7 +352,7 @@ def test_rate_limit_blocks_at_cap_via_sqlite_count():
     _seed(engine, profile=_profile())
     with Session(engine) as db:
         db.add(_state(score=0.7))
-        db.add(_thread())
+        db.add(_event())
         # Three fires in the last 24h — at cap
         for i, hours in enumerate([1, 5, 12]):
             db.add(
@@ -392,7 +361,7 @@ def test_rate_limit_blocks_at_cap_via_sqlite_count():
                     timestamp=_NOW - timedelta(hours=hours),
                     persona_id="p",
                     user_id="self",
-                    trigger_type="thread_due",
+                    trigger_type="follow_up",
                     action="fire",
                     created_at=_NOW - timedelta(hours=hours),
                 )
@@ -401,7 +370,7 @@ def test_rate_limit_blocks_at_cap_via_sqlite_count():
 
     pol = _build_engine(engine)
     decision = pol.evaluate(
-        [_thread_due_event()],
+        [_follow_up_event()],
         persona_id="p",
         user_id="self",
         now=_NOW,
@@ -411,22 +380,22 @@ def test_rate_limit_blocks_at_cap_via_sqlite_count():
 
 
 # ---------------------------------------------------------------------------
-# Gate 5 · engagement_score (replaces v1 cold_user)
+# Gate 5 · engagement_score
 # ---------------------------------------------------------------------------
 
 
-def test_engagement_low_blocks_low_confidence_thread():
+def test_engagement_low_blocks_low_confidence_event():
     engine = create_engine(":memory:")
     create_all_tables(engine)
     _seed(engine, profile=_profile())
     with Session(engine) as db:
         db.add(_state(score=0.3))
-        db.add(_thread(confidence=0.5))
+        db.add(_event(relational_tags=["unresolved"], emotional_impact=3))
         db.commit()
 
     pol = _build_engine(engine)
     decision = pol.evaluate(
-        [_thread_due_event()],
+        [_follow_up_event()],
         persona_id="p",
         user_id="self",
         now=datetime(2026, 5, 1, 12, 0),
@@ -435,18 +404,18 @@ def test_engagement_low_blocks_low_confidence_thread():
     assert decision.skip_reason == "low_engagement"
 
 
-def test_engagement_low_bypassed_by_high_confidence_thread():
+def test_engagement_low_bypassed_by_commitment_tag():
     engine = create_engine(":memory:")
     create_all_tables(engine)
     _seed(engine, profile=_profile())
     with Session(engine) as db:
         db.add(_state(score=0.3))
-        db.add(_thread(confidence=0.85))
+        db.add(_event(relational_tags=["commitment"], emotional_impact=2))
         db.commit()
 
     pol = _build_engine(engine)
     decision = pol.evaluate(
-        [_thread_due_event()],
+        [_follow_up_event()],
         persona_id="p",
         user_id="self",
         now=datetime(2026, 5, 1, 12, 0),
@@ -454,17 +423,37 @@ def test_engagement_low_bypassed_by_high_confidence_thread():
     assert decision.action == ActionType.SEND.value
 
 
-def test_engagement_low_bypassed_by_critical_event():
+def test_engagement_low_bypassed_by_high_emotional_impact():
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    _seed(engine, profile=_profile())
+    with Session(engine) as db:
+        db.add(_state(score=0.3))
+        db.add(_event(relational_tags=["unresolved"], emotional_impact=8))
+        db.commit()
+
+    pol = _build_engine(engine)
+    decision = pol.evaluate(
+        [_follow_up_event()],
+        persona_id="p",
+        user_id="self",
+        now=datetime(2026, 5, 1, 12, 0),
+    )
+    assert decision.action == ActionType.SEND.value
+
+
+def test_engagement_low_bypassed_by_critical_event_flag():
     engine = create_engine(":memory:")
     create_all_tables(engine)
     _seed(engine, profile=_profile())
     with Session(engine) as db:
         db.add(_state(score=0.2))
+        db.add(_event(relational_tags=["unresolved"], emotional_impact=2))
         db.commit()
 
     pol = _build_engine(engine)
     decision = pol.evaluate(
-        [_high_impact_event(critical=True)],
+        [_follow_up_event(critical=True)],
         persona_id="p",
         user_id="self",
         now=datetime(2026, 5, 1, 12, 0),
@@ -473,17 +462,15 @@ def test_engagement_low_bypassed_by_critical_event():
 
 
 def test_engagement_score_equal_to_threshold_suppresses():
-    """Stage 5 boundary fix: ``<= ENGAGEMENT_PASS`` (0.4) — at-or-below
-    the threshold suppresses. CPython FP coincidentally lands
-    ``0.7 - 0.15 - 0.15`` on ``0.3999...`` so the old ``<`` happened
-    to behave the same, but we now make the semantics explicit so
-    future reorderings can't flip the boundary."""
+    """``<= ENGAGEMENT_PASS`` (0.4) — at-or-below the threshold
+    suppresses. CPython FP coincidentally lands ``0.7 - 0.15 - 0.15``
+    on ``0.3999...`` so the old ``<`` happened to behave the same,
+    but we make the semantics explicit so future reorderings can't
+    flip the boundary."""
     engine = create_engine(":memory:")
     create_all_tables(engine)
     _seed(engine, profile=_profile())
     with Session(engine) as db:
-        # Exactly at the threshold (uses Decimal-style explicit
-        # construction to bypass any FP arithmetic surprise).
         db.add(
             ProactiveState(
                 persona_id="p",
@@ -492,12 +479,12 @@ def test_engagement_score_equal_to_threshold_suppresses():
                 last_updated=_NOW - timedelta(days=1),
             )
         )
-        db.add(_thread(confidence=0.5))
+        db.add(_event(relational_tags=["unresolved"], emotional_impact=2))
         db.commit()
 
     pol = _build_engine(engine)
     decision = pol.evaluate(
-        [_thread_due_event()],
+        [_follow_up_event()],
         persona_id="p",
         user_id="self",
         now=datetime(2026, 5, 1, 12, 0),
@@ -514,12 +501,12 @@ def test_engagement_initialised_when_state_row_missing():
     create_all_tables(engine)
     _seed(engine, profile=_profile())
     with Session(engine) as db:
-        db.add(_thread(confidence=0.6))
+        db.add(_event(relational_tags=["unresolved"], emotional_impact=3))
         db.commit()
 
     pol = _build_engine(engine)
     decision = pol.evaluate(
-        [_thread_due_event()],
+        [_follow_up_event()],
         persona_id="p",
         user_id="self",
         now=datetime(2026, 5, 1, 12, 0),
@@ -541,12 +528,12 @@ def test_missing_profile_does_not_crash_treats_as_no_quiet_hours():
     _seed(engine, profile=None)
     with Session(engine) as db:
         db.add(_state(score=0.7))
-        db.add(_thread(confidence=0.85))
+        db.add(_event(relational_tags=["commitment"]))
         db.commit()
 
     pol = _build_engine(engine)
     decision = pol.evaluate(
-        [_thread_due_event()],
+        [_follow_up_event()],
         persona_id="p",
         user_id="self",
         now=datetime(2026, 5, 1, 12, 0),
