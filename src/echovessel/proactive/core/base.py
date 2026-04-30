@@ -44,6 +44,7 @@ class EventType(StrEnum):
     SESSION_CLOSED = "memory.session_closed"
     TURN_COMPLETED = "runtime.turn_completed"
     THREAD_DUE = "thread_due"
+    FOLLOW_UP_DUE = "follow_up_due"
 
 
 class TriggerReason(StrEnum):
@@ -140,7 +141,7 @@ class ProactiveDecision:
     timestamp: datetime
 
     # Trigger
-    trigger: str                              # str for forward compat
+    trigger: str  # str for forward compat
     trigger_payload: Mapping[str, Any] | None = None
 
     # Decision
@@ -150,7 +151,7 @@ class ProactiveDecision:
     # Send outcome (None when action == 'skip')
     target_channel_id: str | None = None
     message_text: str | None = None
-    rationale: str | None = None             # internal; never enters prompt
+    rationale: str | None = None  # internal; never enters prompt
     # v0.2 · delivery inherits from persona.voice_enabled (review R1 +
     # Check 3). None when action == 'skip'. Values are "text" or
     # "voice_neutral" — proactive never picks prosody tone variants
