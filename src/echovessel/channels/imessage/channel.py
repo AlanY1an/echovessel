@@ -606,7 +606,7 @@ class IMessageChannel:
         ``datetime.now()``. Returning an aware datetime here would cross
         conventions and raise
         ``TypeError: can't compare offset-naive and offset-aware
-        datetimes`` inside ``sessions._is_stale``. So after parsing
+        datetimes`` inside ``sessions.is_session_stale``. So after parsing
         the tz-aware form we convert to local and drop tzinfo.
         """
         if not isinstance(value, str) or not value:

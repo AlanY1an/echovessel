@@ -52,7 +52,7 @@ from echovessel.memory import (
 )
 from echovessel.memory.backends.sqlite import SQLiteBackend
 from echovessel.memory.models import Session as SessionRow
-from echovessel.memory.sessions import catch_up_stale_sessions
+from echovessel.memory.sessions import catch_up_stale_sessions, set_session_idle_minutes
 from echovessel.proactive import (
     ProactiveScheduler as ProactiveSchedulerProtocol,
 )
@@ -401,6 +401,11 @@ class Runtime:
             if user is None:
                 db.add(User(id="self", display_name="self"))
                 db.commit()
+
+        # Apply [memory] session_idle_minutes override before catch-up so
+        # `is_session_stale` reads the configured threshold from the first
+        # call onward.
+        set_session_idle_minutes(config.memory.session_idle_minutes)
 
         # Catch up stale sessions (spec §3 step 5)
         with DbSession(engine) as db:

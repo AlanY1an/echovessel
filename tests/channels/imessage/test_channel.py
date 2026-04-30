@@ -386,7 +386,7 @@ async def test_parsed_created_at_is_naive_datetime():
     returns naive datetimes, so `_parse_iso` must also return naive.
     Returning an aware value here triggers
     `TypeError: can't compare offset-naive and offset-aware datetimes`
-    inside `memory.sessions._is_stale`. Caught in the wild 2026-04-19."""
+    inside `memory.sessions.is_session_stale`. Caught in the wild 2026-04-19."""
     ch, client = await _make_channel()
     try:
         await client.inject(

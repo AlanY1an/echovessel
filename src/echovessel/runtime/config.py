@@ -92,6 +92,7 @@ class MemorySection(BaseModel):
     retrieve_k: int = Field(default=10, ge=1, le=50)
     relational_bonus_weight: float = 1.0
     recent_window_size: int = Field(default=20, ge=1, le=200)
+    session_idle_minutes: int = Field(default=10, ge=1, le=1440)
 
 
 class LLMSection(BaseModel):
