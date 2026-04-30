@@ -212,6 +212,14 @@ _V0_7_PROACTIVE_FOLLOW_UP_COLUMNS: tuple[_ColumnSpec, ...] = (
 )
 
 
+# v0.7 · proactive_decisions.phase column · v3 detection refactor.
+# Legacy v2 databases that already carry the table grow the new column
+# in place; fresh databases get it from the SQLModel definition.
+_V0_7_PROACTIVE_DECISIONS_COLUMNS: tuple[_ColumnSpec, ...] = (
+    _ColumnSpec(table="proactive_decisions", column="phase", sql_type="TEXT"),
+)
+
+
 # Three new tables for the L5 entity family. `entities_vec` is a
 # virtual table created from `db.py::create_all_tables` (same pattern
 # as `concept_nodes_vec`), not listed here.
@@ -410,6 +418,7 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
             *_V0_4_PERSONA_COLUMNS,
             *_V0_4_USER_COLUMNS,
             *_V0_7_PROACTIVE_FOLLOW_UP_COLUMNS,
+            *_V0_7_PROACTIVE_DECISIONS_COLUMNS,
         ):
             if not _table_exists(conn, spec.table):
                 # Legacy DB that predates the parent table entirely.
