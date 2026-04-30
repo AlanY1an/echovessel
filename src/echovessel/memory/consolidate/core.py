@@ -95,6 +95,15 @@ class ExtractedEvent:
     # replaces; consolidate writes ``superseded_by_id = new_node.id`` on
     # each old node (soft delete — retrieve filters them out).
     superseded_event_ids: list[int] = field(default_factory=list)
+    # v0.7 · proactive follow-up annotation (Spec 1.3). Carry-through to
+    # the matching ConceptNode columns. NULL when the event has no
+    # follow-up structure (ordinary past fact). proactive_suppressed_at
+    # is NOT set here — the admin "don't bother me" UI owns that flip.
+    follow_up_at: datetime | None = None
+    follow_up_hint: str | None = None
+    estimated_arc_days: int | None = None
+    advance_pre_hours: int | None = None
+    advance_post_hours: int | None = None
 
 
 @dataclass(slots=True)
@@ -426,6 +435,11 @@ async def consolidate_session(
                 source_turn_ids=([effective_source_turn_id] if effective_source_turn_id else []),
                 event_time_start=event_time_start,
                 event_time_end=event_time_end,
+                follow_up_at=ev.follow_up_at,
+                follow_up_hint=ev.follow_up_hint,
+                estimated_arc_days=ev.estimated_arc_days,
+                advance_pre_hours=ev.advance_pre_hours,
+                advance_post_hours=ev.advance_post_hours,
             )
             db.add(node)
             db.flush()
@@ -462,10 +476,7 @@ async def consolidate_session(
                         old_id,
                     )
                     continue
-                if (
-                    old.persona_id != session.persona_id
-                    or old.user_id != session.user_id
-                ):
+                if old.persona_id != session.persona_id or old.user_id != session.user_id:
                     log.warning(
                         "supersedes target id=%s belongs to a different "
                         "(persona, user) scope; skipping",
@@ -617,12 +628,8 @@ async def consolidate_session(
 
     # --- D. TIMER trigger ----------------------------------------------
     timer_due = _is_timer_due(db, session.persona_id, session.user_id, now)
-    reflections_last_24h = _count_reflections_24h(
-        db, session.persona_id, session.user_id, now
-    )
-    tracer.record_phase_d(
-        timer_due=timer_due, reflections_last_24h=reflections_last_24h
-    )
+    reflections_last_24h = _count_reflections_24h(db, session.persona_id, session.user_id, now)
+    tracer.record_phase_d(timer_due=timer_due, reflections_last_24h=reflections_last_24h)
 
     reflection_reason: str | None = None
     created_thoughts: list[ConceptNode] = []
