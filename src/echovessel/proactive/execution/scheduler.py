@@ -1,25 +1,30 @@
 """DefaultScheduler — the concrete ProactiveScheduler implementation.
 
-Responsibilities:
+Responsibilities (proactive v2 · Stage 3):
     - Own the event queue and policy engine, generator, delivery router
-    - Run the periodic tick loop in a single asyncio background task
+    - React to externally-pushed events via ``notify`` (sync push +
+      immediate ``asyncio.create_task(tick_once())``)
     - Enforce the **先 ingest 再 send** order invariant (spec §4.5 + §7.4)
     - Two-phase audit write: skeleton before send, outcome after send
 
-Start / stop shape follows the existing ``runtime/consolidate_worker`` and
-``runtime/idle_scanner`` conventions (an injected ``shutdown_event`` plus a
-cooperative loop). The scheduler does NOT own its own task: ``start`` returns
-once the loop task has been scheduled, and the runtime hosting process
-``await``s the task at shutdown.
+The scheduler holds **no** background time loop in v2. The heartbeat
+lives in :class:`echovessel.runtime.loops.consolidate_worker.ConsolidateWorker`,
+which calls :func:`echovessel.proactive.execution.thread_scanner.scan_due_threads`
+on every idle tick — that scanner is what produces ``THREAD_DUE``
+notify calls. Emergency events come in via
+:class:`echovessel.proactive.engines.high_impact_observer.HighImpactProactiveObserver`
+which is registered against ``memory.observers``. Both feed the
+scheduler through ``notify``; nothing in this module sleeps.
 
-Spec §4.3 tick pseudocode maps to this file almost line-for-line; each
-numbered comment in ``_run_loop`` points back to the spec.
+For each event drained, ``tick_once`` evaluates with a one-element
+list to keep the v1 ``PolicyEngine.evaluate(events, ...)`` signature
+unchanged — Stage 4 rewrites the policy and switches to a single-event
+shape.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -29,7 +34,6 @@ from echovessel.core.types import MessageRole
 from echovessel.proactive.core.base import (
     ActionType,
     AuditSink,
-    EventType,
     MemoryApi,
     PersonaView,
     ProactiveDecision,
@@ -71,7 +75,6 @@ class DefaultScheduler(ProactiveScheduler):
     # Injected for deterministic testing
     clock: Any = field(default=datetime.now)
 
-    _task: asyncio.Task[None] | None = field(default=None, init=False)
     _stopped: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
@@ -89,118 +92,95 @@ class DefaultScheduler(ProactiveScheduler):
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Spawn the tick loop as a background task. Idempotent: a
-        second call returns immediately."""
-        if self._task is not None:
-            return
+        """v2: scheduler holds no time loop, so ``start`` is a state
+        reset rather than a task spawn. Kept on the Protocol so
+        runtime boot can ``await scheduler.start()`` symmetrically with
+        ``stop()``."""
+        self._stopped = False
         if not self.config.enabled:
             log.info("proactive scheduler: disabled (config.enabled=False)")
-            return
-        loop = asyncio.get_running_loop()
-        self._task = loop.create_task(
-            self._run_loop(), name="proactive-scheduler"
-        )
 
     async def stop(self) -> None:
-        """Cooperative shutdown. Waits up to config.stop_grace_seconds."""
+        """Drain pending events with the configured grace timeout."""
         self._stopped = True
         if self.shutdown_event is not None:
             self.shutdown_event.set()
-        if self._task is None:
-            return
         try:
             await asyncio.wait_for(
-                self._task, timeout=self.config.stop_grace_seconds
+                self.tick_once(),
+                timeout=self.config.stop_grace_seconds,
             )
         except TimeoutError:
             log.warning(
-                "proactive scheduler stop() exceeded grace %ds; cancelling",
+                "proactive scheduler stop() exceeded grace %ds, %d events left",
                 self.config.stop_grace_seconds,
+                len(self.queue),
             )
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._task
-        finally:
-            self._task = None
 
     def notify(self, event: ProactiveEvent) -> None:
-        """Push an event onto the queue. Non-blocking, safe from any
-        caller context (sync memory hook callback)."""
+        """Push an event onto the queue and schedule an immediate drain.
+
+        Non-blocking from the caller's perspective: when invoked from
+        a sync observer hook the new ``asyncio.create_task`` is queued
+        on the running loop and tests can flush it with
+        ``await asyncio.sleep(0)``. When called outside a running loop
+        (unit tests with no loop, factory bootstrap) the create_task
+        step is silently skipped — the test then calls ``tick_once``
+        explicitly.
+        """
+        if self._stopped:
+            return
         accepted = self.queue.push(event)
         if not accepted:
             log.warning(
                 "proactive queue overflow: dropped non-critical event %s",
                 event.event_type,
             )
-
-    # ------------------------------------------------------------------
-    # Tick loop (spec §4.3)
-    # ------------------------------------------------------------------
-
-    async def _run_loop(self) -> None:
-        log.info(
-            "proactive scheduler running (tick=%ds)",
-            self.config.tick_interval_seconds,
-        )
+            return
         try:
-            while not self._should_stop():
-                await asyncio.sleep(self.config.tick_interval_seconds)
-                if self._should_stop():
-                    break
-                try:
-                    await self.tick_once()
-                except Exception as e:  # noqa: BLE001
-                    log.error(
-                        "proactive tick failed: %s", e, exc_info=True
-                    )
-        except asyncio.CancelledError:
-            log.info("proactive scheduler cancelled")
-            raise
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self.tick_once(), name="proactive-tick")
 
-    async def tick_once(self) -> ProactiveDecision:
-        """Single tick iteration. Exposed for tests — production code
-        always enters via ``start`` and the internal loop.
+    # ------------------------------------------------------------------
+    # Drain (proactive v2 · pure reactive — no internal time loop)
+    # ------------------------------------------------------------------
 
-        Returns the ProactiveDecision produced this tick so callers can
-        assert on it. When queue_overflow caused a meta-skip, the
-        returned decision reflects the overflow outcome.
+    async def tick_once(self) -> ProactiveDecision | None:
+        """Drain every queued event, evaluate each, return the last
+        decision (or ``None`` if the queue was empty).
+
+        Stage 3 keeps the v1 ``PolicyEngine.evaluate(events, ...)``
+        signature for compatibility — wrapping each event in a
+        single-element list. Stage 4 rewrites policy to take a single
+        ``ProactiveEvent``; at that point this loop simplifies.
         """
-        now = self._now()
-
-        # Self-enqueue heartbeat tick (spec §4.3)
-        self.queue.push(
-            ProactiveEvent(
-                event_type=EventType.TICK,
-                persona_id=self.config.persona_id,
-                user_id=self.config.user_id,
-                created_at=now,
-                payload={},
-                critical=False,
-            )
-        )
-
         events = self.queue.drain()
 
         # If queue had an overflow, record a meta-decision (spec §16.3)
         if self.queue.overflow_count > 0:
-            self._record_overflow_meta(now=now)
+            self._record_overflow_meta(now=self._now())
 
-        decision = self.policy.evaluate(
-            events,
-            persona_id=self.config.persona_id,
-            user_id=self.config.user_id,
-            now=now,
-        )
+        if not events:
+            return None
 
-        # Spec §7.2: every evaluate → one audit record (skip or send).
-        self.audit.record(decision)
+        last_decision: ProactiveDecision | None = None
+        for evt in events:
+            now = self._now()
+            decision = self.policy.evaluate(
+                [evt],
+                persona_id=self.config.persona_id,
+                user_id=self.config.user_id,
+                now=now,
+            )
+            self.audit.record(decision)
 
-        if decision.action != ActionType.SEND.value:
-            return decision
+            if decision.action == ActionType.SEND.value:
+                await self._handle_send_action(decision=decision, now=now)
 
-        # --- Send path (spec §4.3 + §4.5 order invariant) --------------
-        await self._handle_send_action(decision=decision, now=now)
-        return decision
+            last_decision = decision
+        return last_decision
 
     async def _handle_send_action(
         self,

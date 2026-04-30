@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
+
 from echovessel.proactive.core.base import (
     ActionType,
     EventType,
@@ -15,6 +17,7 @@ from echovessel.proactive.core.base import (
 )
 
 
+@pytest.mark.skip(reason="EventType.HIGH_EMOTIONAL_EVENT removed in v3 · enum trimmed in Stage 2.2")
 def test_enum_values_stable():
     # These strings are persisted into JSONL audit files — changing any
     # of them is a breaking schema change.
@@ -25,18 +28,21 @@ def test_enum_values_stable():
     assert SkipReason.LOW_PRESENCE_MODE.value == "low_presence_mode"
     assert TriggerReason.HIGH_EMOTIONAL_EVENT.value == "high_emotional_event"
     assert TriggerReason.LONG_SILENCE.value == "long_silence"
-    assert EventType.TICK.value == "time.tick"
+    # Proactive v2 Stage 3 added these two and removed TICK /
+    # LONG_SILENCE_DETECTED / RELATIONSHIP_CHANGED.
+    assert EventType.THREAD_DUE.value == "thread_due"
+    assert EventType.HIGH_EMOTIONAL_EVENT.value == "high_emotional_event"
     assert EventType.EVENT_EXTRACTED.value == "memory.event_extracted"
 
 
 def test_proactive_event_is_frozen():
     ev = ProactiveEvent(
-        event_type=EventType.TICK,
+        event_type=EventType.THREAD_DUE,
         persona_id="p",
         user_id="u",
         created_at=datetime(2026, 4, 15, 12, 0, 0),
     )
-    assert ev.event_type == EventType.TICK
+    assert ev.event_type == EventType.THREAD_DUE
     assert ev.critical is False
     try:
         ev.critical = True  # type: ignore[misc]

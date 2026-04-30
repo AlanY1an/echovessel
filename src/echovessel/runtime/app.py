@@ -876,7 +876,12 @@ class Runtime:
             # v0.4 · persona= replaces legacy voice_id= kwarg (proactive
             # round2 shim). is_turn_in_flight closes over the registry
             # so every tick reads the current set of channels rather
-            # than a stale snapshot.
+            # than a stale snapshot. v2 audit lives in SQLite — the
+            # ``proactive_decisions`` table is the single source of
+            # truth for the rate_limit gate's 24h count.
+            from echovessel.proactive.execution.audit import SQLiteAuditSink
+
+            audit_sink = SQLiteAuditSink(db_factory=db_factory)
             scheduler = build_proactive_scheduler(
                 config=proactive_config,
                 memory_api=memory_api,
@@ -885,13 +890,12 @@ class Runtime:
                 persona=self._make_persona_view(),
                 voice_service=self.ctx.voice_service,
                 is_turn_in_flight=self.ctx.registry.any_channel_in_flight,
-                audit_sink=None,  # JSONL sink default under data_dir/logs
-                log_dir=self.ctx.data_dir / "logs",
+                audit_sink=audit_sink,
                 shutdown_event=self.ctx.shutdown_event,
+                db_factory=db_factory,
             )
             log.info(
-                "proactive scheduler: built (tick=%ds, max_per_24h=%d, voice=%s)",
-                self.ctx.config.proactive.tick_interval_seconds,
+                "proactive scheduler: built (max_per_24h=%d, voice=%s)",
                 self.ctx.config.proactive.max_per_24h,
                 "enabled" if self.ctx.voice_service is not None else "disabled",
             )

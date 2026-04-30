@@ -84,7 +84,7 @@ from echovessel.proactive.engines.generator import (
     MessageGenerator,
 )
 from echovessel.proactive.engines.policy import SHOCK_IMPACT, PolicyEngine
-from echovessel.proactive.execution.audit import JSONLAuditSink
+from echovessel.proactive.execution.audit import SQLiteAuditSink
 from echovessel.proactive.execution.delivery import (
     DeliveryRouter,
     VoiceBudgetError,
@@ -127,7 +127,7 @@ __all__ = [
     "MessageGenerator",
     "DeliveryRouter",
     "ProactiveEventQueue",
-    "JSONLAuditSink",
+    "SQLiteAuditSink",
     # Constants
     "SHOCK_IMPACT",
     "DEFAULT_MAX_EVENTS",
