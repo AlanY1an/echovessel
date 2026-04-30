@@ -199,6 +199,19 @@ _V0_5_ENTITY_COLUMNS: tuple[_ColumnSpec, ...] = (
 )
 
 
+# v0.7 · proactive follow-up annotation columns (memory-driven-proactive plan).
+# All nullable; existing rows get NULL. Partial index for the active-scan hot
+# path is added separately in ensure_schema_up_to_date below.
+_V0_7_PROACTIVE_FOLLOW_UP_COLUMNS: tuple[_ColumnSpec, ...] = (
+    _ColumnSpec(table="concept_nodes", column="follow_up_at", sql_type="DATETIME"),
+    _ColumnSpec(table="concept_nodes", column="follow_up_hint", sql_type="TEXT"),
+    _ColumnSpec(table="concept_nodes", column="estimated_arc_days", sql_type="INTEGER"),
+    _ColumnSpec(table="concept_nodes", column="advance_pre_hours", sql_type="INTEGER"),
+    _ColumnSpec(table="concept_nodes", column="advance_post_hours", sql_type="INTEGER"),
+    _ColumnSpec(table="concept_nodes", column="proactive_suppressed_at", sql_type="DATETIME"),
+)
+
+
 # Three new tables for the L5 entity family. `entities_vec` is a
 # virtual table created from `db.py::create_all_tables` (same pattern
 # as `concept_nodes_vec`), not listed here.
@@ -396,6 +409,7 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
             *_V0_5_ENTITY_COLUMNS,
             *_V0_4_PERSONA_COLUMNS,
             *_V0_4_USER_COLUMNS,
+            *_V0_7_PROACTIVE_FOLLOW_UP_COLUMNS,
         ):
             if not _table_exists(conn, spec.table):
                 # Legacy DB that predates the parent table entirely.
@@ -470,6 +484,31 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
                     e,
                 )
 
+        # v0.7 · partial index for proactive scanner hot path. Excludes
+        # deleted / superseded / user-suppressed events so the scan query
+        # is O(active follow-ups) not O(all concept_nodes).
+        if _table_exists(conn, "concept_nodes") and not _index_exists(
+            conn, "idx_concept_follow_up_active"
+        ):
+            try:
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS "
+                        "idx_concept_follow_up_active "
+                        "ON concept_nodes(follow_up_at) "
+                        "WHERE follow_up_at IS NOT NULL "
+                        "AND deleted_at IS NULL "
+                        "AND superseded_by_id IS NULL "
+                        "AND proactive_suppressed_at IS NULL"
+                    )
+                )
+                log.info("schema migration: added idx_concept_follow_up_active")
+            except Exception as e:  # noqa: BLE001
+                log.warning(
+                    "schema migration: could not create idx_concept_follow_up_active: %s",
+                    e,
+                )
+
         # v0.4 · backfill concept_nodes.source_turn_ids from the legacy
         # singular source_turn_id column. Idempotent: targets only rows
         # that still carry the default '[]' payload, so a second run is
@@ -503,9 +542,7 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
                         "ON turn_traces(persona_id, user_id, started_at DESC)"
                     )
                 )
-                log.info(
-                    "schema migration: added index idx_turn_traces_persona_user"
-                )
+                log.info("schema migration: added index idx_turn_traces_persona_user")
             except Exception as e:  # noqa: BLE001
                 log.warning(
                     "schema migration: could not create idx_turn_traces_persona_user: %s",
