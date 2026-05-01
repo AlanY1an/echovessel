@@ -10,8 +10,7 @@ Gates evaluated in order:
 5. engagement_score   (soft, bypassed by high-confidence relational
                        tag / emotional_impact OR critical event)
 
-Stage 3.1 swapped the v2 ``FollowUpThread`` shape for a direct read
-of ``ConceptNode`` (memory event with ``follow_up_at``).
+v3 reads ``ConceptNode`` directly (memory event with ``follow_up_at``).
 """
 
 from __future__ import annotations

@@ -98,12 +98,12 @@ def _run(coro):
 
 
 def _shock_event(now: datetime) -> ProactiveEvent:
-    """Push a payload v1 policy will match as ``HIGH_EMOTIONAL_EVENT``.
+    """Push a payload v3 policy will fire on (collapses to ``FOLLOW_UP``).
 
     Used by the scheduler tests below in place of the v1 TICK
     self-enqueue (which Stage 3 removed) — the gate tests only need
     *some* event in the queue so policy.evaluate has work to do, and
-    a high-impact event is the simplest path that v1 policy still
+    a high-impact event is the simplest path that policy still
     matches without a thread / profile lookup.
     """
     return ProactiveEvent(
@@ -281,7 +281,7 @@ def test_notify_pushes_event_into_queue():
     assert drained[0].critical is True
 
 
-def test_high_emotional_event_notify_triggers_send_on_next_tick():
+def test_follow_up_notify_triggers_send_on_next_tick():
     now = datetime(2026, 4, 15, 12, 0)
     scheduler, state = _build_scheduler(clock=lambda: now)
     scheduler.notify(
@@ -296,7 +296,7 @@ def test_high_emotional_event_notify_triggers_send_on_next_tick():
     )
     decision = _run(scheduler.tick_once())
     assert decision.action == ActionType.SEND.value
-    assert decision.trigger == TriggerReason.HIGH_EMOTIONAL_EVENT.value
+    assert decision.trigger == TriggerReason.FOLLOW_UP.value
     assert state["channel"].sent  # actually sent
 
 

@@ -144,7 +144,7 @@ def test_generator_delivery_voice_enabled():
     decision = _run(scheduler.tick_once())
 
     assert decision.action == ActionType.SEND.value
-    assert decision.trigger == TriggerReason.HIGH_EMOTIONAL_EVENT.value
+    assert decision.trigger == TriggerReason.FOLLOW_UP.value
     assert decision.delivery == "voice_neutral"
 
     # generate_voice was called exactly once

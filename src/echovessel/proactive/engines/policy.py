@@ -19,9 +19,9 @@ walks a fixed 5-gate sequence:
                               ``|emotional_impact| >= 7``, OR the
                               ProactiveEvent itself is ``critical``.)
 
-Stage 3.1 swapped the v2 ``FollowUpThread`` lookup for a direct read
-of ``ConceptNode`` (memory events with ``follow_up_at`` annotated by
-Phase B). v3 has a single fireable event type: ``FOLLOW_UP_DUE``.
+v3 reads ``ConceptNode`` directly (memory events with ``follow_up_at``
+annotated by Phase B) and has a single fireable event type:
+``FOLLOW_UP_DUE``.
 
 The legacy ``cold_user`` gate is gone. Coverage proof: any scenario
 that v1 caught (N consecutive unanswered fires) is now caught by
@@ -427,11 +427,11 @@ def _trigger_for(event: ProactiveEvent) -> TriggerReason:
 
     The ``trigger`` field on the dataclass is a legacy free-form
     string; the canonical routing column on the persisted row is
-    ``trigger_type``. ``HIGH_EMOTIONAL_EVENT`` is the closest match
-    here for both the new ``FOLLOW_UP_DUE`` lane and the transitional
-    ``EVENT_EXTRACTED`` shock path.
+    ``trigger_type``. v3 collapses both the ``FOLLOW_UP_DUE`` lane
+    and the transitional ``EVENT_EXTRACTED`` shock path to
+    ``FOLLOW_UP``.
     """
-    return TriggerReason.HIGH_EMOTIONAL_EVENT
+    return TriggerReason.FOLLOW_UP
 
 
 def _in_quiet_hours(now: datetime, quiet_hours: list[int]) -> bool:

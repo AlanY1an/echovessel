@@ -117,7 +117,7 @@ def test_record_writes_fire_decision_to_table():
         _decision(
             decision_id="d-fire",
             action=ActionType.SEND.value,
-            trigger=TriggerReason.HIGH_EMOTIONAL_EVENT.value,
+            trigger=TriggerReason.FOLLOW_UP.value,
             skip_reason=None,
             message_text="thinking of you",
         )
@@ -129,7 +129,7 @@ def test_record_writes_fire_decision_to_table():
     assert row.action == "fire"
     assert row.suppress_reason is None
     assert row.message_text == "thinking of you"
-    assert row.trigger_type == "high_emotional_event"
+    assert row.trigger_type == "follow_up"
     assert row.user_replied_at is None  # set by engagement_updater later
 
 
@@ -148,7 +148,7 @@ def test_update_latest_mutates_row_in_place():
         _decision(
             decision_id="d-mut",
             action=ActionType.SEND.value,
-            trigger=TriggerReason.HIGH_EMOTIONAL_EVENT.value,
+            trigger=TriggerReason.FOLLOW_UP.value,
             skip_reason=None,
             message_text="hey",
         )
@@ -304,7 +304,7 @@ def test_record_persists_phase_from_trigger_payload():
         _decision(
             decision_id="d-fire-pre",
             action=ActionType.SEND.value,
-            trigger=TriggerReason.HIGH_EMOTIONAL_EVENT.value,
+            trigger=TriggerReason.FOLLOW_UP.value,
             skip_reason=None,
             message_text="early ping",
             trigger_payload={
@@ -357,7 +357,7 @@ def test_record_persists_each_phase_value():
             _decision(
                 decision_id=f"d-{phase}",
                 action=ActionType.SEND.value,
-                trigger=TriggerReason.HIGH_EMOTIONAL_EVENT.value,
+                trigger=TriggerReason.FOLLOW_UP.value,
                 skip_reason=None,
                 trigger_payload={"event_id": 100 + i, "phase": phase},
             )

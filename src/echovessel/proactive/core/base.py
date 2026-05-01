@@ -64,7 +64,7 @@ class TriggerReason(StrEnum):
     QUEUE_OVERFLOW = "queue_overflow"
 
     # Matches — action will be SEND when one of these wins
-    HIGH_EMOTIONAL_EVENT = "high_emotional_event"
+    FOLLOW_UP = "follow_up"
     LONG_SILENCE = "long_silence"
     WARMTH_BURST = "warmth_burst"
 

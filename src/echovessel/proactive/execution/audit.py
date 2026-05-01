@@ -78,14 +78,16 @@ def _row_to_action(action: str) -> str:
 
 
 def _trigger_to_type(trigger: str | None) -> str:
-    """Map the v1 ``TriggerReason`` value onto the v0.6 ``trigger_type``
-    vocab. v0.6 only knows ``thread_due`` and ``high_emotional_event``;
-    older trigger reasons collapse onto ``thread_due`` so the audit row
-    still records "this attempt fell out of proactive's natural inbox".
-    The real differentiation lives on ``suppress_reason``.
+    """Map the runtime ``TriggerReason`` value onto the persisted
+    ``trigger_type`` vocab. v3 emits ``follow_up``; legacy values
+    (``thread_due`` / ``high_emotional_event``) round-trip unchanged so
+    historical rows still load. Anything else collapses onto
+    ``thread_due`` — the audit row still records "this attempt fell out
+    of proactive's natural inbox" and the real differentiation lives on
+    ``suppress_reason``.
     """
-    if trigger == "high_emotional_event":
-        return "high_emotional_event"
+    if trigger in ("follow_up", "thread_due", "high_emotional_event"):
+        return trigger
     return "thread_due"
 
 

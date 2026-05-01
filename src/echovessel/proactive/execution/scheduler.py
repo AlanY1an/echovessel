@@ -1,25 +1,21 @@
 """DefaultScheduler — the concrete ProactiveScheduler implementation.
 
-Responsibilities (proactive v2 · Stage 3):
+Responsibilities:
     - Own the event queue and policy engine, generator, delivery router
     - React to externally-pushed events via ``notify`` (sync push +
       immediate ``asyncio.create_task(tick_once())``)
     - Enforce the **先 ingest 再 send** order invariant (spec §4.5 + §7.4)
     - Two-phase audit write: skeleton before send, outcome after send
 
-The scheduler holds **no** background time loop in v2. The heartbeat
-lives in :class:`echovessel.runtime.loops.consolidate_worker.ConsolidateWorker`,
-which calls :func:`echovessel.proactive.execution.thread_scanner.scan_due_threads`
-on every idle tick — that scanner is what produces ``THREAD_DUE``
-notify calls. Emergency events come in via
-:class:`echovessel.proactive.engines.high_impact_observer.HighImpactProactiveObserver`
-which is registered against ``memory.observers``. Both feed the
-scheduler through ``notify``; nothing in this module sleeps.
+The scheduler holds **no** background time loop. ``FOLLOW_UP_DUE``
+notify calls arrive from
+:class:`echovessel.proactive.execution.follow_up_scheduler.FollowUpScheduler`
+when a memory event's ``follow_up_at`` wakes; nothing in this module
+sleeps.
 
 For each event drained, ``tick_once`` evaluates with a one-element
-list to keep the v1 ``PolicyEngine.evaluate(events, ...)`` signature
-unchanged — Stage 4 rewrites the policy and switches to a single-event
-shape.
+list to keep the historical ``PolicyEngine.evaluate(events, ...)``
+signature unchanged.
 """
 
 from __future__ import annotations

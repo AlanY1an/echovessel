@@ -583,6 +583,14 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
                 )
             )
 
+        # v0.7 · drop the deprecated v2 follow_up_threads table. v3
+        # replaced it with concept_nodes.follow_up_at (memory-driven
+        # proactive plan). Idempotent: succeeds whether the table
+        # exists or not — fresh databases never had it.
+        if _table_exists(conn, "follow_up_threads"):
+            conn.execute(text("DROP TABLE follow_up_threads"))
+            log.info("schema migration: dropped deprecated follow_up_threads table")
+
 
 # ---------------------------------------------------------------------------
 # Inspection helpers
