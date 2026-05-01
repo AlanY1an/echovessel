@@ -93,7 +93,6 @@ def _proactive_enabled() -> str:
     return """
 [proactive]
 enabled = true
-tick_interval_seconds = 3600
 max_per_24h = 1
 """
 

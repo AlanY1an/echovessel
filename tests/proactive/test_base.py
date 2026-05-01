@@ -16,27 +16,32 @@ from echovessel.proactive.core.base import (
 
 
 def test_enum_values_stable():
-    # These strings are persisted into JSONL audit files — changing any
-    # of them is a breaking schema change.
+    # These strings are persisted into JSONL / SQLite audit rows — changing
+    # any of them is a breaking schema change. v3 trimmed the enum surface
+    # but kept the legacy TriggerReason values so historical audit rows
+    # still round-trip.
     assert ActionType.SEND.value == "send"
     assert ActionType.SKIP.value == "skip"
     assert SkipReason.QUIET_HOURS.value == "quiet_hours"
     assert SkipReason.RATE_LIMITED.value == "rate_limited"
     assert SkipReason.LOW_PRESENCE_MODE.value == "low_presence_mode"
-    assert TriggerReason.HIGH_EMOTIONAL_EVENT.value == "high_emotional_event"
     assert TriggerReason.LONG_SILENCE.value == "long_silence"
-    assert EventType.TICK.value == "time.tick"
+    # v3 fireable event types: FOLLOW_UP_DUE is the canonical lane;
+    # EVENT_EXTRACTED + SESSION_CLOSED + TURN_COMPLETED are kept for
+    # legacy producers / tests.
+    assert EventType.FOLLOW_UP_DUE.value == "follow_up_due"
+    assert EventType.THREAD_DUE.value == "thread_due"
     assert EventType.EVENT_EXTRACTED.value == "memory.event_extracted"
 
 
 def test_proactive_event_is_frozen():
     ev = ProactiveEvent(
-        event_type=EventType.TICK,
+        event_type=EventType.THREAD_DUE,
         persona_id="p",
         user_id="u",
         created_at=datetime(2026, 4, 15, 12, 0, 0),
     )
-    assert ev.event_type == EventType.TICK
+    assert ev.event_type == EventType.THREAD_DUE
     assert ev.critical is False
     try:
         ev.critical = True  # type: ignore[misc]
@@ -52,7 +57,7 @@ def test_proactive_decision_update_outcome_partial():
         persona_id="p",
         user_id="u",
         timestamp=datetime(2026, 4, 15, 12, 0),
-        trigger=TriggerReason.HIGH_EMOTIONAL_EVENT.value,
+        trigger=TriggerReason.FOLLOW_UP.value,
         action=ActionType.SEND.value,
     )
     d.update_outcome(send_ok=True, ingest_message_id=42)

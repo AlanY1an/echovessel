@@ -154,6 +154,7 @@
       "cost": "成本",
       "config": "配置",
       "memory": "记忆",
+      "proactive": "主动",
       "sources": "导入",
       "imports": "导入",
       "channels": "通道"
@@ -169,6 +170,70 @@
       "click_a_node": "点一个节点看详情",
       "related": "相关",
       "open_in_list": "在列表中打开"
+    },
+    "proactive": {
+      "history_tab_title": "主动消息历史",
+      "events_tab_title": "待跟进事件",
+      "subsection_history": "历史",
+      "subsection_events": "待跟进",
+      "filter_all": "全部",
+      "filter_fire": "已发出",
+      "filter_suppress": "被压制",
+      "load_more": "加载更多",
+      "loading": "加载中⋯",
+      "load_failed": "加载失败:{{message}}",
+      "refresh": "刷新",
+      "user_replied": "你在 {{time}} 回复了",
+      "settled_no_reply": "24 小时内没回复",
+      "no_reply_yet": "等待回复",
+      "trigger_thread_due": "跟进到点",
+      "trigger_high_emotional_event": "高强度事件",
+      "fired_label": "已发出",
+      "suppressed_label": "被压制",
+      "phase_label": "阶段",
+      "follow_up_at_label": "跟进时间",
+      "fired_at_label": "发出时间",
+      "created_at_label": "创建于",
+      "source_event_label": "来源",
+      "suppressed_at_label": "压制于",
+      "superseded_by_label": "被替代为",
+      "suppress_event_button": "不再跟进",
+      "suppress_event_confirm": "停止跟进这件事?她不会再主动提起。",
+      "suppress_event_failed": "操作失败:{{message}}",
+      "state_active": "进行中",
+      "state_fired": "已发出",
+      "state_closed": "已结束",
+      "state_all": "全部",
+      "empty_state_history": "暂时没有主动消息记录。",
+      "empty_state_events_active": "暂无待跟进事件 · 等你聊到一件有未来弧线的事她才会记下。",
+      "empty_state_events_fired": "暂无已发出但等待回复的跟进。",
+      "empty_state_events_closed": "暂无已结束的跟进。",
+      "column": {
+        "follow_up_hint": "跟进提示",
+        "phase": "阶段"
+      },
+      "phase": {
+        "pre": "事前提醒",
+        "on": "当下",
+        "post": "事后回访"
+      },
+      "suppress_reason": {
+        "quiet_hours": "静音时段",
+        "rate_limit": "频次上限",
+        "low_engagement": "互动度过低",
+        "forbidden_topic": "禁忌话题",
+        "in_flight_turn": "正在对话",
+        "over_attempt": "重试已达上限",
+        "delivery_error": "发送失败",
+        "llm_error": "生成失败",
+        "unknown": "已压制"
+      },
+      "kind": {
+        "pre_event": "事前提醒",
+        "post_event": "事后回访",
+        "point_event": "提醒",
+        "ongoing": "持续中"
+      }
     },
     "imports_tab": {
       "section_title": "导入",

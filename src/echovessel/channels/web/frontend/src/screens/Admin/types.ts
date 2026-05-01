@@ -10,6 +10,7 @@
 export type AdmTab =
   | 'persona'
   | 'memory'
+  | 'proactive'
   | 'voice'
   | 'sources'
   | 'channels'

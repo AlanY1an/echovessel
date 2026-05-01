@@ -72,7 +72,6 @@ stt_provider = "stub"
 
 [proactive]
 enabled = true
-tick_interval_seconds = 3600
 max_per_24h = 1
 """
 

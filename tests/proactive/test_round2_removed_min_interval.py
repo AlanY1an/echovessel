@@ -33,8 +33,8 @@ PROACTIVE_SRC = Path(__file__).resolve().parents[2] / "src" / "echovessel" / "pr
 
 
 def test_policy_removed_min_interval_allows_rapid_bursts():
-    """Two evaluate calls 1 second apart, both with high_emotional_event,
-    both below the max_per_24h rate cap. The old 30 min min_interval
+    """Two evaluate calls 1 second apart, both firing on FOLLOW_UP, both
+    below the max_per_24h rate cap. The old 30 min min_interval
     would have blocked the second one. v0.2 policy does not — it uses
     ONLY the 24h rolling rate_limit + the 4 other gates.
 
@@ -74,12 +74,12 @@ def test_policy_removed_min_interval_allows_rapid_bursts():
     second = _fire(t1)
 
     assert first.action == ActionType.SEND.value
-    assert first.trigger == TriggerReason.HIGH_EMOTIONAL_EVENT.value
+    assert first.trigger == TriggerReason.FOLLOW_UP.value
     # 1 second later — the PROOF. Old 30 min throttle would have blocked
     # this; v0.2 policy must let it through because rate_limit is the
     # only throttling layer that survived review M5.
     assert second.action == ActionType.SEND.value
-    assert second.trigger == TriggerReason.HIGH_EMOTIONAL_EVENT.value
+    assert second.trigger == TriggerReason.FOLLOW_UP.value
 
 
 def test_policy_rate_limit_still_bites():

@@ -36,9 +36,17 @@ log = logging.getLogger(__name__)
 
 # --- Tunables (MVP defaults from architecture v0.3) ------------------------
 
-SESSION_IDLE_MINUTES = 30
+SESSION_IDLE_MINUTES = 10  # v0.7 · was 30, lowered for short reminder support
 SESSION_MAX_MESSAGES = 200
 SESSION_MAX_TOKENS = 20_000
+
+
+def set_session_idle_minutes(minutes: int) -> None:
+    """Override default. Called by runtime wiring at startup from config."""
+    global SESSION_IDLE_MINUTES
+    if minutes < 1 or minutes > 1440:
+        raise ValueError(f"session_idle_minutes must be 1..1440, got {minutes}")
+    SESSION_IDLE_MINUTES = minutes
 
 
 # --- Round 4: lifecycle fire tracking --------------------------------------
@@ -110,7 +118,7 @@ def _new_session_id() -> str:
     return f"s_{uuid.uuid4().hex[:12]}"
 
 
-def _is_stale(session: Session, now: datetime) -> bool:
+def is_session_stale(session: Session, now: datetime) -> bool:
     """A session is stale if idle exceeds the threshold."""
     return session.last_message_at < now - timedelta(minutes=SESSION_IDLE_MINUTES)
 
@@ -157,7 +165,7 @@ def get_or_create_open_session(
     # Close any that are stale
     fresh_open: Session | None = None
     for s in open_sessions:
-        if _is_stale(s, now):
+        if is_session_stale(s, now):
             _mark_closing(s, trigger="idle", now=now)
         else:
             fresh_open = s
@@ -254,7 +262,7 @@ def catch_up_stale_sessions(
     )
     stale: list[Session] = []
     for s in db.exec(stmt):
-        if _is_stale(s, now):
+        if is_session_stale(s, now):
             _mark_closing(s, trigger="catchup", now=now)
             stale.append(s)
     return stale

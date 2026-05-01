@@ -10,7 +10,7 @@ from echovessel.proactive.execution.queue import DEFAULT_MAX_EVENTS, ProactiveEv
 
 def _ev(i: int, *, critical: bool = False) -> ProactiveEvent:
     return ProactiveEvent(
-        event_type=EventType.TICK,
+        event_type=EventType.THREAD_DUE,
         persona_id="p",
         user_id="u",
         created_at=datetime(2026, 4, 15, 12, 0, 0) + timedelta(seconds=i),

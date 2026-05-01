@@ -10,9 +10,7 @@ discovery. Everything is injected.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from echovessel.proactive.core.base import (
@@ -28,37 +26,9 @@ from echovessel.proactive.core.config import ProactiveConfig
 from echovessel.proactive.core.errors import ProactivePermanentError
 from echovessel.proactive.engines.generator import MessageGenerator
 from echovessel.proactive.engines.policy import PolicyEngine
-from echovessel.proactive.execution.audit import JSONLAuditSink
 from echovessel.proactive.execution.delivery import DeliveryRouter
 from echovessel.proactive.execution.queue import ProactiveEventQueue
 from echovessel.proactive.execution.scheduler import DefaultScheduler
-
-DEFAULT_LOG_DIR = Path("~/.echovessel/logs").expanduser()
-
-
-@dataclass(frozen=True)
-class _LegacyVoiceIdPersona:
-    """Minimal PersonaView synthesized when a legacy caller passes
-    ``voice_id`` instead of the new ``persona=`` kwarg.
-
-    ``voice_enabled`` is FALSE by design — the v0.2 main switch is
-    persona.voice_enabled, and there is no way to infer that from a
-    legacy voice_id alone. Callers who want voice must upgrade to the
-    explicit ``persona=PersonaView(...)`` form.
-
-    This class is private to factory.py so it does not leak into the
-    public API of ``echovessel.proactive``.
-    """
-
-    voice_id_value: str | None = None
-
-    @property
-    def voice_enabled(self) -> bool:
-        return False
-
-    @property
-    def voice_id(self) -> str | None:
-        return self.voice_id_value
 
 
 def build_proactive_scheduler(
@@ -67,22 +37,16 @@ def build_proactive_scheduler(
     memory_api: MemoryApi,
     channel_registry: ChannelRegistryApi,
     proactive_fn: ProactiveFn,
+    audit_sink: AuditSink,
     persona: PersonaView | None = None,
     voice_service: VoiceServiceProtocol | None = None,
     is_turn_in_flight: Callable[[], bool] | None = None,
-    audit_sink: AuditSink | None = None,
-    log_dir: Path | None = None,
     clock: Any = datetime.now,
     shutdown_event: Any = None,
-    # --- v0.1 backward-compat shim ------------------------------------
-    # RT-round2's app.py still passes voice_id=. Proactive round2 moved
-    # the voice decision to persona.voice_enabled (review Check 3), but
-    # we keep voice_id accepted so RT-round2's wiring does not crash on
-    # import. When callers pass voice_id and no persona, we synthesize
-    # a minimal PersonaView with voice_enabled=False (safest default:
-    # text-only until RT-round3 explicitly passes persona=). This shim
-    # is deprecated and will be removed in v1.0.
-    voice_id: str | None = None,
+    # ``db_factory`` wires the SQLite-backed gates (forbidden_topics /
+    # engagement_score / rate_limit). Production always supplies it;
+    # tests that exercise only legacy gates may omit it.
+    db_factory: Callable[[], Any] | None = None,
 ) -> ProactiveScheduler:
     """Wire up all the subcomponents and return a ready-to-start scheduler.
 
@@ -114,10 +78,10 @@ def build_proactive_scheduler(
             ``in_flight_turn_id is not None``. When None, the gate
             is permissive (never blocks) — matching the spec's
             "no channel readable → no in-flight turn" rule.
-        audit_sink: Optional override. Defaults to a JSONLAuditSink
-            writing to ``log_dir`` (default ~/.echovessel/logs).
-        log_dir: Directory for the JSONL audit file. Ignored if
-            audit_sink is provided.
+        audit_sink: Required. Production wires
+            :class:`SQLiteAuditSink` so every decision lands in the
+            ``proactive_decisions`` table; tests typically inject a
+            stub that satisfies the :class:`AuditSink` Protocol.
         clock: Injected datetime provider for testing. Defaults to
             ``datetime.now``.
         shutdown_event: Optional asyncio.Event the runtime uses to
@@ -129,29 +93,14 @@ def build_proactive_scheduler(
             f"config must be ProactiveConfig, got {type(config).__name__}"
         )
 
-    # Backward-compat shim: a legacy caller passing voice_id but no
-    # persona view gets a text-only PersonaView. Review Check 3's main
-    # switch is persona.voice_enabled, and the legacy voice_id kwarg
-    # does NOT imply "enable voice" on its own — that was the old
-    # meaning, not the v0.2 meaning. Callers who actually want voice
-    # must pass persona= with voice_enabled_value=True.
-    if persona is None and voice_id is not None:
-        persona = _LegacyVoiceIdPersona(voice_id_value=voice_id)
-
-    sink = audit_sink
-    if sink is None:
-        sink = JSONLAuditSink(
-            log_dir=log_dir or DEFAULT_LOG_DIR,
-            clock=clock,
-        )
-
     queue = ProactiveEventQueue(max_events=config.max_events_in_queue)
 
     policy = PolicyEngine(
         config=config,
-        audit=sink,
+        audit=audit_sink,
         memory=memory_api,
         is_turn_in_flight=is_turn_in_flight,
+        db_factory=db_factory,
     )
 
     generator = MessageGenerator(
@@ -168,7 +117,7 @@ def build_proactive_scheduler(
     return DefaultScheduler(
         config=config,
         memory=memory_api,
-        audit=sink,
+        audit=audit_sink,
         policy=policy,
         generator=generator,
         delivery=delivery,
@@ -179,4 +128,4 @@ def build_proactive_scheduler(
     )
 
 
-__all__ = ["build_proactive_scheduler", "DEFAULT_LOG_DIR"]
+__all__ = ["build_proactive_scheduler"]

@@ -31,15 +31,20 @@ CONFIG_VERSION = "v0.1"
 
 
 class EventType(StrEnum):
-    """Event types the scheduler queue accepts. Ordered roughly by
-    production frequency (tick > turn_completed > session_closed > ...)."""
+    """Event types the scheduler queue accepts.
 
-    TICK = "time.tick"
-    LONG_SILENCE_DETECTED = "time.long_silence_detected"
+    v0.7 (memory-driven proactive): the production path is ``THREAD_DUE``
+    (driven by the future event-driven scanner that reads
+    ``concept_nodes.follow_up_at``). Legacy memory-extraction event
+    types are kept for tests / forward use even though no producer
+    currently writes them — Stage 4 may revisit.
+    """
+
     EVENT_EXTRACTED = "memory.event_extracted"
     SESSION_CLOSED = "memory.session_closed"
-    RELATIONSHIP_CHANGED = "memory.relationship_changed"
     TURN_COMPLETED = "runtime.turn_completed"
+    THREAD_DUE = "thread_due"
+    FOLLOW_UP_DUE = "follow_up_due"
 
 
 class TriggerReason(StrEnum):
@@ -59,7 +64,7 @@ class TriggerReason(StrEnum):
     QUEUE_OVERFLOW = "queue_overflow"
 
     # Matches — action will be SEND when one of these wins
-    HIGH_EMOTIONAL_EVENT = "high_emotional_event"
+    FOLLOW_UP = "follow_up"
     LONG_SILENCE = "long_silence"
     WARMTH_BURST = "warmth_burst"
 
@@ -136,7 +141,7 @@ class ProactiveDecision:
     timestamp: datetime
 
     # Trigger
-    trigger: str                              # str for forward compat
+    trigger: str  # str for forward compat
     trigger_payload: Mapping[str, Any] | None = None
 
     # Decision
@@ -146,7 +151,7 @@ class ProactiveDecision:
     # Send outcome (None when action == 'skip')
     target_channel_id: str | None = None
     message_text: str | None = None
-    rationale: str | None = None             # internal; never enters prompt
+    rationale: str | None = None  # internal; never enters prompt
     # v0.2 · delivery inherits from persona.voice_enabled (review R1 +
     # Check 3). None when action == 'skip'. Values are "text" or
     # "voice_neutral" — proactive never picks prosody tone variants

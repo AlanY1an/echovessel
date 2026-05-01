@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from echovessel.memory.models import ConceptNode
 from echovessel.proactive.core.base import (
     MemoryApi,
     MemorySnapshot,
@@ -49,8 +50,28 @@ from echovessel.proactive.core.base import (
     ProactiveMessage,
     SkipReason,
 )
+from echovessel.proactive.core.models import PersonaProfile
 
 log = logging.getLogger(__name__)
+
+
+# Phase-keyed guidance fragments. v3 replaces v2's ``KIND_GUIDANCE``
+# (keyed by ``thread.kind`` like ``point_event_pre``) with phase-keyed
+# entries because the event-driven shape no longer carries a kind —
+# ``phase`` is the only routing dimension and comes from the
+# ``ProactiveEvent`` payload (see ``follow_up_scheduler.py``).
+#
+# ``check_*`` covers the unbounded-arc tail. ``build_message_prompt``
+# falls back to the ``check_3`` text for any ``check_N`` with N>=3 so
+# extra ticks repeat the same restraint instead of going silent.
+PHASE_GUIDANCE: dict[str, str] = {
+    "pre": "提前关心 · 询问准备情况 · 不假设结果",
+    "on": "当天加油 · 简短鼓励 · 不绕弯",
+    "post": "追问结果 · 听用户说 · 不预设好坏",
+    "check_1": "关心进展 · 不施压",
+    "check_2": "再次温和关心 · 跟 check_1 不重复话题",
+    "check_3": "最后一次询问 · 之后不再追",
+}
 
 
 # Spec §2 + §5.3: how many recent L3 events to pull into the snapshot.
@@ -213,9 +234,7 @@ class MessageGenerator:
         user_id: str,
         now: datetime,
     ) -> MemorySnapshot:
-        core_blocks = tuple(
-            self.memory.load_core_blocks(persona_id, user_id)
-        )
+        core_blocks = tuple(self.memory.load_core_blocks(persona_id, user_id))
         recent_l3_events = tuple(
             self.memory.get_recent_events(
                 persona_id,
@@ -246,6 +265,53 @@ class MessageGenerator:
             relationship_state=None,
             snapshot_hash=snapshot_hash,
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase-aware prompt builder
+# ---------------------------------------------------------------------------
+
+
+def build_message_prompt(
+    *,
+    event: ConceptNode,
+    phase: str,
+    profile: PersonaProfile,
+    memory_context: str,
+    now: datetime,
+) -> str:
+    """Compose the phase-aware proactive user prompt.
+
+    v3 anchor reads from ``event.follow_up_hint`` (replaces v2's
+    ``thread.anchor_text``); ``relational_tags`` and ``emotional_impact``
+    surface as inline context tags so the LLM can pick the right register
+    without re-deriving them from the description text.
+
+    The trailing rule against quoting field names verbatim is the same
+    constraint v2 enforced — anchor / phase are routing metadata for the
+    runtime, not user-facing language.
+    """
+    guidance = PHASE_GUIDANCE.get(phase, PHASE_GUIDANCE["check_3"])
+    anchor = event.follow_up_hint or "(无)"
+    start = event.event_time_start or "?"
+    end = event.event_time_end or "?"
+    return (
+        f"{profile.style_summary}\n"
+        "\n"
+        "Memory context:\n"
+        f"{event.description} (impact: {event.emotional_impact}, "
+        f"tags: {list(event.relational_tags)})\n"
+        "\n"
+        "Follow-up:\n"
+        f"- 锚点(关于什么): {anchor}\n"
+        f"- 阶段({phase}): {guidance}\n"
+        f"- 时间参考: 原事件 {start} - {end}, 现在 {now}\n"
+        "\n"
+        "Recent context:\n"
+        f"{memory_context}\n"
+        "\n"
+        "写一条她说话方式的消息(20-300 字)。不要直白引用 anchor / phase 字段 · 自然引出。"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -307,9 +373,7 @@ def _scan_text(value: Any) -> None:
     lowered = value.lower()
     for frag in _FORBIDDEN_CHANNEL_SUBSTRINGS:
         if frag in lowered:
-            raise F10Violation(
-                f"channel_id fragment {frag!r} detected in snapshot field"
-            )
+            raise F10Violation(f"channel_id fragment {frag!r} detected in snapshot field")
 
 
 def _scan_mapping(value: Any) -> None:
@@ -317,9 +381,7 @@ def _scan_mapping(value: Any) -> None:
         return
     for k, v in value.items():
         if isinstance(k, str) and "channel" in k.lower():
-            raise F10Violation(
-                f"channel-related key {k!r} in snapshot mapping"
-            )
+            raise F10Violation(f"channel-related key {k!r} in snapshot mapping")
         if isinstance(v, str):
             _scan_text(v)
         elif isinstance(v, dict):
@@ -344,9 +406,7 @@ def _scan_object(obj: Any, *, attrs: tuple[str, ...]) -> None:
             _scan_text(value)
             for token in _FORBIDDEN_EXACT_TOKENS:
                 if value.strip().lower() == token:
-                    raise F10Violation(
-                        f"bare channel token {token!r} in snapshot field {attr}"
-                    )
+                    raise F10Violation(f"bare channel token {token!r} in snapshot field {attr}")
         elif isinstance(value, (list, tuple)):
             for item in value:
                 if isinstance(item, str):
@@ -404,7 +464,9 @@ def _obj_signature(obj: Any) -> str:
 
 
 __all__ = [
-    "MessageGenerator",
-    "GenerationOutcome",
     "F10Violation",
+    "GenerationOutcome",
+    "MessageGenerator",
+    "PHASE_GUIDANCE",
+    "build_message_prompt",
 ]

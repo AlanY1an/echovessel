@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Daemon control plane**: a dedicated HTTP listener on an independent loopback TCP port for operator-level lifecycle operations (`GET /health`, `POST /shutdown`, `POST /reload`). Orthogonal to the Web channel — separate uvicorn instance, separate FastAPI app, hardcoded `127.0.0.1` bind host, Host-header middleware that rejects off-host requests with 403. `echovessel stop` / `reload` / `status` now speak HTTP first and fall back to `SIGTERM` / `SIGHUP` only when the plane is unreachable. Pidfile upgraded to JSON v2 with `control_port` so the CLI knows where to POST; v1 integer pidfiles still read correctly and cause the signal fallback to trigger transparently. See `docs/en/runtime.md` (Control plane) and `develop-docs/initiatives/_active/2026-04-daemon-control/` for the full initiative.
+- **Event-driven follow-up scheduler** (memory-driven-proactive v3). `proactive/execution/follow_up_scheduler.py` is an asyncio-timer scheduler that subscribes to memory's `on_event_created` hook via `proactive/execution/observer.py` (`MemoryFollowUpObserver`) — no polling. When Phase B writes a `concept_node` carrying `follow_up_at`, the scheduler arms a single timer that fires a `FOLLOW_UP_DUE` trigger at the precise moment, then re-arms for the next `pre/on/post` phase. Smart cooldown logic interprets the closure reason: `forbidden_topic` permanently closes the chain, `quiet_hours` retries instantly when the window exits, `rate_limit` waits 4 h, and the default cooldown is 4 h.
+- v0.7 schema walker step adds 6 nullable columns (`follow_up_at`, `follow_up_hint`, `advance_pre_hours`, `advance_post_hours`, `proactive_phase`, `proactive_attempts`) plus a `idx_concept_follow_up_active` partial index to `concept_nodes` for cheap "next due" scans.
+- Frontend `screens/Admin/proactive/ProactiveTab.tsx` reads the new event-shaped admin route, renders each follow-up's phase (`pre/on/post/check_N`), and exposes a one-click suppress action.
 
 ### Changed
 
@@ -18,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `voice/models.py` renamed to `voice/types.py` — contents are dataclass value objects (e.g. `VoiceMeta`), not SQLModel ORM, and the new name avoids the false parallel with `memory/models.py`.
 - `Runtime.reload()` returns a `list[str]` of reloaded component names instead of `None`. HTTP `/reload` renders this list in its JSON response so the CLI can print `reloaded (via control plane): llm, consolidate.trivial_message_count`. Reload is now serialized via an `asyncio.Lock` so HTTP + `SIGHUP` invocations cannot race on `ctx.config` mid-swap.
 - `docs/{en,zh}/configuration.md`'s reload matrix is now field-by-field (13 hot-reloadable fields tabulated) instead of section-level. Matches `HOT_RELOADABLE_CONFIG_PATHS` literal-for-literal; backed by `tests/runtime/test_reload_matrix.py` so drift flips CI red.
+- **Proactive detection moved into memory's Phase B extraction** (memory-driven-proactive v3). `concept_nodes` rows now carry `follow_up_at` + `follow_up_hint` + `advance_pre_hours` / `advance_post_hours` populated by Phase B's PART F prompt. A single LLM call at session close handles annotation, replacing v2's three calls (`extract_threads` + `close_detection` + Phase B). The proactive layer reads `ConceptNode` directly — no parallel `follow_up_threads` table.
+- `SESSION_IDLE_MINUTES` lowered from 30 → 10 and exposed via `[memory] session_idle_minutes` in `config.toml` so users can tune the close-out latency.
+- `ProactiveDecision` schema gained a `phase` column (`pre` / `on` / `post` / `check_N`); the legacy `thread_id` column stays NULL on every new write but is preserved for v2 audit-history compat.
+- Admin endpoints rewired around events: `/api/admin/proactive/threads` becomes `/api/admin/proactive/events`, and the per-thread `DELETE` is replaced by `DELETE /api/admin/memory/events/{id}/proactive-follow-up`.
 
 ### Fixed
 
@@ -29,6 +36,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - `tests/perf/test_llm_latency.py` (and the otherwise-empty `tests/perf/` directory). The benchmark required `OPENAI_API_KEY` to run, was never wired into CI, and had no companion benchmarks.
+- `follow_up_threads` table — its data moved into the new `concept_nodes` columns described above.
+- `proactive/engines/extract_threads.py` and `prompts/extract_threads.py` — Phase B PART F now does this annotation inside the existing extraction call.
+- `proactive/engines/close_detection.py` and `prompts/close_detection.py` — memory's `superseded_by_id` chain on `concept_nodes` is the canonical close signal.
+- `proactive/engines/high_impact_observer.py` — immediate emotional follow-up runs through the normal reply path; later check-ins are picked up by the `follow_up_at` scan.
+- `proactive/execution/thread_scanner.py` — replaced by the event-driven `FollowUpScheduler`.
+- `EventType.HIGH_EMOTIONAL_EVENT` enum value — `FOLLOW_UP_DUE` is the canonical v3 trigger, and `TriggerReason.FOLLOW_UP` (string value `"follow_up"`) replaces the former `HIGH_EMOTIONAL_EVENT` reason.
+
+### Known Limitations
+
+- Sub-10-minute reminders ("remind me in 3 minutes") fire as soon as the session closes, so they can be delayed by up to `SESSION_IDLE_MINUTES` (default 10 min).
+- Mid-conversation reminders are not preempted — they fire only after the user has been idle for `SESSION_IDLE_MINUTES`.
+- Tool-use architecture (`set_reminder` and other agent-style direct tool calls) is deferred to v4. v3 still routes reminders through Phase B detection plus the idle-timeout trigger; the trade-offs are documented in `docs/{en,zh}/proactive.md` § Known Limitations.
 
 ## [0.0.1] - 2026-04-15
 

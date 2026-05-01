@@ -21,7 +21,12 @@ import asyncio
 from datetime import datetime, timedelta
 
 from echovessel.core.types import MessageRole
-from echovessel.proactive.core.base import ActionType, TriggerReason
+from echovessel.proactive.core.base import (
+    ActionType,
+    EventType,
+    ProactiveEvent,
+    TriggerReason,
+)
 from echovessel.proactive.core.config import ProactiveConfig
 from echovessel.proactive.engines.generator import MessageGenerator
 from echovessel.proactive.engines.policy import PolicyEngine
@@ -59,7 +64,6 @@ def _build_with_persona(persona: FakePersonaView, voice_service: FakeVoiceServic
     cfg = ProactiveConfig(
         persona_id="p",
         user_id="u",
-        long_silence_hours=48,
     )
 
     scheduler = DefaultScheduler(
@@ -99,6 +103,24 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def _shock_event(now: datetime) -> ProactiveEvent:
+    """Push a payload that v1 policy still matches — Stage 3 removed
+    the TICK self-enqueue that used to populate the queue
+    automatically, so each delivery test now seeds the queue itself.
+    """
+    return ProactiveEvent(
+        event_type=EventType.EVENT_EXTRACTED,
+        persona_id="p",
+        user_id="u",
+        created_at=now,
+        payload={
+            "event_id": 1,
+            "emotional_impact": 10,
+            "emotion_tags": ["surprise"],
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # The two tracker-mandated tests
 # ---------------------------------------------------------------------------
@@ -117,11 +139,12 @@ def test_generator_delivery_voice_enabled():
         voice_enabled_value=True, voice_id_value="vid_abc"
     )
     scheduler, state = _build_with_persona(persona, voice)
+    scheduler.queue.push(_shock_event(datetime(2026, 4, 15, 12, 0)))
 
     decision = _run(scheduler.tick_once())
 
     assert decision.action == ActionType.SEND.value
-    assert decision.trigger == TriggerReason.LONG_SILENCE.value
+    assert decision.trigger == TriggerReason.FOLLOW_UP.value
     assert decision.delivery == "voice_neutral"
 
     # generate_voice was called exactly once
@@ -154,6 +177,7 @@ def test_generator_delivery_voice_disabled():
         voice_enabled_value=False, voice_id_value="vid_abc"
     )
     scheduler, state = _build_with_persona(persona, voice)
+    scheduler.queue.push(_shock_event(datetime(2026, 4, 15, 12, 0)))
 
     decision = _run(scheduler.tick_once())
 
@@ -183,6 +207,7 @@ def test_delivery_defaults_to_text_when_persona_view_absent():
     explicit opt-in' spirit of Check 3."""
     voice = FakeVoiceService()
     scheduler, state = _build_with_persona(persona=None, voice_service=voice)  # type: ignore[arg-type]
+    scheduler.queue.push(_shock_event(datetime(2026, 4, 15, 12, 0)))
 
     decision = _run(scheduler.tick_once())
 
@@ -199,6 +224,7 @@ def test_delivery_text_when_voice_enabled_true_but_no_voice_service():
         voice_enabled_value=True, voice_id_value="vid_abc"
     )
     scheduler, state = _build_with_persona(persona, voice_service=None)  # type: ignore[arg-type]
+    scheduler.queue.push(_shock_event(datetime(2026, 4, 15, 12, 0)))
 
     decision = _run(scheduler.tick_once())
 
@@ -212,6 +238,7 @@ def test_delivery_text_when_voice_enabled_true_but_no_voice_id():
     voice = FakeVoiceService()
     persona = FakePersonaView(voice_enabled_value=True, voice_id_value=None)
     scheduler, state = _build_with_persona(persona, voice)
+    scheduler.queue.push(_shock_event(datetime(2026, 4, 15, 12, 0)))
 
     decision = _run(scheduler.tick_once())
 

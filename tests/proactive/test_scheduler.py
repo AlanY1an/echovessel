@@ -9,7 +9,7 @@ before ``channel.send`` was attempted.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from echovessel.core.types import MessageRole
 from echovessel.proactive.core.base import (
@@ -30,7 +30,6 @@ from tests.proactive.fakes import (
     FakeChannel,
     FakeChannelRegistry,
     FakeCoreBlock,
-    FakeMessage,
     FakePersonaView,
     FakeVoiceService,
     InMemoryMemoryApi,
@@ -53,11 +52,7 @@ def _build_scheduler(
     cfg = config or ProactiveConfig(
         persona_id="p",
         user_id="u",
-        quiet_hours_start=23,
-        quiet_hours_end=7,
         max_per_24h=3,
-        cold_user_threshold=2,
-        long_silence_hours=48,
     )
     memory = memory or InMemoryMemoryApi(
         core_blocks=[FakeCoreBlock(content="温暖")],
@@ -102,40 +97,39 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def _shock_event(now: datetime) -> ProactiveEvent:
+    """Push a payload v3 policy will fire on (collapses to ``FOLLOW_UP``).
+
+    Used by the scheduler tests below in place of the v1 TICK
+    self-enqueue (which Stage 3 removed) — the gate tests only need
+    *some* event in the queue so policy.evaluate has work to do, and
+    a high-impact event is the simplest path that policy still
+    matches without a thread / profile lookup.
+    """
+    return ProactiveEvent(
+        event_type=EventType.EVENT_EXTRACTED,
+        persona_id="p",
+        user_id="u",
+        created_at=now,
+        payload={
+            "event_id": 1,
+            "emotional_impact": 10,
+            "emotion_tags": ["surprise"],
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tick orchestration
 # ---------------------------------------------------------------------------
 
 
-def test_tick_long_silence_triggers_send():
-    now = datetime(2026, 4, 15, 12, 0)
-    memory = InMemoryMemoryApi(
-        core_blocks=[FakeCoreBlock(content="warm")],
-        recent_messages=[
-            FakeMessage(
-                content="hey",
-                role="user",
-                created_at=now - timedelta(hours=72),
-            )
-        ],
-    )
-    scheduler, state = _build_scheduler(
-        memory=memory, clock=lambda: now
-    )
-    decision = _run(scheduler.tick_once())
-    assert decision.action == ActionType.SEND.value
-    assert decision.trigger == TriggerReason.LONG_SILENCE.value
-    assert state["channel"].sent == ["hi user, how are you today"]
-
-
-def test_tick_quiet_hours_skips_without_send():
-    now = datetime(2026, 4, 15, 2, 0)  # 2am
-    scheduler, state = _build_scheduler(clock=lambda: now)
-    decision = _run(scheduler.tick_once())
-    assert decision.action == ActionType.SKIP.value
-    assert decision.skip_reason == SkipReason.QUIET_HOURS.value
-    assert state["channel"].sent == []
-    assert state["memory"].ingested == []
+# ``test_tick_quiet_hours_skips_without_send`` was deleted in
+# proactive v2 Stage 4: v2 quiet_hours reads from
+# ``PersonaProfile.quiet_hours`` (DB), not ``ProactiveConfig`` —
+# so the scheduler-level fixture can't drive the gate without a
+# real DB session. The gate's behaviour is fully covered by
+# ``test_policy_v2.test_quiet_hours_gate``.
 
 
 def test_tick_rate_limit_skips():
@@ -143,7 +137,9 @@ def test_tick_rate_limit_skips():
     audit = FakeAuditSink()
     audit.sends_count_24h = 3  # at cap
     scheduler, state = _build_scheduler(audit=audit, clock=lambda: now)
+    scheduler.queue.push(_shock_event(now))
     decision = _run(scheduler.tick_once())
+    assert decision is not None
     assert decision.skip_reason == SkipReason.RATE_LIMITED.value
     assert state["channel"].sent == []
 
@@ -158,15 +154,7 @@ def test_order_invariant_ingest_before_send():
     before channel.send. Verified by inspecting insertion order on both
     fakes."""
     now = datetime(2026, 4, 15, 12, 0)
-    memory = InMemoryMemoryApi(
-        recent_messages=[
-            FakeMessage(
-                content="long ago",
-                role="user",
-                created_at=now - timedelta(hours=72),
-            )
-        ],
-    )
+    memory = InMemoryMemoryApi()
 
     # Instrument channel.send to snapshot ingested state at the moment
     # of the send call.
@@ -183,7 +171,9 @@ def test_order_invariant_ingest_before_send():
     scheduler, _ = _build_scheduler(
         memory=memory, channel=channel, clock=lambda: now
     )
+    scheduler.queue.push(_shock_event(now))
     decision = _run(scheduler.tick_once())
+    assert decision is not None
     assert decision.action == ActionType.SEND.value
     assert ingested_at_send_time == [1], (
         "channel.send was called but memory.ingest_message had not yet run"
@@ -199,24 +189,18 @@ def test_order_invariant_send_failure_keeps_ingest():
     persona still remembers saying it (spec §16.2). Audit records
     send_ok=False but the L2 row is there."""
     now = datetime(2026, 4, 15, 12, 0)
-    memory = InMemoryMemoryApi(
-        recent_messages=[
-            FakeMessage(
-                content="long ago",
-                role="user",
-                created_at=now - timedelta(hours=72),
-            )
-        ],
-    )
+    memory = InMemoryMemoryApi()
     channel = FakeChannel(name="web", channel_id="web")
     channel._raise_on_send = RuntimeError  # type: ignore[attr-defined]
 
     scheduler, state = _build_scheduler(
         memory=memory, channel=channel, clock=lambda: now
     )
+    scheduler.queue.push(_shock_event(now))
     decision = _run(scheduler.tick_once())
+    assert decision is not None
     assert decision.action == ActionType.SEND.value
-    assert len(memory.ingested) == 1   # ingest succeeded first
+    assert len(memory.ingested) == 1  # ingest succeeded first
     # The decision in audit reflects send failure
     audit = state["audit"]
     assert audit.recorded[-1].send_ok is False
@@ -230,20 +214,14 @@ def test_order_invariant_send_failure_keeps_ingest():
 
 def test_llm_error_converts_send_to_skip():
     now = datetime(2026, 4, 15, 12, 0)
-    memory = InMemoryMemoryApi(
-        recent_messages=[
-            FakeMessage(
-                content="long ago",
-                role="user",
-                created_at=now - timedelta(hours=72),
-            )
-        ],
-    )
+    memory = InMemoryMemoryApi()
     boom = make_fake_proactive_fn(raise_exc=RuntimeError)
     scheduler, state = _build_scheduler(
         memory=memory, proactive_fn=boom, clock=lambda: now
     )
+    scheduler.queue.push(_shock_event(now))
     decision = _run(scheduler.tick_once())
+    assert decision is not None
     assert decision.action == ActionType.SKIP.value
     assert decision.skip_reason == SkipReason.LLM_ERROR.value
     # No ingest, no send (§5.6: LLM failures never advance to delivery)
@@ -257,9 +235,10 @@ def test_llm_error_converts_send_to_skip():
 
 
 def test_start_stop_disabled_config():
-    cfg = ProactiveConfig(
-        persona_id="p", user_id="u", enabled=False, tick_interval_seconds=10
-    )
+    """Stage 3: ``start`` is no longer a task spawn; it just resets
+    state. Disabled config still flows through cleanly without
+    raising."""
+    cfg = ProactiveConfig(persona_id="p", user_id="u", enabled=False)
     scheduler, _ = _build_scheduler(config=cfg)
 
     async def _go():
@@ -267,8 +246,6 @@ def test_start_stop_disabled_config():
         await scheduler.stop()
 
     _run(_go())
-    # No task was created because enabled=False
-    assert scheduler._task is None
 
 
 def test_stop_is_idempotent():
@@ -304,7 +281,7 @@ def test_notify_pushes_event_into_queue():
     assert drained[0].critical is True
 
 
-def test_high_emotional_event_notify_triggers_send_on_next_tick():
+def test_follow_up_notify_triggers_send_on_next_tick():
     now = datetime(2026, 4, 15, 12, 0)
     scheduler, state = _build_scheduler(clock=lambda: now)
     scheduler.notify(
@@ -319,7 +296,7 @@ def test_high_emotional_event_notify_triggers_send_on_next_tick():
     )
     decision = _run(scheduler.tick_once())
     assert decision.action == ActionType.SEND.value
-    assert decision.trigger == TriggerReason.HIGH_EMOTIONAL_EVENT.value
+    assert decision.trigger == TriggerReason.FOLLOW_UP.value
     assert state["channel"].sent  # actually sent
 
 
@@ -335,15 +312,7 @@ def test_voice_failure_downgrades_to_text():
     from echovessel.proactive.execution.delivery import VoiceTransientError
 
     now = datetime(2026, 4, 15, 12, 0)
-    memory = InMemoryMemoryApi(
-        recent_messages=[
-            FakeMessage(
-                content="long ago",
-                role="user",
-                created_at=now - timedelta(hours=72),
-            )
-        ],
-    )
+    memory = InMemoryMemoryApi()
     channel = FakeChannel(
         name="web", channel_id="web", supports_audio=True
     )
@@ -356,7 +325,9 @@ def test_voice_failure_downgrades_to_text():
         persona=FakePersonaView(voice_enabled_value=True, voice_id_value="vid_123"),
         clock=lambda: now,
     )
+    scheduler.queue.push(_shock_event(now))
     decision = _run(scheduler.tick_once())
+    assert decision is not None
     assert decision.action == ActionType.SEND.value
     # Text went through the channel
     assert state["channel"].sent == ["hi user, how are you today"]

@@ -94,6 +94,7 @@ class MemorySection(BaseModel):
     retrieve_k: int = Field(default=10, ge=1, le=50)
     relational_bonus_weight: float = 1.0
     recent_window_size: int = Field(default=20, ge=1, le=200)
+    session_idle_minutes: int = Field(default=10, ge=1, le=1440)
 
 
 class LLMSection(BaseModel):
@@ -303,70 +304,48 @@ class SlowTickSection(BaseModel):
 class ProactiveSection(BaseModel):
     """Proactive scheduler configuration.
 
-    Round 2 expands this to mirror `echovessel.proactive.config.ProactiveConfig`
-    (see Proactive spec §12). `to_proactive_config()` converts to the
-    proactive-layer type consumed by `build_proactive_scheduler`.
+    Mirrors :class:`echovessel.proactive.core.config.ProactiveConfig`;
+    ``to_proactive_config()`` converts to the proactive-layer type
+    consumed by ``build_proactive_scheduler``.
 
-    Default is `enabled=False` because MVP daemons that have not opted
-    into proactive messaging should boot silently. Flip to `true` in
-    config to actually run the scheduler.
+    Default is ``enabled=False`` because MVP daemons that have not
+    opted into proactive messaging should boot silently. Flip to
+    ``true`` in config to actually run the scheduler.
+
+    Layer-1 PROFILE knobs (``quiet_hours`` / ``forbidden_topics`` /
+    ``style_summary``) are not config fields — they live on the
+    per-persona ``persona_profile`` row, edited via the admin "行为
+    侧写" tab. Audit sink is also no longer configurable: the v2
+    daemon writes every decision to the SQLite ``proactive_decisions``
+    table.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    tick_interval_seconds: int = Field(default=60, ge=10, le=3600)
 
-    # Quiet hours (local time, 24h)
-    quiet_hours_start: int = Field(default=23, ge=0, le=23)
-    quiet_hours_end: int = Field(default=7, ge=0, le=23)
-
-    # Rate limit
+    # Daily ceiling on fired proactive messages (rolling 24h window).
     max_per_24h: int = Field(default=3, ge=0, le=100)
 
-    # Cold-user detection
-    cold_user_threshold: int = Field(default=2, ge=1, le=20)
-    cold_user_response_window_hours: int = Field(default=6, ge=1, le=72)
-
-    # Long silence (gentle nudge)
-    long_silence_hours: int = Field(default=48, ge=1, le=720)
-
-    # Queue cap (spec §2.5)
+    # Hard cap on the in-memory event queue.
     max_events_in_queue: int = Field(default=64, ge=8, le=1024)
 
-    # Voice integration
-    use_voice_when_available: bool = True
-
-    # Audit sink (MVP only supports 'jsonl')
-    audit_sink: Literal["jsonl", "memory_db"] = "jsonl"
-
-    # Graceful stop timeout
+    # Wait-time for in-flight tick on graceful shutdown.
     stop_grace_seconds: int = Field(default=10, ge=1, le=120)
 
     def to_proactive_config(self, *, persona_id: str, user_id: str = "self"):
         """Convert this runtime-layer config into an
-        `echovessel.proactive.config.ProactiveConfig`.
+        :class:`echovessel.proactive.core.config.ProactiveConfig`.
 
-        Runtime-layer keeps its own Pydantic model for uniform validation
-        and TOML loading; the proactive layer has its own `ProactiveConfig`
-        that the scheduler factory consumes. This method bridges the two
-        without leaking proactive imports into the runtime config module
-        at import time — lazy imported.
+        Lazy import keeps ``runtime.config`` from pulling in the whole
+        proactive module at startup.
         """
         from echovessel.proactive.core.config import ProactiveConfig
 
         return ProactiveConfig(
             enabled=self.enabled,
-            tick_interval_seconds=self.tick_interval_seconds,
-            quiet_hours_start=self.quiet_hours_start,
-            quiet_hours_end=self.quiet_hours_end,
             max_per_24h=self.max_per_24h,
-            cold_user_threshold=self.cold_user_threshold,
-            cold_user_response_window_hours=self.cold_user_response_window_hours,
-            long_silence_hours=self.long_silence_hours,
             max_events_in_queue=self.max_events_in_queue,
-            use_voice_when_available=self.use_voice_when_available,
-            audit_sink=self.audit_sink,
             stop_grace_seconds=self.stop_grace_seconds,
             persona_id=persona_id,
             user_id=user_id,

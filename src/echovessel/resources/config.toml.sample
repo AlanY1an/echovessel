@@ -58,6 +58,11 @@ relational_bonus_weight = 1.0
 # Number of most-recent L2 messages injected into each prompt in
 # addition to retrieved memories.
 recent_window_size = 20
+# Minutes of inactivity before a session is marked CLOSING.
+# Lowered from 30 (v0.6) to 10 in v0.7 so short reminders ("10分钟提醒
+# 我") fire reasonably close to user expectation. < 5 not recommended
+# (consolidate cost goes up, slow_cycle cool-down conflicts).
+session_idle_minutes = 10
 
 [llm]
 # MVP default: OpenAI-compatible provider. Zero-config works as long as

@@ -52,13 +52,15 @@ from echovessel.memory import (
 )
 from echovessel.memory.backends.sqlite import SQLiteBackend
 from echovessel.memory.models import Session as SessionRow
-from echovessel.memory.sessions import catch_up_stale_sessions
+from echovessel.memory.sessions import catch_up_stale_sessions, set_session_idle_minutes
 from echovessel.proactive import (
     ProactiveScheduler as ProactiveSchedulerProtocol,
 )
 from echovessel.proactive import (
     build_proactive_scheduler,
 )
+from echovessel.proactive.execution.follow_up_scheduler import FollowUpScheduler
+from echovessel.proactive.execution.observer import MemoryFollowUpObserver
 from echovessel.runtime.channel_registry import ChannelRegistry
 from echovessel.runtime.config import Config, load_config
 from echovessel.runtime.llm import LLMProvider, build_llm_provider
@@ -71,6 +73,11 @@ from echovessel.runtime.turn.coordinator import (
     assemble_turn,
 )
 from echovessel.runtime.turn.dispatcher import TurnDispatcher
+from echovessel.runtime.wiring.follow_up import (
+    make_follow_up_scheduler,
+    register_follow_up,
+    unregister_follow_up,
+)
 from echovessel.runtime.wiring.importer import ImporterFacade
 from echovessel.runtime.wiring.memory import (
     MemoryFacade,
@@ -258,6 +265,12 @@ class Runtime:
         self._worker: ConsolidateWorker | None = None
         self._scanner: IdleScanner | None = None
         self._proactive_scheduler: ProactiveSchedulerProtocol | None = None
+        # v0.7 memory-driven follow-ups · Stage 2.5. Built alongside the
+        # proactive scheduler in `start()`; the observer is registered
+        # against `memory.observers` so new ConceptNode events with
+        # follow_up_at trigger an asyncio timer on commit.
+        self._follow_up_scheduler: FollowUpScheduler | None = None
+        self._follow_up_observer: MemoryFollowUpObserver | None = None
         self._dispatcher: TurnDispatcher | None = None
         self._sighup_registered = False
         # v0.4 · Step 10.7 / 12.5 additions
@@ -401,6 +414,11 @@ class Runtime:
             if user is None:
                 db.add(User(id="self", display_name="self"))
                 db.commit()
+
+        # Apply [memory] session_idle_minutes override before catch-up so
+        # `is_session_stale` reads the configured threshold from the first
+        # call onward.
+        set_session_idle_minutes(config.memory.session_idle_minutes)
 
         # Catch up stale sessions (spec §3 step 5)
         with DbSession(engine) as db:
@@ -755,6 +773,33 @@ class Runtime:
                 )
                 self._proactive_scheduler = None
 
+        # v0.7 · Stage 2.5 · memory-driven follow-up scheduler. Owns
+        # asyncio timers keyed on ConceptNode.follow_up_at; the
+        # observer bridges `on_event_created` to `_schedule_next`.
+        # Only wire when the proactive scheduler is alive — without a
+        # downstream notify() target there is nothing to schedule.
+        if self._proactive_scheduler is not None:
+            try:
+                follow_up_scheduler, follow_up_observer = make_follow_up_scheduler(
+                    db_factory=_db_factory,
+                    proactive_scheduler=self._proactive_scheduler,
+                    persona_id=self.ctx.config.persona.id,
+                    user_id="self",
+                )
+                await follow_up_scheduler.start()
+                register_follow_up(follow_up_observer)
+                self._follow_up_scheduler = follow_up_scheduler
+                self._follow_up_observer = follow_up_observer
+                log.info("follow-up scheduler: started")
+            except Exception as e:  # noqa: BLE001
+                log.error(
+                    "follow-up scheduler failed to start; continuing without it: %s",
+                    e,
+                    exc_info=True,
+                )
+                self._follow_up_scheduler = None
+                self._follow_up_observer = None
+
         if register_signals:
             self._register_signal_handlers()
 
@@ -800,6 +845,27 @@ class Runtime:
             except Exception as e:  # noqa: BLE001
                 log.warning("memory observer unregister failed: %s", e)
             self._memory_observer = None
+
+        # v0.7 · Stage 2.5 · tear down the follow-up scheduler before
+        # the proactive scheduler. Order matters: unregister the
+        # observer first so memory's lifecycle hook stops handing new
+        # events to a draining scheduler, then stop() cancels the
+        # asyncio timers themselves.
+        if self._follow_up_observer is not None:
+            try:
+                unregister_follow_up(self._follow_up_observer)
+            except Exception as e:  # noqa: BLE001
+                log.warning("follow-up observer unregister failed: %s", e)
+            self._follow_up_observer = None
+
+        if self._follow_up_scheduler is not None:
+            try:
+                await asyncio.wait_for(self._follow_up_scheduler.stop(), timeout=timeout)
+            except TimeoutError:
+                log.warning("follow-up scheduler stop timeout")
+            except Exception as e:  # noqa: BLE001
+                log.warning("follow-up scheduler stop errored: %s", e)
+            self._follow_up_scheduler = None
 
         # Stop proactive scheduler first — its tick loop may be mid-send,
         # which wants a graceful finish window (spec §2.5 graceful stop).
@@ -871,7 +937,12 @@ class Runtime:
             # v0.4 · persona= replaces legacy voice_id= kwarg (proactive
             # round2 shim). is_turn_in_flight closes over the registry
             # so every tick reads the current set of channels rather
-            # than a stale snapshot.
+            # than a stale snapshot. v2 audit lives in SQLite — the
+            # ``proactive_decisions`` table is the single source of
+            # truth for the rate_limit gate's 24h count.
+            from echovessel.proactive.execution.audit import SQLiteAuditSink
+
+            audit_sink = SQLiteAuditSink(db_factory=db_factory)
             scheduler = build_proactive_scheduler(
                 config=proactive_config,
                 memory_api=memory_api,
@@ -880,13 +951,12 @@ class Runtime:
                 persona=self._make_persona_view(),
                 voice_service=self.ctx.voice_service,
                 is_turn_in_flight=self.ctx.registry.any_channel_in_flight,
-                audit_sink=None,  # JSONL sink default under data_dir/logs
-                log_dir=self.ctx.data_dir / "logs",
+                audit_sink=audit_sink,
                 shutdown_event=self.ctx.shutdown_event,
+                db_factory=db_factory,
             )
             log.info(
-                "proactive scheduler: built (tick=%ds, max_per_24h=%d, voice=%s)",
-                self.ctx.config.proactive.tick_interval_seconds,
+                "proactive scheduler: built (max_per_24h=%d, voice=%s)",
                 self.ctx.config.proactive.max_per_24h,
                 "enabled" if self.ctx.voice_service is not None else "disabled",
             )

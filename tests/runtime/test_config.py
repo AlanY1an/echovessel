@@ -317,16 +317,8 @@ tts_provider = "bogus"
 def test_proactive_defaults_match_spec():
     cfg = load_config_from_str(MINIMAL_TOML)
     assert cfg.proactive.enabled is False
-    assert cfg.proactive.tick_interval_seconds == 60
-    assert cfg.proactive.quiet_hours_start == 23
-    assert cfg.proactive.quiet_hours_end == 7
     assert cfg.proactive.max_per_24h == 3
-    assert cfg.proactive.cold_user_threshold == 2
-    assert cfg.proactive.cold_user_response_window_hours == 6
-    assert cfg.proactive.long_silence_hours == 48
     assert cfg.proactive.max_events_in_queue == 64
-    assert cfg.proactive.use_voice_when_available is True
-    assert cfg.proactive.audit_sink == "jsonl"
     assert cfg.proactive.stop_grace_seconds == 10
 
 
@@ -342,26 +334,23 @@ api_key_env = ""
 
 [proactive]
 enabled = true
-tick_interval_seconds = 30
-quiet_hours_start = 22
-quiet_hours_end = 6
 max_per_24h = 5
-cold_user_threshold = 3
-cold_user_response_window_hours = 12
-long_silence_hours = 72
 max_events_in_queue = 128
-use_voice_when_available = false
-audit_sink = "jsonl"
 stop_grace_seconds = 20
 """
     cfg = load_config_from_str(toml)
     assert cfg.proactive.enabled is True
-    assert cfg.proactive.tick_interval_seconds == 30
     assert cfg.proactive.max_per_24h == 5
-    assert cfg.proactive.use_voice_when_available is False
+    assert cfg.proactive.max_events_in_queue == 128
+    assert cfg.proactive.stop_grace_seconds == 20
 
 
-def test_proactive_memory_db_audit_sink_rejected():
+def test_proactive_section_rejects_v1_quiet_hours_keys():
+    """Layer-1 PROFILE knobs (``quiet_hours_*`` / ``forbidden_topics`` /
+    ``style_summary``) live on the ``persona_profile`` row, edited via
+    the admin "行为侧写" tab — not in TOML. Confirm they are rejected
+    at config load so a stale config calls attention to itself instead
+    of silently dropping the value."""
     toml = """
 [persona]
 id = "x"
@@ -373,30 +362,9 @@ api_key_env = ""
 
 [proactive]
 enabled = true
-audit_sink = "memory_db"
+quiet_hours_start = 22
 """
-    # Runtime section still accepts "memory_db" at the Literal level;
-    # the ProactiveConfig-side validator rejects it in to_proactive_config.
-    cfg = load_config_from_str(toml)
-    with pytest.raises(ValueError, match="v1.0 only"):
-        cfg.proactive.to_proactive_config(persona_id="x")
-
-
-def test_proactive_tick_interval_min_bound():
-    toml = """
-[persona]
-id = "x"
-display_name = "x"
-
-[llm]
-provider = "stub"
-api_key_env = ""
-
-[proactive]
-enabled = true
-tick_interval_seconds = 5
-"""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="extra_forbidden|quiet_hours_start"):
         load_config_from_str(toml)
 
 
@@ -414,13 +382,11 @@ api_key_env = ""
 [proactive]
 enabled = true
 max_per_24h = 5
-long_silence_hours = 24
 """
     cfg = load_config_from_str(toml)
     pconfig = cfg.proactive.to_proactive_config(persona_id="alan")
     assert pconfig.enabled is True
     assert pconfig.max_per_24h == 5
-    assert pconfig.long_silence_hours == 24
     assert pconfig.persona_id == "alan"
     assert pconfig.user_id == "self"
 

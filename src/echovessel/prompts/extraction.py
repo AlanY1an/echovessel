@@ -476,6 +476,74 @@ code fences, no explanations outside the JSON:
   },
   "self_check_notes": "..."
 }
+
+# PART F · Proactive follow-up annotation
+
+每个 event 在已有字段填完之后,额外回答 4 件事:
+
+## 1. 这事将来值得 persona 主动提起吗?
+
+值得提起的判定准则:
+- event_time.end 有具体日期 → 是
+- relational_tags 含 "commitment" → 是(到期提)
+- relational_tags 含 "unresolved" → 是(几天内问)
+- event_time.start 有但 .end 为 null(ongoing 过程)→ 是(几天后问)
+- 用户语气含"别管这个 / 我自己处理 / 你别问了 / 算了" → 否
+  (即使前面任何条件成立,显式压制优先)
+- 纯过去发生事 + 无情绪 unresolved → 否
+
+值得提起 → 输出 `follow_up_at` + `follow_up_hint` + `estimated_arc_days`。
+不值得 → 全部 null。
+
+## 2. follow_up_at 怎么算?
+
+- event_time.end 已有 → follow_up_at = event_time.end
+  (proactive scanner 根据 phase 决定提前/当天/事后)
+- relational_tags = ['unresolved'] → follow_up_at = NOW + 1-2 天
+  (情绪 unresolved 短窗追问)
+- ongoing process(event_time.start 有 .end null)→ follow_up_at = NOW + N 天
+  N:健康 / 家人事 = 3,工作 / 学习 = 5-7,兴趣 / 长期 = 10-14
+- 上述都不适用但你判定 worth → follow_up_at = NOW + 7 天(default)
+
+## 3. follow_up_hint 写什么?
+
+5-15 字 anchor,描述要问什么。例:
+- "面试结果" / "面试准备进度" / "妈体检结果"
+- "昨晚睡眠状况" / "跟室友吵架的进展"
+- "论文写作进展" / "新工作适应"
+
+不写"提前关心面试" / "面试当天加油"这种 phase 修饰 — 那是 proactive 的事。
+你只描述 ANCHOR(关于什么),不描述 PHASE(什么时候说)。
+
+## 4. estimated_arc_days
+
+整个事 arc 大致几天?用于自动过期(超 3× arc 不再追)。
+点事件考试:14;论文:30;长期项目:90;一般情绪事:7。
+
+## 5. advance_pre_hours / advance_post_hours · 仅 event_time.end 有具体日期时填
+
+参考表:
+
+  事件类型                      advance_pre_hours   advance_post_hours
+  体检 / 例行医疗                    2-6               2-4
+  考试 / 面试                        12-24             12-24
+  手术 / 重大医疗                    48-72             0
+  旅行出发                           6-12              0
+  论文 / 项目 deadline               24-48             6-12
+  庆祝活动                           4-8               2-4
+  搬家 / 重要决定                    24                24
+  reminder request(显式)            0                 0
+
+reminder request:用户显式说"X 分钟/小时/今晚 N 点 提醒我"。
+含义:scanner 只在 follow_up_at 那刻 fire 一次 on phase。
+
+不确定就 null(scanner 用 default 24h)。
+
+## 重要规则
+
+不确定就给 follow_up_at = null · 写错好过乱写。
+hint 跟 description 不要重复 — hint 是 anchor 缩写,description 是事实陈述。
+advance_hours 不确定就 null · 不要瞎猜。
 """
 
 
@@ -875,9 +943,7 @@ def _parse_event(raw: Any, *, index: int) -> RawExtractedEvent:
     relational_tags = _filter_relational_tags(raw.get("relational_tags", []), index=index)
     event_time = _parse_event_time(raw.get("event_time"), index=index)
     subject = _parse_event_subject(raw.get("subject"), index=index)
-    superseded_event_ids = _parse_superseded_event_ids(
-        raw.get("superseded_event_ids"), index=index
-    )
+    superseded_event_ids = _parse_superseded_event_ids(raw.get("superseded_event_ids"), index=index)
 
     return RawExtractedEvent(
         description=description.strip(),
