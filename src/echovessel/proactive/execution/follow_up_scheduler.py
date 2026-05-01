@@ -23,13 +23,12 @@ from typing import Any
 from sqlalchemy import func
 from sqlmodel import select
 
-from echovessel.memory.models import ConceptNode
+from echovessel.memory.models import ConceptNode, ProactiveDecision
 from echovessel.proactive.core.base import (
     EventType,
     ProactiveEvent,
     ProactiveScheduler,
 )
-from echovessel.proactive.core.models import ProactiveDecision
 
 log = logging.getLogger(__name__)
 

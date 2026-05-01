@@ -22,11 +22,11 @@ from echovessel.core.types import MessageRole
 from echovessel.memory import create_all_tables, create_engine
 from echovessel.memory.models import (
     Persona,
+    ProactiveDecision,
     RecallMessage,
     User,
 )
 from echovessel.proactive.core.models import (
-    ProactiveDecision,
     ProactiveState,
 )
 from echovessel.proactive.execution.engagement_updater import (

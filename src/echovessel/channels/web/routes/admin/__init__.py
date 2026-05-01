@@ -30,6 +30,7 @@ from echovessel.channels.web.routes.admin.core import register_core_routes
 from echovessel.channels.web.routes.admin.diagnostics import register_diagnostics_routes
 from echovessel.channels.web.routes.admin.memory import register_memory_routes
 from echovessel.channels.web.routes.admin.persona import register_persona_routes
+from echovessel.channels.web.routes.admin.proactive import register_proactive_routes
 from echovessel.channels.web.routes.admin.voice import register_voice_routes
 
 
@@ -72,6 +73,7 @@ def build_admin_router(
         user_id=user_id,
     )
     register_memory_routes(router, runtime=runtime, user_id=user_id)
+    register_proactive_routes(router, runtime=runtime, user_id=user_id)
 
     return router
 

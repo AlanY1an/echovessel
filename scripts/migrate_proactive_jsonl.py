@@ -63,7 +63,7 @@ from sqlalchemy import Engine
 from sqlmodel import Session
 
 from echovessel.memory import create_engine
-from echovessel.proactive.core.models import ProactiveDecision
+from echovessel.memory.models import ProactiveDecision
 
 log = logging.getLogger(__name__)
 

@@ -36,7 +36,7 @@ def test_proactive_decisions_phase_column_in_walker(tmp_path):
 
 def test_proactive_decision_accepts_phase_value():
     """ProactiveDecision Pydantic/SQLModel accepts phase str."""
-    from echovessel.proactive.core.models import ProactiveDecision
+    from echovessel.memory.models import ProactiveDecision
 
     d = ProactiveDecision(
         decision_id="d1",
@@ -56,7 +56,7 @@ def test_proactive_decision_trigger_type_includes_follow_up():
     """v3 introduces trigger_type='follow_up'; legacy values still accepted."""
     from typing import get_args
 
-    from echovessel.proactive.core.models import ProactiveDecision
+    from echovessel.memory.models import ProactiveDecision
 
     field_info = ProactiveDecision.model_fields["trigger_type"]
     annotation = field_info.annotation

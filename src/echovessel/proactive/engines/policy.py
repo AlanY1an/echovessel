@@ -43,6 +43,9 @@ from typing import Any
 from sqlmodel import Session, func, select
 
 from echovessel.memory.models import ConceptNode
+from echovessel.memory.models import (
+    ProactiveDecision as PersistedDecision,
+)
 from echovessel.proactive.core.base import (
     CONFIG_VERSION,
     ActionType,
@@ -58,9 +61,6 @@ from echovessel.proactive.core.config import ProactiveConfig
 from echovessel.proactive.core.models import (
     PersonaProfile,
     ProactiveState,
-)
-from echovessel.proactive.core.models import (
-    ProactiveDecision as PersistedDecision,
 )
 
 log = logging.getLogger(__name__)

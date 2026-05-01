@@ -32,10 +32,12 @@ from datetime import datetime, timedelta
 from sqlmodel import Session, select
 
 from echovessel.core.types import MessageRole
-from echovessel.memory.models import RecallMessage
-from echovessel.proactive.core.models import (
+from echovessel.memory.models import (
     NOT_REPLIED_SENTINEL,
     ProactiveDecision,
+    RecallMessage,
+)
+from echovessel.proactive.core.models import (
     ProactiveState,
 )
 

@@ -20,14 +20,14 @@ from echovessel.memory.models import (
     Persona,
     User,
 )
+from echovessel.memory.models import (
+    ProactiveDecision as PersistedDecision,
+)
 from echovessel.proactive.core.base import (
     ActionType,
     ProactiveDecision,
     SkipReason,
     TriggerReason,
-)
-from echovessel.proactive.core.models import (
-    ProactiveDecision as PersistedDecision,
 )
 from echovessel.proactive.execution.audit import SQLiteAuditSink
 

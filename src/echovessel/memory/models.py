@@ -22,6 +22,7 @@ DDL in `db.py` after metadata creation.
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 
 from sqlalchemy import (
     JSON,
@@ -718,3 +719,91 @@ class SlowCycleStats(SQLModel, table=True):
             onupdate=func.now(),
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Proactive · audit row + sentinel
+# ---------------------------------------------------------------------------
+#
+# ``ProactiveDecision`` is the persisted SQL row for one fire-or-suppress
+# attempt. It lives in ``memory.models`` (not ``proactive.core.models``)
+# because both proactive (the writer) and channels (the admin reader)
+# depend on it, and the layered import contract treats those two
+# packages as siblings — neither can import the other. Memory sits one
+# layer below both, so anchoring the row here lets both sides read /
+# write it without crossing the wall.
+#
+# The companion behaviour-profile rows (``PersonaProfile`` /
+# ``ProactiveState``) stay in ``proactive.core.models`` because they're
+# proactive-private — the admin display surface does not currently
+# render them.
+
+ProactiveAction = Literal["fire", "suppress"]
+ProactiveTriggerType = Literal["follow_up", "thread_due", "high_emotional_event"]
+
+
+class ProactiveDecision(SQLModel, table=True):
+    """One row per attempt — fire or suppress.
+
+    Replaces the v1 JSONL audit sink. Non-partial indexes live here
+    via ``__table_args__``; the partial index over un-replied fires
+    (``idx_decisions_pending_reply``) is emitted from
+    :mod:`echovessel.memory.migrations`.
+
+    Note the name collision with
+    :class:`echovessel.proactive.core.base.ProactiveDecision`: that
+    sibling is the in-memory value object the runtime scheduler
+    builds; this class is the persisted SQLModel row. The two are
+    deliberately not unified — the value type carries transient
+    runtime fields (``rationale``, ``llm_latency_ms``) that the audit
+    row does not need.
+    """
+
+    __tablename__ = "proactive_decisions"
+    __table_args__ = (
+        Index(
+            "idx_decisions_persona_user_time",
+            "persona_id",
+            "user_id",
+            "timestamp",
+        ),
+        Index("idx_decisions_persona_time", "persona_id", "timestamp"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    decision_id: str = Field(index=True)
+    timestamp: datetime = Field(index=True)
+    persona_id: str = Field(index=True)
+    user_id: str = Field(index=True)
+
+    # ProactiveTriggerType literal — stored as plain TEXT.
+    # 'thread_due' / 'high_emotional_event' kept for v2 audit history compat.
+    trigger_type: ProactiveTriggerType = Field(sa_column=Column(String, nullable=False))
+
+    # v3 · legacy column kept for v2 audit history compat. Never written.
+    thread_id: int | None = Field(default=None)
+    source_event_id: int | None = Field(default=None, foreign_key="concept_nodes.id")
+
+    # v3 · 'pre' | 'on' | 'post' | 'check_1' | 'check_N' | None
+    phase: str | None = Field(default=None)
+
+    action: str  # ProactiveAction literal
+    suppress_reason: str | None = None
+
+    message_text: str | None = None
+    sent_message_id: int | None = Field(default=None, foreign_key="recall_messages.id")
+    user_replied_at: datetime | None = None
+    voice_used: bool | None = None
+    voice_error: str | None = None
+
+    gate_state_snapshot: str | None = None  # JSON-encoded payload
+
+    created_at: datetime
+
+
+# Sentinel value written into ``ProactiveDecision.user_replied_at`` by
+# the engagement settlement loop to mark "fire whose 24h reply window
+# expired without a user message". The admin route scrubs this to
+# ``None`` + ``settled_no_reply: True`` at the API boundary so
+# ``year=1`` never crosses the wire.
+NOT_REPLIED_SENTINEL: datetime = datetime.min

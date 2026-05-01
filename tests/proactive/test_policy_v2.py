@@ -23,6 +23,9 @@ from sqlmodel import Session
 from echovessel.core.types import NodeType
 from echovessel.memory import create_all_tables, create_engine
 from echovessel.memory.models import ConceptNode, Persona, User
+from echovessel.memory.models import (
+    ProactiveDecision as PersistedDecision,
+)
 from echovessel.proactive.core.base import (
     ActionType,
     EventType,
@@ -33,9 +36,6 @@ from echovessel.proactive.core.config import ProactiveConfig
 from echovessel.proactive.core.models import (
     PersonaProfile,
     ProactiveState,
-)
-from echovessel.proactive.core.models import (
-    ProactiveDecision as PersistedDecision,
 )
 from echovessel.proactive.engines.policy import PolicyEngine
 from echovessel.proactive.execution.audit import SQLiteAuditSink

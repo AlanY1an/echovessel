@@ -24,12 +24,12 @@ from typing import Any
 from sqlmodel import Session as DbSession
 from sqlmodel import func, select
 
+from echovessel.memory.models import (
+    ProactiveDecision as PersistedDecision,
+)
 from echovessel.proactive.core.base import (
     ActionType,
     ProactiveDecision,
-)
-from echovessel.proactive.core.models import (
-    ProactiveDecision as PersistedDecision,
 )
 
 log = logging.getLogger(__name__)

@@ -20,7 +20,7 @@ from echovessel.memory.models import (
     Persona,
     User,
 )
-from echovessel.proactive.core.models import (
+from echovessel.memory.models import (
     ProactiveDecision as PersistedDecision,
 )
 
