@@ -213,18 +213,21 @@ class SQLiteAuditSink:
     # ------------------------------------------------------------------
 
     def _to_row(self, decision: ProactiveDecision) -> PersistedDecision:
+        payload = decision.trigger_payload or {}
+        # v3: source_event_id comes from the FOLLOW_UP_DUE payload's
+        # ``event_id`` key (the ConceptNode the FollowUpScheduler woke
+        # on). The legacy ``source_event_id`` key stays accepted for v2
+        # audit history shapes.
+        source_event_id = payload.get("event_id") or payload.get("source_event_id")
         return PersistedDecision(
             decision_id=decision.decision_id,
             timestamp=decision.timestamp,
             persona_id=decision.persona_id,
             user_id=decision.user_id,
             trigger_type=_trigger_to_type(decision.trigger),
-            thread_id=decision.trigger_payload.get("thread_id")
-            if decision.trigger_payload
-            else None,
-            source_event_id=decision.trigger_payload.get("source_event_id")
-            if decision.trigger_payload
-            else None,
+            thread_id=payload.get("thread_id"),
+            source_event_id=source_event_id,
+            phase=payload.get("phase"),
             action=_action_to_row(decision.action),
             suppress_reason=decision.skip_reason,
             message_text=decision.message_text,
@@ -247,6 +250,8 @@ class SQLiteAuditSink:
             trigger_payload={
                 "thread_id": row.thread_id,
                 "source_event_id": row.source_event_id,
+                "event_id": row.source_event_id,
+                "phase": row.phase,
             },
             action=_row_to_action(row.action),
             skip_reason=row.suppress_reason,

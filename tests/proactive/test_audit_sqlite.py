@@ -50,6 +50,7 @@ def _decision(
     skip_reason: str | None = SkipReason.NO_TRIGGER_MATCH.value,
     message_text: str | None = None,
     policy_snapshot: dict | None = None,
+    trigger_payload: dict | None = None,
 ) -> ProactiveDecision:
     return ProactiveDecision(
         decision_id=decision_id,
@@ -57,7 +58,7 @@ def _decision(
         user_id="self",
         timestamp=timestamp,
         trigger=trigger,
-        trigger_payload={},
+        trigger_payload=trigger_payload if trigger_payload is not None else {},
         action=action,
         skip_reason=skip_reason,
         message_text=message_text,
@@ -284,3 +285,84 @@ def test_recent_sends_zero_returns_empty():
     sink.record(_decision(action=ActionType.SEND.value))
 
     assert sink.recent_sends(last_n=0) == []
+
+
+# ---------------------------------------------------------------------------
+# phase column · v3 FOLLOW_UP_DUE round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_record_persists_phase_from_trigger_payload():
+    """Stage 3.3 · a FOLLOW_UP_DUE fire carries phase via trigger_payload;
+    the audit row's ``phase`` column captures it."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    _seed(engine)
+    sink = _build_sink(engine)
+
+    sink.record(
+        _decision(
+            decision_id="d-fire-pre",
+            action=ActionType.SEND.value,
+            trigger=TriggerReason.HIGH_EMOTIONAL_EVENT.value,
+            skip_reason=None,
+            message_text="early ping",
+            trigger_payload={
+                "event_id": 42,
+                "phase": "pre",
+                "decision_id": "d-fire-pre",
+            },
+        )
+    )
+
+    with Session(engine) as db:
+        rows = list(db.exec(select(PersistedDecision)))
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.phase == "pre"
+    assert r.source_event_id == 42
+    assert r.action == "fire"
+
+
+def test_record_phase_none_when_payload_missing_phase():
+    """Non-FOLLOW_UP_DUE rows (e.g. queue_overflow meta) leave phase null."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    _seed(engine)
+    sink = _build_sink(engine)
+
+    sink.record(
+        _decision(
+            action=ActionType.SKIP.value,
+            skip_reason=SkipReason.QUEUE_OVERFLOW.value,
+            trigger_payload={"dropped_count": 3},
+        )
+    )
+
+    with Session(engine) as db:
+        rows = list(db.exec(select(PersistedDecision)))
+    assert len(rows) == 1
+    assert rows[0].phase is None
+
+
+def test_record_persists_each_phase_value():
+    """All phase strings the FollowUpScheduler may emit round-trip."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    _seed(engine)
+    sink = _build_sink(engine)
+
+    for i, phase in enumerate(["pre", "on", "post", "check_1", "check_3"]):
+        sink.record(
+            _decision(
+                decision_id=f"d-{phase}",
+                action=ActionType.SEND.value,
+                trigger=TriggerReason.HIGH_EMOTIONAL_EVENT.value,
+                skip_reason=None,
+                trigger_payload={"event_id": 100 + i, "phase": phase},
+            )
+        )
+
+    with Session(engine) as db:
+        rows = list(db.exec(select(PersistedDecision).order_by(PersistedDecision.id)))
+    assert [r.phase for r in rows] == ["pre", "on", "post", "check_1", "check_3"]
