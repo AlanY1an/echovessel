@@ -23,6 +23,7 @@ import { AdmConfig } from './config/ConfigTab'
 import { AdmImports } from './imports/ImportsTab'
 import { AdmMemory } from './memory/MemoryTab'
 import { AdmPersona } from './persona/PersonaTab'
+import { AdmProactive } from './proactive/ProactiveTab'
 import type { AdmTab } from './types'
 import { AdmVoice } from './voice/VoiceTab'
 
@@ -49,6 +50,7 @@ export function Admin({
   const tabDefs: { id: AdmTab; labelKey: string }[] = [
     { id: 'persona', labelKey: 'admin.tabs.persona' },
     { id: 'memory', labelKey: 'admin.tabs.memory' },
+    { id: 'proactive', labelKey: 'admin.tabs.proactive' },
     { id: 'voice', labelKey: 'admin.tabs.voice' },
     { id: 'channels', labelKey: 'admin.tabs.channels' },
     { id: 'sources', labelKey: 'admin.tabs.imports' },
@@ -93,6 +95,7 @@ export function Admin({
             />
           )}
           {tab === 'memory' && <AdmMemory />}
+          {tab === 'proactive' && <AdmProactive />}
           {tab === 'voice' && (
             <AdmVoice persona={persona} toggleVoice={toggleVoice} />
           )}

@@ -61,6 +61,10 @@ import type {
   PersonaStateApi,
   PersonaUpdatePayload,
   PreviewDeleteResponse,
+  ProactiveDecisionsQuery,
+  ProactiveDecisionsResponse,
+  ProactiveEventsResponse,
+  ProactiveEventState,
   StyleUpdatePayload,
   StyleUpdateResponse,
   ThoughtTraceResponse,
@@ -860,6 +864,62 @@ export async function getConsolidateTrace(
 ): Promise<ConsolidateTraceResponse> {
   return fetchJson<ConsolidateTraceResponse>(
     `/api/admin/sessions/${encodeURIComponent(sessionId)}/consolidate-trace`,
+  )
+}
+
+/**
+ * GET /api/admin/proactive/decisions — fire + suppress audit log,
+ * desc by timestamp. Cursor-paginated; the cursor returned in the
+ * response feeds back via the ``cursor`` parameter.
+ */
+export async function getProactiveDecisions(
+  query: ProactiveDecisionsQuery = {},
+): Promise<ProactiveDecisionsResponse> {
+  const params = new URLSearchParams()
+  if (query.action !== undefined && query.action !== 'all') {
+    params.set('action', query.action)
+  }
+  if (query.since !== undefined) params.set('since', query.since)
+  if (query.until !== undefined) params.set('until', query.until)
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  if (query.cursor !== undefined && query.cursor !== null) {
+    params.set('cursor', query.cursor)
+  }
+  const qs = params.toString()
+  return fetchJson<ProactiveDecisionsResponse>(
+    `/api/admin/proactive/decisions${qs ? `?${qs}` : ''}`,
+  )
+}
+
+/**
+ * GET /api/admin/proactive/events — follow-up events derived from
+ * ConceptNode rows annotated with ``follow_up_at``. ``state=active``
+ * is strict: ``follow_up_at IS NOT NULL AND superseded_by_id IS NULL
+ * AND proactive_suppressed_at IS NULL``.
+ */
+export async function getProactiveEvents(
+  state: ProactiveEventState = 'active',
+  limit: number = 50,
+): Promise<ProactiveEventsResponse> {
+  const params = new URLSearchParams({ state, limit: String(limit) })
+  return fetchJson<ProactiveEventsResponse>(
+    `/api/admin/proactive/events?${params.toString()}`,
+  )
+}
+
+/**
+ * DELETE /api/admin/memory/events/{event_id}/proactive-follow-up —
+ * user-initiated suppress. Sets ``proactive_suppressed_at`` so the
+ * scheduler stops considering this event. The event row itself stays
+ * in memory; only the follow-up annotation is silenced. 204 on success,
+ * 404 if missing, 403 if cross-persona, 410 if already deleted.
+ */
+export async function suppressProactiveEvent(eventId: number): Promise<void> {
+  await fetchJson<void>(
+    `/api/admin/memory/events/${eventId}/proactive-follow-up`,
+    {
+      method: 'DELETE',
+    },
   )
 }
 

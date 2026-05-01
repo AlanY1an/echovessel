@@ -154,6 +154,7 @@
       "cost": "Cost",
       "config": "Config",
       "memory": "Memory",
+      "proactive": "Proactive",
       "sources": "Imports",
       "imports": "Imports",
       "channels": "Channels"
@@ -169,6 +170,70 @@
       "click_a_node": "Click a node to see details",
       "related": "related",
       "open_in_list": "Open in list"
+    },
+    "proactive": {
+      "history_tab_title": "Proactive History",
+      "events_tab_title": "Pending Follow-ups",
+      "subsection_history": "History",
+      "subsection_events": "Pending",
+      "filter_all": "All",
+      "filter_fire": "Fired",
+      "filter_suppress": "Suppressed",
+      "load_more": "Load more",
+      "loading": "Loading...",
+      "load_failed": "Load failed: {{message}}",
+      "refresh": "Refresh",
+      "user_replied": "User replied at {{time}}",
+      "settled_no_reply": "No reply within 24h",
+      "no_reply_yet": "Waiting for reply",
+      "trigger_thread_due": "Follow-up due",
+      "trigger_high_emotional_event": "High-impact event",
+      "fired_label": "Fired",
+      "suppressed_label": "Suppressed",
+      "phase_label": "Phase",
+      "follow_up_at_label": "Follow up at",
+      "fired_at_label": "Fired at",
+      "created_at_label": "Created",
+      "source_event_label": "From",
+      "suppressed_at_label": "Suppressed at",
+      "superseded_by_label": "Superseded by",
+      "suppress_event_button": "Don't follow up",
+      "suppress_event_confirm": "Stop following up on this? She won't bring it up.",
+      "suppress_event_failed": "Suppress failed: {{message}}",
+      "state_active": "Active",
+      "state_fired": "Fired",
+      "state_closed": "Closed",
+      "state_all": "All",
+      "empty_state_history": "No proactive activity yet.",
+      "empty_state_events_active": "No active follow-ups. She'll wait until you mention something with a future arc.",
+      "empty_state_events_fired": "No fired follow-ups waiting on a reply.",
+      "empty_state_events_closed": "No closed follow-ups yet.",
+      "column": {
+        "follow_up_hint": "Follow-up hint",
+        "phase": "Phase"
+      },
+      "phase": {
+        "pre": "Pre-event",
+        "on": "On-event",
+        "post": "Post-event"
+      },
+      "suppress_reason": {
+        "quiet_hours": "Quiet hours",
+        "rate_limit": "Rate limit",
+        "low_engagement": "Low engagement",
+        "forbidden_topic": "Forbidden topic",
+        "in_flight_turn": "Conversation in progress",
+        "over_attempt": "Attempt cap reached",
+        "delivery_error": "Delivery failed",
+        "llm_error": "Generation failed",
+        "unknown": "Suppressed"
+      },
+      "kind": {
+        "pre_event": "Pre-event",
+        "post_event": "Post-event",
+        "point_event": "Reminder",
+        "ongoing": "Ongoing"
+      }
     },
     "imports_tab": {
       "section_title": "Imports",

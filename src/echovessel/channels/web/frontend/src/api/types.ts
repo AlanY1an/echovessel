@@ -883,6 +883,94 @@ export interface MemorySearchResponse {
   matched_snippets: MemorySearchSnippet[]
 }
 
+// ─── HTTP · GET /api/admin/proactive/* ──────────────────────────────────
+
+/**
+ * One row in the proactive history list. Surfaces every fire and every
+ * suppress decision recorded by the audit log.
+ *
+ * ``user_replied_at`` is the real datetime when the user replied;
+ * ``settled_no_reply: true`` means the 24h reply window expired with
+ * no message — the in-DB ``datetime.min`` sentinel is scrubbed at the
+ * API boundary so it never surfaces as ``year=1`` in the UI.
+ *
+ * ``phase`` is the v3 lifecycle marker — ``pre`` | ``on`` | ``post`` |
+ * ``check_N`` | ``null`` (legacy v2 row before phase column existed).
+ *
+ * ``thread_id`` is preserved on the wire for v2 audit-history compat
+ * but never written by v3 code; v3 always carries ``source_event_id``.
+ */
+export interface ProactiveDecisionItem {
+  id: number
+  decision_id: string
+  timestamp: string
+  trigger_type: string
+  thread_id: number | null
+  source_event_id: number | null
+  phase: string | null
+  action: 'fire' | 'suppress'
+  suppress_reason: string | null
+  message_text: string | null
+  sent_message_id: number | null
+  user_replied_at: string | null
+  settled_no_reply: boolean
+  voice_used: boolean | null
+  voice_error: string | null
+  gate_state_snapshot: Record<string, unknown> | null
+
+  source_event_description: string | null
+}
+
+export interface ProactiveDecisionsResponse {
+  items: ProactiveDecisionItem[]
+  total: number
+  has_more: boolean
+  cursor: string | null
+}
+
+export type ProactiveDecisionFilter = 'all' | 'fire' | 'suppress'
+
+/** GET /api/admin/proactive/decisions query parameters. */
+export interface ProactiveDecisionsQuery {
+  action?: ProactiveDecisionFilter
+  since?: string
+  until?: string
+  limit?: number
+  cursor?: string | null
+}
+
+/**
+ * One row in the proactive follow-up events list. Surfaces the v0.7
+ * follow-up annotation columns on ``concept_nodes`` plus a derived
+ * ``fired_at`` timestamp (earliest matching fire decision pointing at
+ * this event) and a ``closed`` boolean (true when ``superseded_by_id``
+ * or ``proactive_suppressed_at`` is set).
+ *
+ * ``advance_pre_hours`` / ``advance_post_hours`` drive the scheduler
+ * timing windows; both null means a same-instant reminder.
+ */
+export interface ProactiveEventItem {
+  id: number
+  description: string
+  follow_up_at: string | null
+  follow_up_hint: string | null
+  estimated_arc_days: number | null
+  advance_pre_hours: number | null
+  advance_post_hours: number | null
+  proactive_suppressed_at: string | null
+  superseded_by_id: number | null
+  fired_at: string | null
+  closed: boolean
+  created_at: string
+}
+
+export interface ProactiveEventsResponse {
+  items: ProactiveEventItem[]
+  total: number
+}
+
+export type ProactiveEventState = 'active' | 'fired' | 'closed' | 'all'
+
 // ─── HTTP · GET /api/admin/cost/* ───────────────────────────────────────
 
 /** Five canonical feature labels recorded by the cost logger.
