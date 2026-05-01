@@ -98,7 +98,7 @@ observer.on_message_ingested(msg)   (per-call hook)
 
 Every write commits before any hook fires. The lifecycle queue in `sessions.py` batches "new session" / "session closed" events so that a single commit can dispatch multiple hooks in one drain. `ingest_message` and `append_to_core_block` accept explicit `observer=` parameters (per-write notifications); most other hooks (event/thought/entity/session/mood) fan out from the module-level `_observers` registry populated once via `register_observer(...)` at daemon startup.
 
-When a session crosses `SESSION_MAX_MESSAGES` or `SESSION_MAX_TOKENS`, it is marked for closing and the next `ingest_message` call opens a new one in the same channel. Nothing is visible to the user — the split is an internal extraction boundary. Idle sessions (over 30 minutes without a message) and lifecycle signals from runtime (daemon shutdown, persona swap) close sessions the same way.
+When a session crosses `SESSION_MAX_MESSAGES` or `SESSION_MAX_TOKENS`, it is marked for closing and the next `ingest_message` call opens a new one in the same channel. Nothing is visible to the user — the split is an internal extraction boundary. Idle sessions (over `SESSION_IDLE_MINUTES` without a message · default 10) and lifecycle signals from runtime (daemon shutdown, persona swap) close sessions the same way.
 
 Session closure flows into `consolidate_session`, which runs the extraction pass, possibly a reflection pass, and finally flips `session.status` to `CLOSED` before firing `on_session_closed`. Extraction calls the injected LLM once per session, regardless of how many turns it contains; a burst of user messages becomes several L2 rows but a single extraction call.
 
@@ -188,6 +188,33 @@ The run makes one `slow_cycle_llm` call. Input: cross-session material from the 
 
 Guardrails (load-bearing invariants): per-cycle token wall (input ≤ 8k · output ≤ 1k) · daily 36 cycles + 150k input + 30k output · `cfg.slow_tick.enabled = false` global kill switch · each event reflected on ≤ 3 times. Slow_tick is forbidden from: writing any L1 block · creating intentions without source-turn evidence · scheduling itself · editing nodes in place · calling external APIs · creating new NodeTypes / BlockLabels · recursively self-invoking · bypassing the token budget. The closed tool enumeration plus schema rejection enforce these invariants. Transcripts land at `develop-docs/slow_tick_transcripts/<cycle_id>.json`; the admin tab exposes `GET /api/admin/slow-tick/transcripts` for browsing history.
 
+### Proactive follow-up annotation (concept_nodes v0.7 columns + Phase B PART F)
+
+Memory carries the state that proactive needs in order to know *when* to bring something up. Phase B's `extract_fn` LLM call already reads every closed session's messages to produce L3 events; v0.7 extends that same call with a sixth output decision per event — does this disclosure deserve a future check-in, and if so, when. Proactive subscribes to the `on_event_created` lifecycle hook and arms an asyncio timer for any event with a non-null `follow_up_at`. **There is no separate proactive-side LLM call that scans for follow-up candidates** — the same Phase B output that powers retrieval ranking and shock detection also drives the proactive scheduler.
+
+Six nullable columns added to `concept_nodes`:
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `follow_up_at` | DATETIME | When proactive should consider firing. NULL means "no follow-up planned" — most ordinary disclosures land here |
+| `follow_up_hint` | TEXT | 5-15 char anchor like "interview result" / "mom's check-up" — the topic proactive is following, used by the generator and matched against `forbidden_topics` |
+| `estimated_arc_days` | INTEGER | The expected lifetime of the arc in days; the scheduler stops following up once `now > follow_up_at + 3 × estimated_arc_days` so stale events don't ping forever |
+| `advance_pre_hours` | INTEGER | How many hours before `follow_up_at` the persona starts caring (surgery 72h, exam 24h, casual reminder 0h) |
+| `advance_post_hours` | INTEGER | How many hours after `follow_up_at` the persona checks back. `0` is a deliberate signal — don't bother the user afterward (post-surgery rest); also makes `(0, 0)` the reminder-request shape |
+| `proactive_suppressed_at` | DATETIME | User-set "don't bring this up" via the admin UI; the proactive scheduler filters this column out at every wake-up |
+
+A partial index `idx_concept_follow_up_active` covers `(follow_up_at)` for rows where the value is non-null, the row is not soft-deleted, not superseded, and not user-suppressed — the cold-start scan that runs once per `FollowUpScheduler.start()` hits this index.
+
+The corresponding prompt extension is **PART F** of `EXTRACTION_SYSTEM_PROMPT` in `prompts/extraction.py`. PART F appends after the existing parts (event description, emotional impact, tags, supersede chain) without modifying any of them. Its rules in summary:
+
+- An event is worth following up on when `event_time.end` is a concrete future date, when `relational_tags` contain `commitment` or `unresolved`, or when the disclosure is an ongoing process (start known, end null). Plain past-tense disclosures and explicitly suppressed ones ("I'll handle it, don't ask") leave `follow_up_at = null`.
+- `follow_up_at` is computed by the LLM: equal to `event_time.end` for date-anchored arcs; `now + 1-2 days` for unresolved emotional threads; `now + 3-14 days` for ongoing processes (the range tracks domain — health 3, work 5-7, long-term 10-14); fallback `now + 7 days` when worth following but no concrete cue.
+- `follow_up_hint` is a 5-15 char anchor describing *what* to ask, never *when* (phase is proactive's concern).
+- `advance_pre_hours` and `advance_post_hours` are filled only when `event_time.end` is concrete. The LLM picks per-event values from a guidance table (medical check-up 2-6h pre / 2-4h post, surgery 48-72h pre / 0h post, exam 12-24h / 12-24h, etc.). NULL means "use the scheduler's default 24h / 24h"; `(0, 0)` marks a reminder request — the scheduler then fires a single `on` phase at `follow_up_at` with no `pre` and no `post`.
+- The supersede half (PART F.6) tells the LLM to populate `superseded_event_ids` on outcome reports ("the interview went okay" supersedes the "interview next Monday" disclosure). Memory's existing supersede chain then closes the proactive loop with no extra LLM call.
+
+The token cost of PART F is < 8% of the existing extraction prompt; no extra LLM call is made. See [`proactive.md`](./proactive.md) for how the FollowUpScheduler turns these annotations into pre / on / post / check_N fires, and `develop-docs/initiatives/_active/2026-04-memory-driven-proactive/00-plan.md` for the full design rationale.
+
 ### One persona across channels
 
 Memory retrieval never filters by `channel_id`. Not in the vector search. Not in the FTS fallback. Not in session context expansion. Not in core-block loading. A human in a group chat still remembers every private conversation they have had; memory should behave the same way. Deciding whether a given remembered fact is appropriate to bring up in the current channel is the job of higher layers, not of retrieval.
@@ -203,7 +230,7 @@ get_or_create_open_session()      -- OPEN
 ingest_message() x N              -- OPEN (counters accumulate)
        |
        v
-idle > 30min OR length trigger OR lifecycle signal
+idle > SESSION_IDLE_MINUTES OR length trigger OR lifecycle signal
        |
        v
 consolidate_session()             -- CLOSED after extract + reflect
@@ -227,7 +254,7 @@ The numeric thresholds that shape the flow above are module-level constants, not
 
 | Transition | Trigger | Where | Constant(s) |
 | --- | --- | --- | --- |
-| L2 → (close) | idle timeout | `memory/sessions.py` | `SESSION_IDLE_MINUTES = 30` |
+| L2 → (close) | idle timeout | `memory/sessions.py` | `SESSION_IDLE_MINUTES = 10` (configurable via `[memory] session_idle_minutes`) |
 | L2 → (close) | length cap | `memory/sessions.py` | `SESSION_MAX_MESSAGES = 200`, `SESSION_MAX_TOKENS = 20_000` |
 | L2 → (close) | runtime lifecycle | channels / catchup | — |
 | L3 → L4 | SHOCK — any new event crosses the impact floor | `memory/consolidate/phase_bce.py` | `SHOCK_IMPACT_THRESHOLD = 8` (absolute value) |
@@ -253,8 +280,8 @@ t = 0s             User types "hi" in the Web channel
 ┌─ memory.ingest_message(persona, user, channel, USER, "hi")
 │    get_or_create_open_session(persona, user, channel)
 │      · SELECT OPEN sessions WHERE (persona, user, channel, deleted_at IS NULL)
-│      · any row with last_message_at > now - 30min?      → return it
-│      · stale row (idle > 30min)?                         → mark_closing('idle'), make new
+│      · any row with last_message_at > now - SESSION_IDLE_MINUTES? → return it
+│      · stale row (idle > SESSION_IDLE_MINUTES)?          → mark_closing('idle'), make new
 │      · no row at all?                                    → INSERT new OPEN session
 │    INSERT recall_messages (role=USER, content, turn_id, channel_id, day)
 │    UPDATE session: message_count++, total_tokens+=N, last_message_at=now
@@ -304,14 +331,14 @@ t = a few seconds  persona reply is persisted. session is still OPEN.
 
                    (user walks away · no further messages)
 
-t ≈ 30-60min       idle_scanner wakes (every 60s by default)
+t ≈ idle+1min      idle_scanner wakes (every 60s by default)
                    ↓
                    catch_up_stale_sessions(db, now)
-                     · SELECT status=OPEN AND last_message_at < now - 30min
+                     · SELECT status=OPEN AND last_message_at < now - SESSION_IDLE_MINUTES
                      · mark_closing('catchup') each
                      · commit
 
-t ≈ 30-60min + 5s  consolidate_worker polls (every 5s by default)
+t ≈ idle+1min + 5s consolidate_worker polls (every 5s by default)
                    ↓
                    SELECT status=CLOSING AND extracted=False
                    enqueue each session_id, then for each:

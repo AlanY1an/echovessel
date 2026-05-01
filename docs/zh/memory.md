@@ -98,7 +98,7 @@ observer.on_message_ingested(msg)   (per-call hook)
 
 每次写入都是先 commit、再触发任何 hook。`sessions.py` 里的生命周期队列把 "new session" / "session closed" 事件做了批处理，这样一次 commit 可以在一次 drain 里 dispatch 多个 hook。`ingest_message` / `append_to_core_block` 这两个调用走的是显式 `observer=` 参数（per-write 通知），其他大多数 hook（event/thought/entity/session/mood）从模块级 `_observers` 注册表 fan-out——这个注册表由 `register_observer(...)` 在 daemon 启动时调一次即可。
 
-当一个 session 跨过 `SESSION_MAX_MESSAGES` 或 `SESSION_MAX_TOKENS` 时，它被标记为正在关闭，下一次 `ingest_message` 调用会在同一 channel 里打开一个新的 session。用户对此毫无感知——这个切分只是一个内部的 extraction 边界。Idle session（超过 30 分钟没新消息）和来自 runtime 的生命周期信号（daemon 关闭、persona 切换）关闭 session 的方式是一样的。
+当一个 session 跨过 `SESSION_MAX_MESSAGES` 或 `SESSION_MAX_TOKENS` 时，它被标记为正在关闭，下一次 `ingest_message` 调用会在同一 channel 里打开一个新的 session。用户对此毫无感知——这个切分只是一个内部的 extraction 边界。Idle session（超过 `SESSION_IDLE_MINUTES` 没新消息 · 默认 10）和来自 runtime 的生命周期信号（daemon 关闭、persona 切换）关闭 session 的方式是一样的。
 
 Session 关闭会流入 `consolidate_session`，跑一次 extraction pass、可能一次 reflection pass，然后把 `session.status` 翻成 `CLOSED` 再触发 `on_session_closed`。无论 session 有多少轮对话，extraction 对注入进来的 LLM 只调用一次；用户一段 burst 可能产生多条 L2 行，但只会产生一次 extraction 调用。
 
@@ -188,6 +188,33 @@ slow_tick **不是独立 worker**——它是 `consolidate_worker._process_one` 
 
 护栏（不可越界 invariant）：单 cycle token wall（input ≤ 8k · output ≤ 1k）· 每天 36 cycles + 150k input + 30k output · `cfg.slow_tick.enabled = false` 全局 kill switch · 每个 event 被 reflect 次数 ≤ 3。slow_tick 不能：写 L1 任何 block · 创建无原话证据的 intention · 自己 schedule 下次 · 改 in-place 已有节点 · 调外部 API · 创新的 NodeType / BlockLabel · 递归自触发 · 跳 token budget。封闭 tool 枚举 + schema 拒写守这些 invariant。Transcript 落盘到 `develop-docs/slow_tick_transcripts/<cycle_id>.json`，admin tab 有 `GET /api/admin/slow-tick/transcripts` 翻历史。
 
+### Proactive 跟进标注（concept_nodes v0.7 列 + Phase B PART F）
+
+memory 承载了 proactive 决定 *什么时候* 提起一件事所需要的状态。Phase B 的 `extract_fn` LLM 调用本来就在读每个 closed session 的消息抽 L3 events，v0.7 给同一次调用扩展第 6 个 per-event 决策：这条 disclosure 值得未来回头关心吗？如果值得，什么时候？proactive 订阅 `on_event_created` 生命周期 hook，给任何 `follow_up_at` 非空的 event arm 一只 asyncio timer。**没有任何独立的 proactive 侧 LLM 调用扫 follow-up 候选**——同一次驱动检索打分和 shock 检测的 Phase B 输出，顺手驱动 proactive scheduler。
+
+`concept_nodes` 加 6 列(可空)：
+
+| 列 | 类型 | 用途 |
+|---|---|---|
+| `follow_up_at` | DATETIME | proactive 应该考虑 fire 的时刻。NULL 表示"无跟进"——大部分普通 disclosure 落在这里 |
+| `follow_up_hint` | TEXT | 5-15 字锚比如"面试结果" / "妈体检"——proactive 跟进的话题，generator 用、forbidden_topics 比对 |
+| `estimated_arc_days` | INTEGER | 整个 arc 大致几天；scheduler 在 `now > follow_up_at + 3 × estimated_arc_days` 之后停止跟进，stale event 不再无限 ping |
+| `advance_pre_hours` | INTEGER | persona 在 `follow_up_at` 之前多少小时开始关心(手术 72h、考试 24h、随手提醒 0h) |
+| `advance_post_hours` | INTEGER | persona 在 `follow_up_at` 之后多少小时回访。`0` 是刻意的信号——事后别打扰用户(术后休养)；同时 `(0, 0)` 是 reminder request 的形态 |
+| `proactive_suppressed_at` | DATETIME | 用户通过 admin UI 显式表态"别提"；proactive scheduler 每次唤醒都过滤这一列 |
+
+partial index `idx_concept_follow_up_active` 覆盖 `(follow_up_at)` 上 follow_up_at 非空、未 soft-delete、未 supersede、未被用户压制的行——`FollowUpScheduler.start()` 一次冷启动扫描走这条索引。
+
+对应的 prompt 扩展是 `prompts/extraction.py` 的 `EXTRACTION_SYSTEM_PROMPT` 末尾追加的 **PART F**。PART F 在已有 part(event description / emotional impact / tags / supersede chain)之后追加，不修改任何已有 part。它的规则简述：
+
+- 一件事值得跟进的判定：`event_time.end` 是具体未来日期；`relational_tags` 含 `commitment` 或 `unresolved`；或 disclosure 是 ongoing process(start 已知、end 空)。纯过去时陈述、用户显式压制("我自己处理 你别问")的事件留 `follow_up_at = null`。
+- `follow_up_at` 由 LLM 计算：日期型 arc 等于 `event_time.end`；unresolved 情绪线 = `now + 1-2 days`；ongoing process = `now + 3-14 days`(范围跟领域走——健康 3、工作 5-7、长期 10-14)；判定值得但无具体时间锚的 fallback `now + 7 days`。
+- `follow_up_hint` 是 5-15 字锚，描述 *问什么*，不描述 *什么时候问*(那是 proactive 的事)。
+- `advance_pre_hours` 和 `advance_post_hours` 仅在 `event_time.end` 是具体日期时填。LLM 按一张 per-event 指引表打分(体检 2-6h pre / 2-4h post，手术 48-72h pre / 0h post，考试 12-24h / 12-24h，等等)。NULL 表示"用 scheduler 默认 24h / 24h"；`(0, 0)` 标记 reminder request——scheduler 在 `follow_up_at` 那一刻 fire 单次 `on`，无 `pre`、无 `post`。
+- supersede 段(PART F.6)告诉 LLM 在用户报告 outcome 时回填 `superseded_event_ids`("面试结束了"supersede 之前的"下周一面试")。memory 既有的 supersede 链关闭 proactive loop，无需额外 LLM 调用。
+
+PART F 的 token 增量 < 既有抽取 prompt 的 8%；不新增任何 LLM 调用。FollowUpScheduler 怎么把这些 annotation 翻译成 pre / on / post / check_N fire 详见 [`proactive.md`](./proactive.md)，完整设计取舍见 `develop-docs/initiatives/_active/2026-04-memory-driven-proactive/00-plan.md`。
+
 ### 一个 persona 跨越所有 channel
 
 记忆检索**从不**按 `channel_id` 过滤。不在向量搜索里过滤。不在 FTS fallback 里过滤。不在 session 上下文扩展里过滤。不在 core-block 加载里过滤。一个在群聊里的真人依然记得他经历过的每一次私聊；记忆也应该是同样的。至于某条被想起的事实是否适合在当前 channel 里被带出来，那是更上层的事，不是检索的事。
@@ -203,7 +230,7 @@ get_or_create_open_session()      -- OPEN
 ingest_message() x N              -- OPEN (counter 在累加)
        |
        v
-idle > 30min OR 长度触发 OR 生命周期信号
+idle > SESSION_IDLE_MINUTES OR 长度触发 OR 生命周期信号
        |
        v
 consolidate_session()             -- extract + reflect 之后 CLOSED
@@ -227,7 +254,7 @@ on_session_closed 通过生命周期队列触发
 
 | 迁移 | 触发 | 位置 | 常量 |
 | --- | --- | --- | --- |
-| L2 → (关 session) | idle 超时 | `memory/sessions.py` | `SESSION_IDLE_MINUTES = 30` |
+| L2 → (关 session) | idle 超时 | `memory/sessions.py` | `SESSION_IDLE_MINUTES = 10`(由 `[memory] session_idle_minutes` 可配) |
 | L2 → (关 session) | 长度上限 | `memory/sessions.py` | `SESSION_MAX_MESSAGES = 200` · `SESSION_MAX_TOKENS = 20_000` |
 | L2 → (关 session) | runtime 生命周期 | channels / catchup | — |
 | L3 → L4 | SHOCK — 新 event 撞到 impact 地板 | `memory/consolidate/phase_bce.py` | `SHOCK_IMPACT_THRESHOLD = 8`(取绝对值) |
@@ -253,8 +280,8 @@ t = 0s             用户在 Web 频道打 "hi"
 ┌─ memory.ingest_message(persona, user, channel, USER, "hi")
 │    get_or_create_open_session(persona, user, channel)
 │      · SELECT OPEN sessions WHERE (persona, user, channel, 未删除)
-│      · 有 last_message_at > now - 30min 的?        → 直接返回
-│      · 有 stale(idle > 30min)?                      → mark_closing('idle') · 建新
+│      · 有 last_message_at > now - SESSION_IDLE_MINUTES 的? → 直接返回
+│      · 有 stale(idle > SESSION_IDLE_MINUTES)?       → mark_closing('idle') · 建新
 │      · 完全没行?                                    → INSERT 新 OPEN session
 │    INSERT recall_messages(role=USER, content, turn_id, channel_id, day)
 │    UPDATE session · message_count++ · total_tokens+=N · last_message_at=now
@@ -304,14 +331,14 @@ t = 几秒           persona 回复落库。session 仍 OPEN。
 
                    (用户走开 · 没有新消息)
 
-t ≈ 30-60min       idle_scanner 醒来(默认每 60s)
+t ≈ idle+1min      idle_scanner 醒来(默认每 60s)
                    ↓
                    catch_up_stale_sessions(db, now)
-                     · SELECT status=OPEN AND last_message_at < now - 30min
+                     · SELECT status=OPEN AND last_message_at < now - SESSION_IDLE_MINUTES
                      · 每行 mark_closing('catchup')
                      · commit
 
-t ≈ 30-60min + 5s  consolidate_worker 轮询(默认每 5s)
+t ≈ idle+1min + 5s consolidate_worker 轮询(默认每 5s)
                    ↓
                    SELECT status=CLOSING AND extracted=False
                    入队每个 session_id · 逐个:
