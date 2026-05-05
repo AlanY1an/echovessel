@@ -23,7 +23,7 @@ expect:
       follow_up_hint_min_chars: 3
   phases:
     pre:
-      fire_at_clock: "2026-05-10 12:00:00"
+      fire_at_clock: "2026-05-11 09:00:00"
       audit_action: fire
       judge_message_prompts:
         - Does the message reference the upcoming interview without leaking any channel id strings?
@@ -31,7 +31,7 @@ expect:
       fire_at_clock: "2026-05-11 10:30:00"
       audit_action: fire
     post:
-      fire_at_clock: "2026-05-12 10:00:00"
+      fire_at_clock: "2026-05-13 12:00:00"
       audit_action: fire
       judge_message_prompts:
         - Does the message ask about how the interview went rather than reminding about an upcoming event?

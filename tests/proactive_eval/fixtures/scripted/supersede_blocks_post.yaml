@@ -19,10 +19,10 @@ expect:
       advance_post_hours_range: [3, 48]
   phases:
     pre:
-      fire_at_clock: "2026-05-10 12:00:00"
+      fire_at_clock: "2026-05-11 09:00:00"
       audit_action: fire
     post:
-      fire_at_clock: "2026-05-12 12:00:00"
+      fire_at_clock: "2026-05-13 12:00:00"
       audit_action: skip
 follow_up_stage:
   after_clock: "2026-05-11 18:00:00"

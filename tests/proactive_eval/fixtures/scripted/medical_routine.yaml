@@ -20,10 +20,10 @@ expect:
       follow_up_hint_min_chars: 3
   phases:
     pre:
-      fire_at_clock: "2026-05-05 06:00:00"
+      fire_at_clock: "2026-05-05 09:00:00"
       audit_action: fire
     post:
-      fire_at_clock: "2026-05-05 13:00:00"
+      fire_at_clock: "2026-05-05 16:00:00"
       audit_action: fire
       judge_message_prompts:
         - Does the message ask how the checkup went?

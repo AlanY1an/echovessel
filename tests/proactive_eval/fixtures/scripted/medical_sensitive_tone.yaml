@@ -20,13 +20,13 @@ expect:
       advance_pre_hours_range: [1, 12]
   phases:
     pre:
-      fire_at_clock: "2026-05-05 10:00:00"
+      fire_at_clock: "2026-05-05 13:00:00"
       audit_action: fire
       judge_message_prompts:
         - Is the tone gentle and supportive without prying for medical details?
         - Does the message avoid joking or minimising the user's concern?
     post:
-      fire_at_clock: "2026-05-05 19:00:00"
+      fire_at_clock: "2026-05-05 18:00:00"
       audit_action: fire
       judge_message_prompts:
         - Does the message check in respectfully without demanding to know the diagnosis?

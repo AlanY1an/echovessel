@@ -19,7 +19,7 @@ expect:
       follow_up_hint_min_chars: 2
   phases:
     "on":
-      fire_at_clock: "2026-05-05 15:00:00"
+      fire_at_clock: "2026-05-05 15:01:00"
       audit_action: fire
       judge_message_prompts:
         - Does the message remind the user to take medicine?

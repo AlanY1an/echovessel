@@ -20,8 +20,8 @@ expect:
       follow_up_hint_min_chars: 3
   phases:
     pre:
-      fire_at_clock: "2026-05-10 12:00:00"
+      fire_at_clock: "2026-05-09 23:00:00"
       audit_action: fire
     post:
-      fire_at_clock: "2026-05-11 12:00:00"
+      fire_at_clock: "2026-05-12 12:00:00"
       audit_action: skip

@@ -23,6 +23,6 @@ expect:
       follow_up_at_required: true
   phases:
     pre:
-      fire_at_clock: "2026-05-09 14:00:00"
+      fire_at_clock: "2026-05-13 09:00:00"
       audit_action: skip
       suppress_reason: forbidden_topic

@@ -20,9 +20,9 @@ expect:
       event_time_required: true
   phases:
     pre_quiet:
-      fire_at_clock: "2026-05-05 03:00:00"
+      fire_at_clock: "2026-05-05 04:00:00"
       audit_action: skip
       suppress_reason: quiet_hours
     pre_after:
-      fire_at_clock: "2026-05-05 07:30:00"
+      fire_at_clock: "2026-05-05 08:00:00"
       audit_action: fire

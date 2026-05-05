@@ -22,12 +22,12 @@ expect:
       follow_up_hint_min_chars: 3
   phases:
     pre:
-      fire_at_clock: "2026-05-10 18:00:00"
+      fire_at_clock: "2026-05-11 06:00:00"
       audit_action: fire
       judge_message_prompts:
         - Does the message acknowledge the user is starting their new job tomorrow?
     post:
-      fire_at_clock: "2026-05-11 20:00:00"
+      fire_at_clock: "2026-05-13 12:00:00"
       audit_action: fire
       judge_message_prompts:
         - Does the message ask about the user's first day at the new job?
