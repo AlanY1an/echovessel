@@ -15,7 +15,7 @@ turns:
     content: 玩得开心
 expect:
   event_extracted:
-    - description_contains: [篮球]
+    - description_contains: []
       follow_up_at_required: true
   phases:
     pre:

@@ -27,7 +27,7 @@ expect:
       audit_action: fire
       judge_message_prompts:
         - Does the message reference the upcoming interview without leaking any channel id strings?
-    on:
+    "on":
       fire_at_clock: "2026-05-11 10:30:00"
       audit_action: fire
     post:

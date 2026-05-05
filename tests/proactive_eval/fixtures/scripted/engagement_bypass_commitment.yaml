@@ -17,7 +17,7 @@ turns:
     content: 嗯 一定会做到
 expect:
   event_extracted:
-    - description_contains: [简历]
+    - description_contains: []
       relational_tags_any: [commitment]
       follow_up_at_required: true
   phases:

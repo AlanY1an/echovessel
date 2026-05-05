@@ -96,6 +96,7 @@ class ProactiveFixture:
     persona_block: str = "陪伴"
     user_block: str = ""
     in_flight_turn: bool = False
+    max_per_24h: int = 100
     expect: ProactiveExpect = field(default_factory=ProactiveExpect)
     follow_up_stage: FollowUpStage | None = None
     judge_prompts: list[str] = field(default_factory=list)
@@ -220,6 +221,7 @@ def load_fixture(path: Path) -> ProactiveFixture:
         persona_block=raw.get("persona_block", "陪伴"),
         user_block=raw.get("user_block", ""),
         in_flight_turn=bool(raw.get("in_flight_turn", False)),
+        max_per_24h=int(raw.get("max_per_24h", 100)),
         turns=turns,
         expect=_load_expect(raw.get("expect") or {}),
         follow_up_stage=_load_follow_up_stage(raw.get("follow_up_stage")),

@@ -7,6 +7,7 @@ scenario: |
   seeded rows must use `action: fire`.
 clock:
   fixed_now: "2026-05-04 23:00:00"
+max_per_24h: 3
 seed:
   proactive_decisions:
     - trigger_type: follow_up

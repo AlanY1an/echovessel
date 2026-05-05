@@ -88,7 +88,12 @@ async def run_fixture(fixture: ProactiveFixture, *, llm: LLMProvider) -> Proacti
     is_turn_in_flight = (lambda: True) if fixture.in_flight_turn else None
 
     proactive_scheduler = build_proactive_scheduler(
-        config=ProactiveConfig(enabled=True, persona_id=PERSONA_ID, user_id=USER_ID),
+        config=ProactiveConfig(
+            enabled=True,
+            persona_id=PERSONA_ID,
+            user_id=USER_ID,
+            max_per_24h=fixture.max_per_24h,
+        ),
         memory_api=memory_api,
         channel_registry=channel_registry,
         proactive_fn=proactive_fn,
@@ -358,14 +363,19 @@ def _collect_decisions_since(engine, before_count: int) -> list[dict[str, Any]]:
 
 
 def _serialise_decision(r: ProactiveDecisionRow) -> dict[str, Any]:
+    # SQLiteAuditSink stores action as "fire"/"suppress" in the DB row but the
+    # value-type ProactiveDecision uses "send"/"skip". Normalize back so the
+    # invariant checker can compare against ActionType vocabulary.
+    raw_action = r.action
+    normalized = "send" if raw_action == "fire" else "skip"
     return {
         "decision_id": r.decision_id,
         "trigger_type": r.trigger_type,
-        "action": r.action,
+        "action": normalized,
         "suppress_reason": r.suppress_reason,
         "phase": r.phase,
         "send_ok": (
-            getattr(r, "sent_message_id", None) is not None if r.action == "send" else None
+            getattr(r, "sent_message_id", None) is not None if raw_action == "fire" else None
         ),
         "message_text": r.message_text,
         "voice_used": r.voice_used,

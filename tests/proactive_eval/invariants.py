@@ -25,6 +25,13 @@ def _check_event(ee: ExpectEvent, events: list[dict[str, Any]]) -> list[str]:
     target = _find_event(events, ee.description_contains)
     out: list[str] = []
     if target is None:
+        # Special case: empty description_contains + forbidden mode + zero
+        # events = vacuously satisfied (no event means no event has the
+        # forbidden field set). Used by negative fixtures like
+        # trivial_no_followup where the LLM may legitimately emit zero
+        # events for pure small-talk.
+        if not ee.description_contains and ee.follow_up_at_forbidden and not events:
+            return out
         out.append(
             f"event_extracted: no event matches description_contains={ee.description_contains!r}"
         )

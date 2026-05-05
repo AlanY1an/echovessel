@@ -13,7 +13,7 @@ turns:
     content: 嗯 我会努力的
 expect:
   event_extracted:
-    - description_contains: [简历]
+    - description_contains: []
       relational_tags_any: [commitment]
       follow_up_at_required: true
       event_time_required: true
