@@ -51,6 +51,7 @@ class FollowUpScheduler:
 
     async def start(self) -> None:
         """Daemon start: re-schedule all DB-pending events."""
+        self._shutdown = False
         with self.db_factory() as db:
             pending = db.exec(
                 select(ConceptNode).where(
