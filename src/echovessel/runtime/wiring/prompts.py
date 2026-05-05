@@ -319,9 +319,7 @@ def make_slow_cycle_fn(
 
     async def _slow_cycle(input_dict: dict[str, Any]) -> SlowCycleOutput:
         events = input_dict.get("recent_events") or []
-        input_event_ids: set[int] = {
-            int(e["id"]) for e in events if isinstance(e.get("id"), int)
-        }
+        input_event_ids: set[int] = {int(e["id"]) for e in events if isinstance(e.get("id"), int)}
         user_prompt = format_slow_cycle_user_prompt(
             recent_events=list(events),
             recent_thoughts=list(input_dict.get("recent_thoughts") or []),
@@ -343,14 +341,10 @@ def make_slow_cycle_fn(
         output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
 
         try:
-            parsed = parse_slow_cycle_response(
-                raw, input_event_ids=input_event_ids
-            )
+            parsed = parse_slow_cycle_response(raw, input_event_ids=input_event_ids)
         except SlowCycleParseError as e:
             log.warning("slow_cycle parse error (dropping cycle output): %s", e)
-            return SlowCycleOutput(
-                input_tokens=input_tokens, output_tokens=output_tokens
-            )
+            return SlowCycleOutput(input_tokens=input_tokens, output_tokens=output_tokens)
 
         thoughts = [
             SlowCycleThoughtInput(
