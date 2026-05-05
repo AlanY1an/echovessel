@@ -65,6 +65,7 @@ class LLMProvider(Protocol):
         model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        thinking_enabled: bool | None = None,
         timeout: float | None = None,
     ) -> tuple[str, Usage | None]:
         """Single-shot text completion. Returns (text, usage).
@@ -73,6 +74,21 @@ class LLMProvider(Protocol):
         (stub, or a provider that doesn't expose usage in its response).
         Callers MUST unpack the tuple; they MUST NOT assume ``usage`` is
         non-None.
+
+        ``thinking_enabled`` is a portable hint about whether the call
+        needs reasoning. Three semantic states:
+
+            ``None`` (default) — use the provider's natural default
+            (e.g. DeepSeek V4 defaults to thinking on; OpenAI gpt-4o
+            has no thinking concept).
+
+            ``True`` — explicitly request reasoning (where supported).
+
+            ``False`` — explicitly disable reasoning (where supported).
+
+        Providers that don't expose a thinking control (OpenAI gpt-4o,
+        local Ollama models, Stub) ignore the flag — calls remain valid
+        across providers.
 
         On transient HTTP failure (5xx, timeout, rate limit): raise
         ``LLMTransientError``. On permanent failure (4xx, auth, content
@@ -88,6 +104,7 @@ class LLMProvider(Protocol):
         model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        thinking_enabled: bool | None = None,
         timeout: float | None = None,
     ) -> AsyncIterator[str | Usage]:
         """Token-by-token streaming. Yields text deltas, then optionally Usage.
@@ -96,6 +113,8 @@ class LLMProvider(Protocol):
         the last text chunk when the provider can report token counts
         mid-stream. Callers MUST skip non-str items or use
         ``isinstance(item, str)`` guards.
+
+        See ``complete`` for the ``thinking_enabled`` contract.
 
         Stub implementations MAY fall back to ``await complete()`` followed
         by one text yield (no trailing Usage).
