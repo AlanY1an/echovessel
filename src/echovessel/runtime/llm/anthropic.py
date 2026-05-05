@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import AsyncIterator, Mapping
+from typing import Any
 
 from echovessel.runtime.llm.base import DEFAULT_ROLE, MODEL_ROLES
 from echovessel.runtime.llm.errors import (
@@ -33,6 +34,22 @@ _DEFAULT_MODELS_BY_ROLE: dict[str, str] = {
 }
 
 _OFFICIAL_BASE_URL = "https://api.anthropic.com"
+
+# Budget for extended-thinking calls. Hardcoded for now — enough headroom
+# for typical reflection / proactive output without runaway reasoning cost.
+_THINKING_BUDGET_TOKENS: int = 4096
+
+
+def _build_thinking_kwargs(thinking_enabled: bool | None) -> dict[str, Any]:
+    """Translate ``thinking_enabled`` to Anthropic's ``thinking`` kwarg.
+
+    Only ``True`` triggers a request — ``False`` and ``None`` both leave
+    the kwarg unset so the model's default applies (Sonnet 4.6 = off,
+    Opus thinking = opt-in).
+    """
+    if thinking_enabled is True:
+        return {"thinking": {"type": "enabled", "budget_tokens": _THINKING_BUDGET_TOKENS}}
+    return {}
 
 
 class AnthropicProvider:
@@ -140,10 +157,12 @@ class AnthropicProvider:
         model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        thinking_enabled: bool | None = None,
         timeout: float | None = None,
     ) -> tuple[str, Usage | None]:
         model = self.model_for(model_role)
         client = self._get_client()
+        extra = _build_thinking_kwargs(thinking_enabled)
         try:
             resp = await client.messages.create(  # type: ignore[attr-defined]
                 model=model,
@@ -152,6 +171,7 @@ class AnthropicProvider:
                 max_tokens=max_tokens or self._default_max_tokens,
                 temperature=temperature,
                 timeout=timeout or self._default_timeout,
+                **extra,
             )
         except Exception as e:  # noqa: BLE001
             raise _classify_anthropic_error(e) from e
@@ -183,11 +203,13 @@ class AnthropicProvider:
         model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        thinking_enabled: bool | None = None,
         timeout: float | None = None,
     ) -> AsyncIterator[str | Usage]:
         model = self.model_for(model_role)
         client = self._get_client()
         in_t = out_t = cache_r = cache_c = 0
+        extra = _build_thinking_kwargs(thinking_enabled)
         try:
             async with client.messages.stream(  # type: ignore[attr-defined]
                 model=model,
@@ -196,6 +218,7 @@ class AnthropicProvider:
                 max_tokens=max_tokens or self._default_max_tokens,
                 temperature=temperature,
                 timeout=timeout or self._default_timeout,
+                **extra,
             ) as s:
                 async for event in s:  # type: ignore[attr-defined]
                     etype = getattr(event, "type", None)
