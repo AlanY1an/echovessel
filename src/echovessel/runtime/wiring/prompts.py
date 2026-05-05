@@ -172,6 +172,11 @@ def make_extract_fn(
                 event_time=re.event_time,
                 subject=re.subject,
                 superseded_event_ids=list(re.superseded_event_ids),
+                follow_up_at=re.follow_up_at,
+                follow_up_hint=re.follow_up_hint,
+                estimated_arc_days=re.estimated_arc_days,
+                advance_pre_hours=re.advance_pre_hours,
+                advance_post_hours=re.advance_post_hours,
             )
             for re in parsed.events
         ]

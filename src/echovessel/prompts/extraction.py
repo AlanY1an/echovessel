@@ -605,6 +605,16 @@ class RawExtractedEvent:
     # listed old node — soft delete, retrieve filters them out by
     # default. Empty when the event introduces no contradiction.
     superseded_event_ids: list[int] = field(default_factory=list)
+    # v0.7 · PART F proactive follow-up annotation. All five fields are
+    # optional — None = atemporal / no follow-up structure. Parser uses
+    # defensive coercion: malformed values silently fall back to None
+    # rather than abort the batch. Memory layer copies these through
+    # to ConceptNode columns where the proactive scheduler reads them.
+    follow_up_at: datetime | None = None
+    follow_up_hint: str | None = None
+    estimated_arc_days: int | None = None
+    advance_pre_hours: int | None = None
+    advance_post_hours: int | None = None
 
 
 ENTITY_KIND_VOCABULARY: frozenset[str] = frozenset({"person", "place", "org", "pet", "other"})
@@ -944,6 +954,19 @@ def _parse_event(raw: Any, *, index: int) -> RawExtractedEvent:
     event_time = _parse_event_time(raw.get("event_time"), index=index)
     subject = _parse_event_subject(raw.get("subject"), index=index)
     superseded_event_ids = _parse_superseded_event_ids(raw.get("superseded_event_ids"), index=index)
+    follow_up_at = _parse_optional_iso_datetime(
+        raw.get("follow_up_at"), index=index, field_name="follow_up_at"
+    )
+    follow_up_hint = _parse_optional_nonempty_str(raw.get("follow_up_hint"))
+    estimated_arc_days = _parse_optional_int(
+        raw.get("estimated_arc_days"), index=index, field_name="estimated_arc_days"
+    )
+    advance_pre_hours = _parse_optional_int(
+        raw.get("advance_pre_hours"), index=index, field_name="advance_pre_hours"
+    )
+    advance_post_hours = _parse_optional_int(
+        raw.get("advance_post_hours"), index=index, field_name="advance_post_hours"
+    )
 
     return RawExtractedEvent(
         description=description.strip(),
@@ -953,7 +976,81 @@ def _parse_event(raw: Any, *, index: int) -> RawExtractedEvent:
         event_time=event_time,
         subject=subject,
         superseded_event_ids=superseded_event_ids,
+        follow_up_at=follow_up_at,
+        follow_up_hint=follow_up_hint,
+        estimated_arc_days=estimated_arc_days,
+        advance_pre_hours=advance_pre_hours,
+        advance_post_hours=advance_post_hours,
     )
+
+
+def _parse_optional_iso_datetime(value: Any, *, index: int, field_name: str) -> datetime | None:
+    """Coerce an optional ISO 8601 timestamp to a ``datetime``.
+
+    Defensive: missing / null / non-string / unparseable inputs degrade to
+    ``None`` with a debug-level log. PART F fields are advisory annotations
+    — a malformed entry should not abort the entire extraction batch.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        logger.debug(
+            "events[%d].%s expected ISO 8601 string, got %r; ignoring",
+            index,
+            field_name,
+            value,
+        )
+        return None
+    try:
+        return datetime.fromisoformat(value.strip())
+    except ValueError:
+        logger.debug(
+            "events[%d].%s is not a valid ISO 8601 timestamp: %r; ignoring",
+            index,
+            field_name,
+            value,
+        )
+        return None
+
+
+def _parse_optional_nonempty_str(value: Any) -> str | None:
+    """Return a stripped non-empty string, or None.
+
+    PART F's ``follow_up_hint`` is purely descriptive — empty / non-string
+    inputs degrade to None rather than raise.
+    """
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _parse_optional_int(value: Any, *, index: int, field_name: str) -> int | None:
+    """Coerce an optional int. Bool / non-int-coercible → None.
+
+    Accepts: int, int-valued float (24.0 → 24).
+    Rejects (silently → None): bool, fractional float, string, missing.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        logger.debug(
+            "events[%d].%s expected int, got bool; ignoring",
+            index,
+            field_name,
+        )
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value == int(value):
+        return int(value)
+    logger.debug(
+        "events[%d].%s expected int, got %r; ignoring",
+        index,
+        field_name,
+        value,
+    )
+    return None
 
 
 def _parse_event_subject(value: Any, *, index: int) -> str:
