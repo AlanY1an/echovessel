@@ -31,3 +31,10 @@ expect:
       audit_action: fire
       judge_message_prompts:
         - Does the message ask about the user's first day at the new job?
+xfail:
+  reason: |
+    LLM extracts long advance_pre_hours (24-48h) for 入职 because
+    new-job-start feels like a major life event. Pre window therefore
+    starts Saturday/Sunday but fixture's pre fire_at_clock=Mon 06:00
+    is too late — timer would have fired earlier. Drop xfail once
+    runner aligns fire_at_clock with actual extracted advance_pre.

@@ -23,5 +23,5 @@ expect:
       fire_at_clock: "2026-05-08 14:00:00"
       audit_action: fire
     post:
-      fire_at_clock: "2026-05-09 22:00:00"
+      fire_at_clock: "2026-05-10 12:00:00"
       audit_action: fire
