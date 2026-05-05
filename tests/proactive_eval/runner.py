@@ -142,6 +142,7 @@ async def run_fixture(fixture: ProactiveFixture, *, llm: LLMProvider) -> Proacti
         for phase_name, ep in sorted_phases:
             mock_now[0] = _parse_clock(ep.fire_at_clock)
             before_count = _count_decisions(engine)
+            before_sent = len(fake_channel.sent)
             await follow_up_scheduler.start()
             # Stage 1: wait for the FIRST audit row to appear (= dispatch was
             # triggered). Then immediately stop follow_up_scheduler so the
@@ -171,7 +172,11 @@ async def run_fixture(fixture: ProactiveFixture, *, llm: LLMProvider) -> Proacti
                         break
                 await asyncio.sleep(0.5)
             rows = _collect_decisions_since(engine, before_count)
-            msgs = [r.get("message_text") or "" for r in rows if r.get("action") == "send"]
+            # SQLiteAuditSink.update_latest does not currently re-persist
+            # message_text, so audit rows have empty message_text. Read the
+            # actual delivered messages from FakeChannel.sent instead so the
+            # judge prompts have content to evaluate.
+            msgs = list(fake_channel.sent[before_sent:])
             audit_per_phase[phase_name] = PhaseEvalResult(
                 fire_at_clock=ep.fire_at_clock,
                 audit_rows=rows,
