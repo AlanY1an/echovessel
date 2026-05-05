@@ -249,9 +249,10 @@ asyncio_mode = "auto"
 # `pytest` and `pytest tests/` stay free / deterministic. Opt in with
 # `pytest -m eval` to pay for one run, or `pytest -m "eval or not eval"`
 # to run the whole suite. CI runs them only on the nightly cron.
-addopts = "-m 'not eval'"
+addopts = "-m 'not eval and not eval_proactive'"
 markers = [
     "eval: hits live LLM via the configured provider; costs real money. Skipped unless `-m eval` is passed.",
+    "eval_proactive: hits live LLM through the proactive pipeline (consolidate + scheduler dispatch + judge); costs real money. Skipped unless `-m eval_proactive` is passed.",
 ]
 
 [tool.importlinter]
