@@ -296,6 +296,10 @@ async def _close_and_consolidate(
         db.commit()
     with DbSession(engine) as db:
         sess = db.get(MemSession, session_id)
+        # Bypass Phase A trivial gate: eval fixtures are short by design and
+        # we want every session to flow into Phase B regardless of message
+        # / token count. trivial_no_followup proves null follow_up_at on its
+        # own merits via the LLM, not via the keyword gate.
         return await consolidate_session(
             db=db,
             backend=backend,
@@ -305,6 +309,8 @@ async def _close_and_consolidate(
             embed_fn=embed_fn,
             now=now,
             observer=observer,
+            trivial_message_count=0,
+            trivial_token_count=0,
         )
 
 
