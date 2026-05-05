@@ -1,0 +1,27 @@
+fixture_id: deadline_paper
+scenario: |
+  PART F advance_hours · 论文/项目 deadline 24-48 / 6-12.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 周五要交论文 还有一章没写完
+  - role: persona
+    content: 还来得及 加油
+  - role: user
+    content: 嗯 这周末要冲刺了
+expect:
+  event_extracted:
+    - description_contains: [论文]
+      follow_up_at_required: true
+      event_time_required: true
+      advance_pre_hours_range: [12, 72]
+      advance_post_hours_range: [3, 24]
+      follow_up_hint_min_chars: 3
+  phases:
+    pre:
+      fire_at_clock: "2026-05-08 14:00:00"
+      audit_action: fire
+    post:
+      fire_at_clock: "2026-05-09 22:00:00"
+      audit_action: fire

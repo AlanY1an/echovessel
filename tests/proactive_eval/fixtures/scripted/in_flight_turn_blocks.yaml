@@ -1,0 +1,21 @@
+fixture_id: in_flight_turn_blocks
+scenario: |
+  Gate 3 (in_flight_turn) · runner-injected predicate returns True ·
+  scheduler skips with suppress_reason "in_flight_turn".
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+in_flight_turn: true
+turns:
+  - role: user
+    content: 周五晚上有个聚会
+  - role: persona
+    content: 玩得开心
+expect:
+  event_extracted:
+    - description_contains: [聚会]
+      follow_up_at_required: true
+  phases:
+    pre:
+      fire_at_clock: "2026-05-09 18:00:00"
+      audit_action: skip
+      suppress_reason: in_flight_turn

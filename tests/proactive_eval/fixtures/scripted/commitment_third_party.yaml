@@ -1,0 +1,19 @@
+fixture_id: commitment_third_party
+scenario: |
+  User commits to a third party (calling mom on the weekend) · Phase B
+  should tag relational_tags=[commitment].
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 我答应我妈周末给她打电话 最近忙忘了
+  - role: persona
+    content: 是该聊聊 多久没联系了
+  - role: user
+    content: 三个礼拜了 心里有点愧疚
+expect:
+  event_extracted:
+    - description_contains: [电话]
+      follow_up_at_required: true
+      relational_tags_any: [commitment]
+      follow_up_hint_min_chars: 3

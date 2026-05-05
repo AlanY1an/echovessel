@@ -1,0 +1,27 @@
+fixture_id: surgery_no_post
+scenario: |
+  PART F advance_hours · 手术 48-72 / 0 · post phase NOT scheduled.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 下周六我要做胃镜手术 有点害怕
+  - role: persona
+    content: 没事的 检查会很快 你会没事的
+  - role: user
+    content: 嗯 谢谢你
+expect:
+  event_extracted:
+    - description_contains: [胃镜]
+      follow_up_at_required: true
+      event_time_required: true
+      advance_pre_hours_range: [12, 96]
+      advance_post_hours_range: [0, 0]
+      follow_up_hint_min_chars: 3
+  phases:
+    pre:
+      fire_at_clock: "2026-05-10 12:00:00"
+      audit_action: fire
+    post:
+      fire_at_clock: "2026-05-11 12:00:00"
+      audit_action: skip

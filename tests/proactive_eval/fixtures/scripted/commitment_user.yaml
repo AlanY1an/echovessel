@@ -1,0 +1,19 @@
+fixture_id: commitment_user
+scenario: |
+  User makes an explicit commitment to themselves ·
+  relational_tags=[commitment].
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 我答应你这周末把简历更新完
+  - role: persona
+    content: 好啊 期待你的成果
+  - role: user
+    content: 嗯 我会努力的
+expect:
+  event_extracted:
+    - description_contains: [简历]
+      relational_tags_any: [commitment]
+      follow_up_at_required: true
+      event_time_required: true

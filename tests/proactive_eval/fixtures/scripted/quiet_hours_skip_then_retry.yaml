@@ -1,0 +1,28 @@
+fixture_id: quiet_hours_skip_then_retry
+scenario: |
+  PersonaProfile.quiet_hours = [23, 7] · phase fire window inside quiet
+  hours → gate 1 skip · second fire just after quiet_hours end → fire.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+seed:
+  persona_profile:
+    style_summary: 陪伴
+    quiet_hours: [23, 7]
+turns:
+  - role: user
+    content: 明天早上九点要去看牙医 有点紧张
+  - role: persona
+    content: 别担心 检查一下挺好的
+expect:
+  event_extracted:
+    - description_contains: [牙医]
+      follow_up_at_required: true
+      event_time_required: true
+  phases:
+    pre_quiet:
+      fire_at_clock: "2026-05-05 03:00:00"
+      audit_action: skip
+      suppress_reason: quiet_hours
+    pre_after:
+      fire_at_clock: "2026-05-05 07:30:00"
+      audit_action: fire

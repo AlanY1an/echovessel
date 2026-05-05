@@ -1,0 +1,28 @@
+fixture_id: forbidden_topic_suppress
+scenario: |
+  PersonaProfile.forbidden_topics contains "前任" · LLM extracts event
+  whose follow_up_hint mentions 前任 · gate 2 permanently suppresses.
+  Per `policy.py:_FORBIDDEN_TOPIC_REASON`, suppress_reason is the
+  free-form string "forbidden_topic" (not a SkipReason enum value).
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+seed:
+  persona_profile:
+    style_summary: 陪伴
+    forbidden_topics: [前任]
+turns:
+  - role: user
+    content: 下周三我打算再去找一次前任聊聊
+  - role: persona
+    content: 嗯 你想好了吗
+  - role: user
+    content: 想清楚了 我得有个交代
+expect:
+  event_extracted:
+    - description_contains: [前任]
+      follow_up_at_required: true
+  phases:
+    pre:
+      fire_at_clock: "2026-05-09 23:00:00"
+      audit_action: skip
+      suppress_reason: forbidden_topic

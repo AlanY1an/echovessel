@@ -1,0 +1,29 @@
+fixture_id: medical_routine
+scenario: |
+  PART F advance_hours · 体检/例行医疗 2-6 / 2-4 · short pre and post.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 明天上午十点要去体检
+  - role: persona
+    content: 嗯 早起注意空腹
+  - role: user
+    content: 知道 有点紧张
+expect:
+  event_extracted:
+    - description_contains: [体检]
+      follow_up_at_required: true
+      event_time_required: true
+      advance_pre_hours_range: [1, 12]
+      advance_post_hours_range: [1, 12]
+      follow_up_hint_min_chars: 3
+  phases:
+    pre:
+      fire_at_clock: "2026-05-05 06:00:00"
+      audit_action: fire
+    post:
+      fire_at_clock: "2026-05-05 13:00:00"
+      audit_action: fire
+      judge_message_prompts:
+        - Does the message ask how the checkup went?

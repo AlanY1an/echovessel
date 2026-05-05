@@ -1,0 +1,37 @@
+fixture_id: rate_limit_cap_4h
+scenario: |
+  3 prior fires in last 24h (max_per_24h default 3) · 4th candidate hits
+  gate 4 rate_limit · suppress_reason "rate_limited".
+
+  Note: `policy._count_recent_fires` filters on `action == "fire"`, so
+  seeded rows must use `action: fire`.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+seed:
+  proactive_decisions:
+    - trigger_type: follow_up
+      action: fire
+      timestamp_offset_hours: -23.0
+      phase: pre
+    - trigger_type: follow_up
+      action: fire
+      timestamp_offset_hours: -10.0
+      phase: on
+    - trigger_type: follow_up
+      action: fire
+      timestamp_offset_hours: -2.0
+      phase: post
+turns:
+  - role: user
+    content: 周五晚上有个聚会 我去
+  - role: persona
+    content: 玩得开心
+expect:
+  event_extracted:
+    - description_contains: [聚会]
+      follow_up_at_required: true
+  phases:
+    pre:
+      fire_at_clock: "2026-05-09 18:00:00"
+      audit_action: skip
+      suppress_reason: rate_limited

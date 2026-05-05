@@ -1,0 +1,21 @@
+fixture_id: multi_event_extraction
+scenario: |
+  Single session mentions two distinct dated events · Phase B should
+  emit TWO ConceptNodes each with its own follow_up_at and advance fields.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 下周一上午十点要面试 周三还要搬家 这周特别忙
+  - role: persona
+    content: 听起来满当当 哪个更紧张
+  - role: user
+    content: 面试紧张 搬家就累
+expect:
+  event_extracted:
+    - description_contains: [面试]
+      follow_up_at_required: true
+      event_time_required: true
+    - description_contains: [搬家]
+      follow_up_at_required: true
+      event_time_required: true

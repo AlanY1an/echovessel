@@ -1,0 +1,24 @@
+fixture_id: engagement_low_blocks
+scenario: |
+  ProactiveState.engagement_score = 0.2 (≤ ENGAGEMENT_PASS=0.4) ·
+  low-confidence event without commitment / vulnerability tag and impact
+  < 7 · gate 5 skips with reason "low_engagement".
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+seed:
+  proactive_state:
+    engagement_score: 0.2
+turns:
+  - role: user
+    content: 周五我去打个篮球
+  - role: persona
+    content: 玩得开心
+expect:
+  event_extracted:
+    - description_contains: [篮球]
+      follow_up_at_required: true
+  phases:
+    pre:
+      fire_at_clock: "2026-05-08 23:00:00"
+      audit_action: skip
+      suppress_reason: low_engagement

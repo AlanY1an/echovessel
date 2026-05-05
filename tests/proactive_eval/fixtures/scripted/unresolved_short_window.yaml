@@ -1,0 +1,19 @@
+fixture_id: unresolved_short_window
+scenario: |
+  Open emotional thread (room-mate fight) · relational_tags=[unresolved] ·
+  per PART F · follow_up_at = NOW + 1-2 days.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 跟室友吵架了 今晚都没说话
+  - role: persona
+    content: 怎么吵起来的
+  - role: user
+    content: 一些小事 但是一直没说开
+expect:
+  event_extracted:
+    - description_contains: [吵架]
+      follow_up_at_required: true
+      relational_tags_any: [unresolved]
+      estimated_arc_days_range: [1, 14]

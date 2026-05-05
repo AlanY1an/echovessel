@@ -1,0 +1,28 @@
+fixture_id: travel_departure
+scenario: |
+  PART F advance_hours · 旅行 6-12 / 0 · pre fires before departure ·
+  no post follow-up while traveling.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 下周三我要飞东京 七天的旅行
+  - role: persona
+    content: 听起来很期待 准备得怎么样
+  - role: user
+    content: 行李快收完了
+expect:
+  event_extracted:
+    - description_contains: [东京]
+      follow_up_at_required: true
+      event_time_required: true
+      advance_pre_hours_range: [3, 24]
+      advance_post_hours_range: [0, 0]
+      follow_up_hint_min_chars: 3
+  phases:
+    pre:
+      fire_at_clock: "2026-05-06 12:00:00"
+      audit_action: fire
+    post:
+      fire_at_clock: "2026-05-15 09:00:00"
+      audit_action: skip
