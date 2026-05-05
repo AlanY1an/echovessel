@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import AsyncIterator, Mapping
+from typing import Any
 
 from echovessel.runtime.llm.base import DEFAULT_ROLE, MODEL_ROLES
 from echovessel.runtime.llm.errors import (
@@ -37,6 +38,31 @@ _OPENAI_OFFICIAL_DEFAULTS: dict[str, str] = {
 }
 
 _OFFICIAL_BASE_URL = "https://api.openai.com/v1"
+
+# Hosts whose APIs accept the DeepSeek-style ``extra_body={"thinking": ...}``.
+# Other OpenAI-compatible endpoints (official OpenAI, Ollama, OpenRouter)
+# either don't have a thinking concept or use a different param name we
+# don't translate yet — for those, ``thinking_enabled`` is a no-op.
+_DEEPSEEK_HOSTS: tuple[str, ...] = ("api.deepseek.com",)
+
+
+def _is_deepseek(base_url: str) -> bool:
+    return any(h in base_url for h in _DEEPSEEK_HOSTS)
+
+
+def _build_extra_body(base_url: str, thinking_enabled: bool | None) -> dict[str, Any] | None:
+    """Translate ``thinking_enabled`` to DeepSeek's ``extra_body`` shape.
+
+    Returns ``None`` (i.e. don't send ``extra_body``) when the flag is
+    ``None`` or when the base_url isn't a known DeepSeek host. Plain
+    OpenAI / Ollama / OpenRouter would 400 on an unknown ``thinking``
+    kwarg, so we keep the surface minimal.
+    """
+    if thinking_enabled is None:
+        return None
+    if not _is_deepseek(base_url):
+        return None
+    return {"thinking": {"type": "enabled" if thinking_enabled else "disabled"}}
 
 
 class OpenAICompatibleProvider:
@@ -142,20 +168,27 @@ class OpenAICompatibleProvider:
         model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        thinking_enabled: bool | None = None,
         timeout: float | None = None,
     ) -> tuple[str, Usage | None]:
         model = self.model_for(model_role)
         client = self._get_client()
+        kwargs: dict[str, Any] = dict(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=max_tokens or self._default_max_tokens,
+            temperature=temperature,
+            timeout=timeout or self._default_timeout,
+        )
+        extra_body = _build_extra_body(self._base_url_actual, thinking_enabled)
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         try:
             resp = await client.chat.completions.create(  # type: ignore[attr-defined]
-                model=model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                max_tokens=max_tokens or self._default_max_tokens,
-                temperature=temperature,
-                timeout=timeout or self._default_timeout,
+                **kwargs,
             )
         except Exception as e:  # noqa: BLE001
             raise _classify_openai_error(e) from e
@@ -184,23 +217,30 @@ class OpenAICompatibleProvider:
         model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        thinking_enabled: bool | None = None,
         timeout: float | None = None,
     ) -> AsyncIterator[str | Usage]:
         model = self.model_for(model_role)
         client = self._get_client()
         trailing_usage: Usage | None = None
+        kwargs: dict[str, Any] = dict(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=max_tokens or self._default_max_tokens,
+            temperature=temperature,
+            timeout=timeout or self._default_timeout,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        extra_body = _build_extra_body(self._base_url_actual, thinking_enabled)
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         try:
             stream = await client.chat.completions.create(  # type: ignore[attr-defined]
-                model=model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                max_tokens=max_tokens or self._default_max_tokens,
-                temperature=temperature,
-                timeout=timeout or self._default_timeout,
-                stream=True,
-                stream_options={"include_usage": True},
+                **kwargs,
             )
             async for chunk in stream:
                 choices = getattr(chunk, "choices", None) or []
