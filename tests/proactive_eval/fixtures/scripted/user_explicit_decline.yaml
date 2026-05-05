@@ -14,5 +14,5 @@ turns:
     content: 嗯 不用提醒我
 expect:
   event_extracted:
-    - description_contains: [前任]
+    - description_contains: []
       follow_up_at_forbidden: true
