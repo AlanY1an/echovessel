@@ -72,7 +72,7 @@ async def run_fixture(fixture: ProactiveFixture, *, llm: LLMProvider) -> Proacti
 
     _seed_personas(engine)
     _seed_persona_profile(engine, fixture, mock_now[0])
-    _seed_proactive_state(engine, fixture)
+    _seed_proactive_state(engine, fixture, mock_now[0])
     _seed_proactive_decisions(engine, fixture, mock_now[0])
 
     embed_fn = build_eval_embedder()
@@ -108,71 +108,81 @@ async def run_fixture(fixture: ProactiveFixture, *, llm: LLMProvider) -> Proacti
     observer = MemoryFollowUpObserver(scheduler=follow_up_scheduler)
 
     await proactive_scheduler.start()
+    try:
+        session_id: str | None = None
+        consolidate_skipped = False
+        consolidate_skip_reason: str | None = None
+        if fixture.turns:
+            session_id = _ingest_turns(engine, fixture.turns, mock_now[0])
+            cons = await _close_and_consolidate(
+                engine,
+                backend,
+                session_id,
+                extract_fn=extract_fn,
+                reflect_fn=reflect_fn,
+                embed_fn=embed_fn,
+                observer=observer,
+                now=mock_now[0],
+            )
+            consolidate_skipped = cons.skipped
+            consolidate_skip_reason = _derive_skip_reason(cons)
 
-    session_id: str | None = None
-    consolidate_skipped = False
-    consolidate_skip_reason: str | None = None
-    if fixture.turns:
-        session_id = _ingest_turns(engine, fixture.turns, mock_now[0])
-        cons = await _close_and_consolidate(
-            engine,
-            backend,
-            session_id,
-            extract_fn=extract_fn,
-            reflect_fn=reflect_fn,
-            embed_fn=embed_fn,
-            observer=observer,
-            now=mock_now[0],
+        events = _snapshot_events(engine)
+
+        audit_per_phase: dict[str, PhaseEvalResult] = {}
+        sorted_phases = sorted(
+            fixture.expect.phases.items(),
+            key=lambda kv: _parse_clock(kv[1].fire_at_clock),
         )
-        consolidate_skipped = cons.skipped
-        consolidate_skip_reason = _derive_skip_reason(cons)
+        for phase_name, ep in sorted_phases:
+            mock_now[0] = _parse_clock(ep.fire_at_clock)
+            before_count = _count_decisions(engine)
+            await follow_up_scheduler.start()
+            # Poll-until-grew: avoid wall-clock race where the timer's real
+            # asyncio.sleep is still running when fire_at_clock is set just
+            # before natural fire time. 5s overall budget; exit fast if a
+            # decision row lands.
+            deadline = asyncio.get_event_loop().time() + 5.0
+            while asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(0.1)
+                if _count_decisions(engine) > before_count:
+                    # let any in-flight reschedule task finish
+                    await asyncio.sleep(0.1)
+                    break
+            await follow_up_scheduler.stop()
+            rows = _collect_decisions_since(engine, before_count)
+            msgs = [r.get("message_text") or "" for r in rows if r.get("action") == "send"]
+            audit_per_phase[phase_name] = PhaseEvalResult(
+                fire_at_clock=ep.fire_at_clock,
+                audit_rows=rows,
+                generated_messages=msgs,
+            )
 
-    events = _snapshot_events(engine)
+        supersede_event: dict[str, Any] | None = None
+        if fixture.follow_up_stage:
+            mock_now[0] = _parse_clock(fixture.follow_up_stage.after_clock)
+            new_session_id = _ingest_turns(engine, fixture.follow_up_stage.turns, mock_now[0])
+            await _close_and_consolidate(
+                engine,
+                backend,
+                new_session_id,
+                extract_fn=extract_fn,
+                reflect_fn=reflect_fn,
+                embed_fn=embed_fn,
+                observer=observer,
+                now=mock_now[0],
+            )
+            supersede_event = _find_latest_supersede_event(engine)
 
-    audit_per_phase: dict[str, PhaseEvalResult] = {}
-    sorted_phases = sorted(
-        fixture.expect.phases.items(),
-        key=lambda kv: _parse_clock(kv[1].fire_at_clock),
-    )
-    for phase_name, ep in sorted_phases:
-        mock_now[0] = _parse_clock(ep.fire_at_clock)
-        before_count = _count_decisions(engine)
-        await follow_up_scheduler.start()
-        await asyncio.sleep(0.5)
-        await follow_up_scheduler.stop()
-        rows = _collect_decisions_since(engine, before_count)
-        msgs = [r.get("message_text") or "" for r in rows if r.get("action") == "send"]
-        audit_per_phase[phase_name] = PhaseEvalResult(
-            fire_at_clock=ep.fire_at_clock,
-            audit_rows=rows,
-            generated_messages=msgs,
+        return ProactiveEvalResult(
+            events=events,
+            audit_per_phase=audit_per_phase,
+            supersede_event=supersede_event,
+            consolidate_skipped=consolidate_skipped,
+            consolidate_skip_reason=consolidate_skip_reason,
         )
-
-    supersede_event: dict[str, Any] | None = None
-    if fixture.follow_up_stage:
-        mock_now[0] = _parse_clock(fixture.follow_up_stage.after_clock)
-        new_session_id = _ingest_turns(engine, fixture.follow_up_stage.turns, mock_now[0])
-        await _close_and_consolidate(
-            engine,
-            backend,
-            new_session_id,
-            extract_fn=extract_fn,
-            reflect_fn=reflect_fn,
-            embed_fn=embed_fn,
-            observer=observer,
-            now=mock_now[0],
-        )
-        supersede_event = _find_latest_supersede_event(engine)
-
-    await proactive_scheduler.stop()
-
-    return ProactiveEvalResult(
-        events=events,
-        audit_per_phase=audit_per_phase,
-        supersede_event=supersede_event,
-        consolidate_skipped=consolidate_skipped,
-        consolidate_skip_reason=consolidate_skip_reason,
-    )
+    finally:
+        await proactive_scheduler.stop()
 
 
 # --- helpers ----------------------------------------------------------------
@@ -219,7 +229,7 @@ def _seed_persona_profile(engine, fixture: ProactiveFixture, now: datetime) -> N
         db.commit()
 
 
-def _seed_proactive_state(engine, fixture: ProactiveFixture) -> None:
+def _seed_proactive_state(engine, fixture: ProactiveFixture, now: datetime) -> None:
     if not fixture.seed.proactive_state:
         return
     with DbSession(engine) as db:
@@ -228,7 +238,7 @@ def _seed_proactive_state(engine, fixture: ProactiveFixture) -> None:
                 persona_id=PERSONA_ID,
                 user_id=USER_ID,
                 engagement_score=fixture.seed.proactive_state.engagement_score,
-                last_updated=datetime.now(),
+                last_updated=now,
             )
         )
         db.commit()
