@@ -173,16 +173,16 @@ class OpenAICompatibleProvider:
     ) -> tuple[str, Usage | None]:
         model = self.model_for(model_role)
         client = self._get_client()
-        kwargs: dict[str, Any] = dict(
-            model=model,
-            messages=[
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            max_tokens=max_tokens or self._default_max_tokens,
-            temperature=temperature,
-            timeout=timeout or self._default_timeout,
-        )
+            "max_tokens": max_tokens or self._default_max_tokens,
+            "temperature": temperature,
+            "timeout": timeout or self._default_timeout,
+        }
         extra_body = _build_extra_body(self._base_url_actual, thinking_enabled)
         if extra_body:
             kwargs["extra_body"] = extra_body
@@ -223,18 +223,18 @@ class OpenAICompatibleProvider:
         model = self.model_for(model_role)
         client = self._get_client()
         trailing_usage: Usage | None = None
-        kwargs: dict[str, Any] = dict(
-            model=model,
-            messages=[
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            max_tokens=max_tokens or self._default_max_tokens,
-            temperature=temperature,
-            timeout=timeout or self._default_timeout,
-            stream=True,
-            stream_options={"include_usage": True},
-        )
+            "max_tokens": max_tokens or self._default_max_tokens,
+            "temperature": temperature,
+            "timeout": timeout or self._default_timeout,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
         extra_body = _build_extra_body(self._base_url_actual, thinking_enabled)
         if extra_body:
             kwargs["extra_body"] = extra_body

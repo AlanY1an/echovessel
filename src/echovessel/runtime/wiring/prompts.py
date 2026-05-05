@@ -88,11 +88,20 @@ def _role_str(msg: RecallMessage) -> str:
     return getattr(r, "value", r)
 
 
-def make_extract_fn(llm: LLMProvider) -> ExtractFn:
+def make_extract_fn(
+    llm: LLMProvider,
+    *,
+    thinking_enabled: bool | None = False,
+) -> ExtractFn:
     """Build an async `ExtractFn` that runs the extraction prompt on a
     batch of RecallMessages and returns memory-layer ExtractedEvents.
 
     Tier: SMALL (consolidate batch; see §6.6).
+
+    Phase B is a mechanical reformat (messages → JSON events) — no
+    reasoning needed. Default ``thinking_enabled=False`` keeps the
+    1024-token budget tight on V4-class models that would otherwise
+    burn it on hidden reasoning tokens.
 
     Worker ζ · the LLM call below is tagged ``feature=consolidate`` so
     the admin Cost tab can attribute extraction spend to the
@@ -136,6 +145,7 @@ def make_extract_fn(llm: LLMProvider) -> ExtractFn:
                 model_role="fast",
                 max_tokens=1024,
                 temperature=0.4,
+                thinking_enabled=thinking_enabled,
             )
 
         try:
@@ -203,8 +213,16 @@ def make_extract_fn(llm: LLMProvider) -> ExtractFn:
     return _extract
 
 
-def make_reflect_fn(llm: LLMProvider) -> ReflectFn:
+def make_reflect_fn(
+    llm: LLMProvider,
+    *,
+    thinking_enabled: bool | None = None,
+) -> ReflectFn:
     """Build an async `ReflectFn`. Tier: SMALL.
+
+    Reflection is a creative + reasoned task — default ``thinking_enabled=None``
+    lets the provider's natural default apply (DeepSeek V4 thinks by default).
+    ``max_tokens=4096`` leaves headroom for V4 reasoning + JSON output.
 
     Worker ζ · tagged ``feature=reflection`` so the admin Cost tab
     distinguishes reflection spend from straight extraction.
@@ -241,8 +259,9 @@ def make_reflect_fn(llm: LLMProvider) -> ReflectFn:
                 system=REFLECTION_SYSTEM_PROMPT,
                 user=user_prompt,
                 model_role="fast",
-                max_tokens=800,
+                max_tokens=4096,
                 temperature=0.6,
+                thinking_enabled=thinking_enabled,
             )
 
         input_ids = {n.id for n in nodes if n.id is not None}
@@ -262,7 +281,10 @@ def make_reflect_fn(llm: LLMProvider) -> ReflectFn:
 
 
 def make_slow_cycle_fn(
-    llm: LLMProvider, *, model_role: str = "fast"
+    llm: LLMProvider,
+    *,
+    model_role: str = "fast",
+    thinking_enabled: bool | None = None,
 ) -> SlowCycleFn:
     """Build an async ``SlowCycleFn`` that calls the LLM with the
     slow-cycle prompt and maps the parsed result into memory-layer
@@ -273,6 +295,11 @@ def make_slow_cycle_fn(
     scheduler handle. Tier defaults to ``fast`` — the reflection is
     short-output + moderate-input, and proactive is the only call
     site that justifies the LARGE tier.
+
+    Slow cycle is a reasoning-heavy reflection — default
+    ``thinking_enabled=None`` lets the provider's natural default apply.
+    ``max_tokens=4096`` leaves headroom for V4 reasoning + long JSON
+    reflection output.
 
     Failure modes:
       - Parse error → log WARNING, return an empty ``SlowCycleOutput``.
@@ -302,8 +329,9 @@ def make_slow_cycle_fn(
                 system=SLOW_CYCLE_SYSTEM_PROMPT,
                 user=user_prompt,
                 model_role=model_role,
-                max_tokens=1024,
+                max_tokens=4096,
                 temperature=0.5,
+                thinking_enabled=thinking_enabled,
             )
 
         input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
@@ -348,11 +376,18 @@ def make_slow_cycle_fn(
     return _slow_cycle
 
 
-def make_judge_fn(llm: LLMProvider) -> JudgeFn:
+def make_judge_fn(
+    llm: LLMProvider,
+    *,
+    thinking_enabled: bool | None = False,
+) -> JudgeFn:
     """Build an async judge callable for the EVAL harness. Tier: MEDIUM.
 
     Returns a prompts-layer `JudgeVerdict`. Callers (EVAL) pass through the
     usual args: user_message / persona_response / optional context.
+
+    Offline judge produces a yes/no with one-line reasoning — default
+    ``thinking_enabled=False`` keeps the 1024-token budget tight.
     """
 
     async def _judge(
@@ -377,6 +412,7 @@ def make_judge_fn(llm: LLMProvider) -> JudgeFn:
             model_role="judge",
             max_tokens=1024,
             temperature=0.2,
+            thinking_enabled=thinking_enabled,
         )
 
         try:
@@ -579,12 +615,21 @@ def _parse_proactive_response(raw: str) -> ProactiveMessage:
     )
 
 
-def make_proactive_fn(llm: LLMProvider) -> ProactiveFn:
+def make_proactive_fn(
+    llm: LLMProvider,
+    *,
+    thinking_enabled: bool | None = None,
+) -> ProactiveFn:
     """Build an async `ProactiveFn` that turns a MemorySnapshot into a
     ProactiveMessage.
 
     Tier: LARGE — proactive output is the user's most direct experience
     of persona voice quality (spec §6.6).
+
+    Proactive message generation is reasoning-heavy — default
+    ``thinking_enabled=None`` lets the provider's natural default apply.
+    ``max_tokens=2048`` leaves headroom for V4 reasoning + visible
+    message text.
 
     Worker ζ · tagged ``feature=proactive`` for the admin Cost tab.
 
@@ -606,8 +651,9 @@ def make_proactive_fn(llm: LLMProvider) -> ProactiveFn:
                 system=PROACTIVE_SYSTEM_PROMPT,
                 user=user_prompt,
                 model_role="main",
-                max_tokens=400,
+                max_tokens=2048,
                 temperature=0.8,
+                thinking_enabled=thinking_enabled,
             )
 
         try:

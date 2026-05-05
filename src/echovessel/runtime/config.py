@@ -97,6 +97,36 @@ class MemorySection(BaseModel):
     session_idle_minutes: int = Field(default=10, ge=1, le=1440)
 
 
+class ThinkingSection(BaseModel):
+    """Per-call-site thinking-mode overrides for ``[llm.thinking]``.
+
+    Each value is ``"off"`` or ``"default"``:
+
+    - ``"off"`` → ``thinking_enabled=False`` (explicitly disable reasoning
+      where supported; no-op on providers without a thinking concept)
+    - ``"default"`` → ``thinking_enabled=None`` (let the provider's natural
+      default apply, e.g. DeepSeek V4 thinking on by default)
+
+    Defaults match the per-call-site decisions in
+    ``runtime/wiring/prompts.py``: mechanical reformats (extract / judge)
+    are off, creative / reasoning calls (reflect / proactive / slow_cycle)
+    are default.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    extract: Literal["off", "default"] = "off"
+    judge: Literal["off", "default"] = "off"
+    reflect: Literal["off", "default"] = "default"
+    proactive: Literal["off", "default"] = "default"
+    slow_cycle: Literal["off", "default"] = "default"
+
+    def to_thinking_enabled(self, call_site: str) -> bool | None:
+        """Map a configured ``"off"`` / ``"default"`` to a ``bool | None``."""
+        v = getattr(self, call_site, "default")
+        return False if v == "off" else None
+
+
 class LLMSection(BaseModel):
     """LLM provider configuration. See spec §4.4 and §6.2.2.
 
@@ -124,6 +154,8 @@ class LLMSection(BaseModel):
     max_tokens: int = Field(default=1024, ge=64, le=32000)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     timeout_seconds: int = Field(default=60, ge=1, le=600)
+    # Per-call-site thinking-mode overrides (V4 reasoning-token control).
+    thinking: ThinkingSection = Field(default_factory=ThinkingSection)
 
     def _has_custom_base_url(self) -> bool:
         """True if the base_url is not an official Anthropic/OpenAI endpoint."""
@@ -581,6 +613,7 @@ __all__ = [
     "PersonaSection",
     "MemorySection",
     "LLMSection",
+    "ThinkingSection",
     "ConsolidateSection",
     "IdleScannerSection",
     "SlowTickSection",
