@@ -143,16 +143,24 @@ async def run_fixture(fixture: ProactiveFixture, *, llm: LLMProvider) -> Proacti
             mock_now[0] = _parse_clock(ep.fire_at_clock)
             before_count = _count_decisions(engine)
             await follow_up_scheduler.start()
-            # Poll-until-grew: avoid wall-clock race where the timer's real
-            # asyncio.sleep is still running when fire_at_clock is set just
-            # before natural fire time. 5s overall budget; exit fast if a
-            # decision row lands.
-            deadline = asyncio.get_event_loop().time() + 5.0
+            # Poll-until-stable: wait for the audit row to exist AND for its
+            # sent_message_id (fire path) or suppress_reason (skip path) to
+            # land. The dispatch involves a real LLM call (proactive_fn)
+            # that can take 10-30s with V4 reasoning, so we need a generous
+            # overall deadline. We exit early once the latest row's outcome
+            # is filled in, OR after 60s if nothing converges.
+            deadline = asyncio.get_event_loop().time() + 60.0
             while asyncio.get_event_loop().time() < deadline:
-                await asyncio.sleep(0.1)
-                if _count_decisions(engine) > before_count:
-                    # let any in-flight reschedule task finish
-                    await asyncio.sleep(0.1)
+                await asyncio.sleep(0.5)
+                if _count_decisions(engine) <= before_count:
+                    continue
+                latest = _collect_decisions_since(engine, before_count)[-1]
+                # Done when the latest row's outcome is settled: either the
+                # send completed (send_ok=True / suppress_reason set) or it
+                # was an outright skip (no send to wait for).
+                if latest.get("send_ok") is True or latest.get("suppress_reason"):
+                    break
+                if latest.get("action") == "skip":
                     break
             await follow_up_scheduler.stop()
             rows = _collect_decisions_since(engine, before_count)
