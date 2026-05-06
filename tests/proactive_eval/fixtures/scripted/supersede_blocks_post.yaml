@@ -1,0 +1,43 @@
+fixture_id: supersede_blocks_post
+scenario: |
+  User reports outcome of a prior event · Phase B emits new node with
+  superseded_event_ids · scheduler's _eligible filter blocks post-phase.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 下周一上午十点有面试 我有点紧张
+  - role: persona
+    content: 我会陪你的 准备得怎么样
+  - role: user
+    content: 还行 但是怕表现不好
+expect:
+  event_extracted:
+    - description_contains: [面试]
+      follow_up_at_required: true
+      event_time_required: true
+      advance_post_hours_range: [3, 48]
+  phases:
+    pre:
+      fire_at_clock: "2026-05-11 09:00:00"
+      audit_action: fire
+    post:
+      fire_at_clock: "2026-05-13 12:00:00"
+      audit_action: skip
+follow_up_stage:
+  after_clock: "2026-05-11 18:00:00"
+  turns:
+    - role: user
+      content: 面试结束了 还行
+    - role: persona
+      content: 辛苦了 怎么样
+    - role: user
+      content: 比想的顺利一点
+  expect_supersede_event_description_contains: [面试]
+xfail:
+  reason: |
+    Phase B PART F supersede-detection is inconsistent: the LLM
+    sometimes emits the outcome event without `superseded_event_ids`
+    referencing the prior event, so the supersede chain doesn't form
+    and the post phase fires when the fixture expects skip. Drop xfail
+    once PART F prompt reliably tags outcome reports.

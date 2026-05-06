@@ -1,0 +1,18 @@
+fixture_id: user_explicit_decline
+scenario: |
+  PART F explicit-suppression rule: when user says "别管这个 / 我自己处理 /
+  你别问了 / 算了", follow_up_at MUST be null even if the event would
+  normally qualify (e.g. dated future).
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 下周三要去找前任谈一次 但你别管这个 我自己处理
+  - role: persona
+    content: 好 你考虑清楚就行
+  - role: user
+    content: 嗯 不用提醒我
+expect:
+  event_extracted:
+    - description_contains: []
+      follow_up_at_forbidden: true

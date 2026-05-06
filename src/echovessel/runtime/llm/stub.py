@@ -70,6 +70,7 @@ class StubProvider:
         model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        thinking_enabled: bool | None = None,
         timeout: float | None = None,
     ) -> tuple[str, Usage | None]:
         if (system, user) in self._canned:
@@ -82,6 +83,7 @@ class StubProvider:
                 model_role=model_role,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                thinking_enabled=thinking_enabled,
                 timeout=timeout,
             )
             # Support async responders without forcing the test harness to
@@ -107,6 +109,7 @@ class StubProvider:
         model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        thinking_enabled: bool | None = None,
         timeout: float | None = None,
     ) -> AsyncIterator[str | Usage]:
         text, _usage = await self.complete(
@@ -115,6 +118,7 @@ class StubProvider:
             model_role=model_role,
             max_tokens=max_tokens,
             temperature=temperature,
+            thinking_enabled=thinking_enabled,
             timeout=timeout,
         )
         yield text

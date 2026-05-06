@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from echovessel.prompts.extraction import EXTRACTION_SYSTEM_PROMPT
+from datetime import datetime
+
+from echovessel.prompts.extraction import (
+    EXTRACTION_SYSTEM_PROMPT,
+    _parse_event,
+)
 
 
 def test_part_f_section_present():
@@ -53,3 +58,96 @@ def test_part_f_appears_after_existing_parts():
     part_a_pos = EXTRACTION_SYSTEM_PROMPT.find("# Self-check step")  # an early section
     part_f_pos = EXTRACTION_SYSTEM_PROMPT.find("# PART F")
     assert part_a_pos < part_f_pos
+
+
+# ---------------------------------------------------------------------------
+# Parser-side tests: confirm _parse_event reads the PART F fields off JSON
+# and routes them onto RawExtractedEvent without crashing on missing/null
+# entries (backward compat with pre-v3 prompts).
+# ---------------------------------------------------------------------------
+
+
+def _base_event_json(**overrides):
+    base = {
+        "description": "user has interview Monday 10am",
+        "emotional_impact": 3,
+        "emotion_tags": ["nervous"],
+        "relational_tags": ["unresolved"],
+        "subject": "user",
+        "event_time": {
+            "start": "2026-05-11T10:00:00",
+            "end": "2026-05-11T10:00:00",
+        },
+    }
+    base.update(overrides)
+    return base
+
+
+def test_parse_event_reads_follow_up_at_iso():
+    """JSON with valid ISO datetime → RawExtractedEvent.follow_up_at is datetime."""
+    raw = _base_event_json(follow_up_at="2026-05-11T10:00:00")
+    ev = _parse_event(raw, index=0)
+    assert isinstance(ev.follow_up_at, datetime)
+    assert ev.follow_up_at == datetime(2026, 5, 11, 10, 0, 0)
+
+
+def test_parse_event_handles_null_follow_up_at():
+    """JSON with null → None (no error)."""
+    raw = _base_event_json(follow_up_at=None)
+    ev = _parse_event(raw, index=0)
+    assert ev.follow_up_at is None
+
+
+def test_parse_event_reads_advance_hours():
+    """JSON with advance_pre_hours: 24 and advance_post_hours: 0 → both populated."""
+    raw = _base_event_json(advance_pre_hours=24, advance_post_hours=0)
+    ev = _parse_event(raw, index=0)
+    assert ev.advance_pre_hours == 24
+    assert ev.advance_post_hours == 0
+
+
+def test_parse_event_reads_follow_up_hint():
+    """JSON with hint string → field populated."""
+    raw = _base_event_json(follow_up_hint="面试结果")
+    ev = _parse_event(raw, index=0)
+    assert ev.follow_up_hint == "面试结果"
+
+
+def test_parse_event_reads_estimated_arc_days():
+    """JSON with int → field populated."""
+    raw = _base_event_json(estimated_arc_days=14)
+    ev = _parse_event(raw, index=0)
+    assert ev.estimated_arc_days == 14
+
+
+def test_parse_event_omits_part_f_fields_gracefully():
+    """JSON without any PART F keys → all 5 fields are None (backward compat)."""
+    raw = _base_event_json()
+    ev = _parse_event(raw, index=0)
+    assert ev.follow_up_at is None
+    assert ev.follow_up_hint is None
+    assert ev.estimated_arc_days is None
+    assert ev.advance_pre_hours is None
+    assert ev.advance_post_hours is None
+
+
+def test_parse_event_invalid_follow_up_at_falls_back_to_none():
+    """Malformed ISO string → None (defensive coercion, no crash)."""
+    raw = _base_event_json(follow_up_at="not-an-iso-date")
+    ev = _parse_event(raw, index=0)
+    assert ev.follow_up_at is None
+
+
+def test_parse_event_empty_follow_up_hint_is_none():
+    """Empty / whitespace hint → None."""
+    raw = _base_event_json(follow_up_hint="   ")
+    ev = _parse_event(raw, index=0)
+    assert ev.follow_up_hint is None
+
+
+def test_parse_event_non_int_advance_hours_is_none():
+    """String / float-with-fraction advance hours → None (defensive)."""
+    raw = _base_event_json(advance_pre_hours="lots", advance_post_hours=1.5)
+    ev = _parse_event(raw, index=0)
+    assert ev.advance_pre_hours is None
+    assert ev.advance_post_hours is None

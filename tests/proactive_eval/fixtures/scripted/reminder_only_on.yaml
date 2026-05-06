@@ -1,0 +1,25 @@
+fixture_id: reminder_only_on
+scenario: |
+  PART F · explicit reminder request · advance_pre=0 + advance_post=0 ·
+  candidate phases = ["on"] only.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 帮我记一下 明天下午三点提醒我吃药
+  - role: persona
+    content: 好的 我记下了 明天下午三点提醒你
+expect:
+  event_extracted:
+    - description_contains: [吃药]
+      follow_up_at_required: true
+      event_time_required: true
+      advance_pre_hours_range: [0, 0]
+      advance_post_hours_range: [0, 0]
+      follow_up_hint_min_chars: 2
+  phases:
+    "on":
+      fire_at_clock: "2026-05-05 15:01:00"
+      audit_action: fire
+      judge_message_prompts:
+        - Does the message remind the user to take medicine?

@@ -1,0 +1,26 @@
+fixture_id: fuzzy_future_check
+scenario: |
+  User mentions a fuzzy future intention without committing to a date ·
+  Phase B should treat this as ongoing (event_time_end IS NULL → check_N
+  phases) rather than inventing a fake hard date.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 最近可能要搬家 还在看房
+  - role: persona
+    content: 看到喜欢的了吗
+  - role: user
+    content: 还没定 看了几个都一般
+expect:
+  event_extracted:
+    - description_contains: [搬家]
+      follow_up_at_required: true
+      relational_tags_any: [unresolved, ongoing]
+      estimated_arc_days_range: [3, 90]
+  phases:
+    check_1:
+      fire_at_clock: "2026-05-08 12:00:00"
+      audit_action: fire
+      judge_message_prompts:
+        - Does the message check on the user's house-hunting progress without committing to a specific date?

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from echovessel.memory import create_all_tables, create_engine
 from echovessel.memory.models import ConceptNode, NodeType, Persona, User
@@ -142,4 +142,51 @@ async def test_start_initializes_pending_events(db_factory, fake_proactive_sched
     await asyncio.sleep(0.5)
     assert fake_proactive_scheduler.notify.called
 
+    await sched.stop()
+
+
+async def test_start_after_stop_resets_shutdown(db_factory, fake_proactive_scheduler):
+    """start() must reset _shutdown so the scheduler can run again after stop()."""
+    fire_time = datetime.now() + timedelta(seconds=0.1)
+
+    with db_factory() as db:
+        event = ConceptNode(
+            persona_id="p",
+            user_id="u",
+            type=NodeType.EVENT,
+            description="reminder",
+            follow_up_at=fire_time,
+            event_time_start=fire_time,
+            event_time_end=fire_time,
+            advance_pre_hours=0,
+            advance_post_hours=0,
+            estimated_arc_days=1,
+        )
+        db.add(event)
+        db.commit()
+
+    sched = FollowUpScheduler(
+        db_factory=db_factory,
+        proactive_scheduler=fake_proactive_scheduler,
+        persona_id="p",
+        user_id="u",
+    )
+
+    await sched.start()
+    await sched.stop()
+    fake_proactive_scheduler.notify.reset_mock()
+
+    # Re-arm: bump fire_time and call start() again
+    new_fire = datetime.now() + timedelta(seconds=0.1)
+    with db_factory() as db:
+        e = db.exec(select(ConceptNode)).first()
+        e.follow_up_at = new_fire
+        e.event_time_start = new_fire
+        e.event_time_end = new_fire
+        db.commit()
+
+    await sched.start()
+    await asyncio.sleep(0.5)
+
+    assert fake_proactive_scheduler.notify.called
     await sched.stop()

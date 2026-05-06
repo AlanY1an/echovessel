@@ -69,6 +69,7 @@ async def judge_prompts(
                 model_role=model_role,
                 max_tokens=200,
                 temperature=0.0,
+                thinking_enabled=False,
             )
         except Exception as e:  # noqa: BLE001
             out.append(

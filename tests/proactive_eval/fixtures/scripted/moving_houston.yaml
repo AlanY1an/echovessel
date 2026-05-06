@@ -1,0 +1,38 @@
+fixture_id: moving_houston
+scenario: |
+  PART F should populate follow_up_at + advance_pre/post_hours on
+  long-arc transition events (relocation / job change / move). Real
+  conversation captured 2026-05-03; PART F left every follow-up field
+  NULL — fixture xfails until prompt update lands.
+clock:
+  fixed_now: "2026-05-03 22:25:00"
+turns:
+  - role: user
+    content: hi
+  - role: persona
+    content: 嗨，最近怎么样？有没有什么想分享的事情呢？
+  - role: user
+    content: 最近不错
+  - role: persona
+    content: 听起来不错哦！最近有没有什么特别让你开心的事情？
+  - role: user
+    content: 我下周要去houston
+  - role: persona
+    content: 听起来很有趣！去 Houston 是有什么特别的安排吗？
+  - role: user
+    content: 我要搬家过去工作了
+  - role: persona
+    content: 哇，搬去 Houston 工作是个大变化呢！
+expect:
+  event_extracted:
+    - description_contains: ["Houston"]
+      follow_up_at_required: true
+      advance_pre_hours_range: [12, 72]
+      advance_post_hours_range: [12, 72]
+      estimated_arc_days_range: [3, 60]
+      follow_up_hint_min_chars: 4
+      relational_tags_any: [unresolved, commitment]
+xfail:
+  reason: |
+    Phase B PART F does not populate follow_up_at on relocation /
+    long-arc transition events. Drop xfail once prompt update lands.

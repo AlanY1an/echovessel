@@ -1,0 +1,17 @@
+fixture_id: historical_no_followup
+scenario: |
+  Pure-past disclosure · biographical event for retrieval but no future
+  anchor · follow_up_at MUST be NULL.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 我去年六月辞职了 那是我做的最重要的决定
+  - role: persona
+    content: 听起来你想了很久 现在感觉怎么样
+  - role: user
+    content: 现在挺好的 不后悔
+expect:
+  event_extracted:
+    - description_contains: [辞职]
+      follow_up_at_forbidden: true

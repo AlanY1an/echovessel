@@ -1,0 +1,19 @@
+fixture_id: trivial_no_followup
+scenario: |
+  Pure small-talk · session may hit Phase A trivial gate · if it reaches
+  Phase B no follow-up fields should be populated.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 今天天气真好
+  - role: persona
+    content: 是啊 天气不错呢
+  - role: user
+    content: 心情也不错
+  - role: persona
+    content: 那真好啊
+expect:
+  event_extracted:
+    - description_contains: []
+      follow_up_at_forbidden: true

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from echovessel.runtime.config import Config, load_config_from_str
+from echovessel.runtime.config import Config, ThinkingSection, load_config_from_str
 
 MINIMAL_TOML = """
 [persona]
@@ -396,3 +396,44 @@ def test_proactive_to_proactive_config_explicit_user_id():
     pconfig = cfg.proactive.to_proactive_config(persona_id="alan", user_id="alice")
     assert pconfig.persona_id == "alan"
     assert pconfig.user_id == "alice"
+
+
+# ---------------------------------------------------------------------------
+# [llm.thinking] per-call-site overrides
+# ---------------------------------------------------------------------------
+
+
+def test_llm_thinking_default_values() -> None:
+    """Hardcoded defaults: extract / judge off, reflect / proactive / slow_cycle default."""
+    section = ThinkingSection()
+    assert section.to_thinking_enabled("extract") is False
+    assert section.to_thinking_enabled("judge") is False
+    assert section.to_thinking_enabled("reflect") is None
+    assert section.to_thinking_enabled("proactive") is None
+    assert section.to_thinking_enabled("slow_cycle") is None
+
+
+def test_llm_thinking_loads_from_toml() -> None:
+    """A TOML override flips the per-call-site value, untouched fields stay default."""
+    toml = """
+[persona]
+id = "x"
+display_name = "x"
+
+[llm]
+provider = "stub"
+api_key_env = ""
+
+[llm.thinking]
+extract = "default"
+judge = "off"
+reflect = "off"
+"""
+    cfg = load_config_from_str(toml)
+    assert cfg.llm.thinking.extract == "default"
+    assert cfg.llm.thinking.to_thinking_enabled("extract") is None
+    assert cfg.llm.thinking.to_thinking_enabled("judge") is False
+    assert cfg.llm.thinking.to_thinking_enabled("reflect") is False
+    # Untouched defaults still apply.
+    assert cfg.llm.thinking.to_thinking_enabled("proactive") is None
+    assert cfg.llm.thinking.to_thinking_enabled("slow_cycle") is None

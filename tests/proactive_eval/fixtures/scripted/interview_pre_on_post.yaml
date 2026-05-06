@@ -1,0 +1,44 @@
+fixture_id: interview_pre_on_post
+scenario: |
+  PART F advance_hours · 考试/面试 12-24 / 12-24 · pre/on/post all fire.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 下周一上午十点有面试 我有点紧张
+  - role: persona
+    content: 我会陪你的 准备得怎么样
+  - role: user
+    content: 还行 但是怕表现不好
+  - role: persona
+    content: 你已经很努力了 相信你可以的
+expect:
+  event_extracted:
+    - description_contains: [面试]
+      follow_up_at_required: true
+      event_time_required: true
+      advance_pre_hours_range: [6, 48]
+      advance_post_hours_range: [6, 48]
+      estimated_arc_days_range: [1, 30]
+      follow_up_hint_min_chars: 3
+  phases:
+    pre:
+      fire_at_clock: "2026-05-11 09:00:00"
+      audit_action: fire
+      judge_message_prompts:
+        - Does the message reference the upcoming interview without leaking any channel id strings?
+    "on":
+      fire_at_clock: "2026-05-11 10:30:00"
+      audit_action: fire
+    post:
+      fire_at_clock: "2026-05-13 12:00:00"
+      audit_action: fire
+      judge_message_prompts:
+        - Does the message ask about how the interview went rather than reminding about an upcoming event?
+xfail:
+  reason: |
+    Multi-phase scheduling: between phase iterations the runner stops
+    follow_up_scheduler then re-starts. The `on` phase intermittently
+    misses its timer arm window because mock_clock pinning + scheduler
+    state crosses the start/stop boundary. Drop xfail once runner can
+    cleanly serialise multi-phase fires for the same event.

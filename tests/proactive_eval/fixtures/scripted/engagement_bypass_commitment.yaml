@@ -1,0 +1,28 @@
+fixture_id: engagement_bypass_commitment
+scenario: |
+  ProactiveState.engagement_score = 0.2 (≤ threshold) BUT extracted
+  event carries relational_tags=[commitment] · bypass clause fires the
+  message regardless.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+seed:
+  proactive_state:
+    engagement_score: 0.2
+turns:
+  - role: user
+    content: 我答应你周三之前把简历改完
+  - role: persona
+    content: 好啊 等你的成果
+  - role: user
+    content: 嗯 一定会做到
+expect:
+  event_extracted:
+    - description_contains: []
+      relational_tags_any: [commitment]
+      follow_up_at_required: true
+  phases:
+    pre:
+      fire_at_clock: "2026-05-06 09:00:00"
+      audit_action: fire
+      judge_message_prompts:
+        - Does the message reference the user's commitment to update their resume?

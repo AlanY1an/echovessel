@@ -1,0 +1,26 @@
+fixture_id: ongoing_check_n
+scenario: |
+  Open-ended ongoing situation · event_time_end IS NULL · scheduler uses
+  check_N phase series · first attempt is "check_1".
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 最近在找工作 有点累
+  - role: persona
+    content: 找工作确实辛苦 你节奏怎么样
+  - role: user
+    content: 投了好几家 都还在等回复
+expect:
+  event_extracted:
+    - description_contains: [找工作]
+      follow_up_at_required: true
+      estimated_arc_days_range: [3, 90]
+      follow_up_hint_min_chars: 3
+      relational_tags_any: [unresolved, ongoing]
+  phases:
+    check_1:
+      fire_at_clock: "2026-05-08 23:00:00"
+      audit_action: fire
+      judge_message_prompts:
+        - Does the message check on job-hunt progress without committing to a date?

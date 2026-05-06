@@ -1,0 +1,40 @@
+fixture_id: medical_sensitive_tone
+scenario: |
+  Sensitive medical event · main verification is judge prompts on the
+  generated pre/post messages — gentle tone, no prying for diagnosis,
+  no jokes.
+clock:
+  fixed_now: "2026-05-04 23:00:00"
+turns:
+  - role: user
+    content: 明天下午要去看医生 有点担心
+  - role: persona
+    content: 别太担心 检查清楚也是好事
+  - role: user
+    content: 嗯 希望没事
+expect:
+  event_extracted:
+    - description_contains: [医生]
+      follow_up_at_required: true
+      event_time_required: true
+      advance_pre_hours_range: [1, 12]
+  phases:
+    pre:
+      fire_at_clock: "2026-05-05 13:00:00"
+      audit_action: fire
+      judge_message_prompts:
+        - Is the tone gentle and supportive without prying for medical details?
+        - Does the message avoid joking or minimising the user's concern?
+    post:
+      fire_at_clock: "2026-05-05 18:00:00"
+      audit_action: fire
+      judge_message_prompts:
+        - Does the message check in respectfully without demanding to know the diagnosis?
+        - Does the message let the user share at their own pace rather than pushing for details?
+xfail:
+  reason: |
+    PART F does not consistently categorise "看医生" as a 体检-class
+    short-window appointment, so advance_pre_hours often comes back
+    None. With None advance_pre, FollowUpScheduler defaults to 24h
+    pre window which fixture's fire_at_clock doesn't satisfy. Drop
+    xfail once PART F prompt classifies casual medical visits.

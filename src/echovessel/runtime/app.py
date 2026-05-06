@@ -563,12 +563,20 @@ class Runtime:
         def _db_factory() -> DbSession:
             return DbSession(self.ctx.engine)
 
-        extract_fn = make_extract_fn(self.ctx.llm)
-        reflect_fn = make_reflect_fn(self.ctx.llm)
+        thinking_cfg = self.ctx.config.llm.thinking
+        extract_fn = make_extract_fn(
+            self.ctx.llm,
+            thinking_enabled=thinking_cfg.to_thinking_enabled("extract"),
+        )
+        reflect_fn = make_reflect_fn(
+            self.ctx.llm,
+            thinking_enabled=thinking_cfg.to_thinking_enabled("reflect"),
+        )
         slow_cycle_fn = (
             make_slow_cycle_fn(
                 self.ctx.llm,
                 model_role=self.ctx.config.slow_tick.llm_model_role,
+                thinking_enabled=thinking_cfg.to_thinking_enabled("slow_cycle"),
             )
             if self.ctx.config.slow_tick.enabled
             else None
@@ -928,7 +936,10 @@ class Runtime:
         try:
             memory_api = MemoryFacade(db_factory)
             channel_registry = ProactiveChannelRegistry(self.ctx.registry)
-            proactive_fn = make_proactive_fn(self.ctx.llm)
+            proactive_fn = make_proactive_fn(
+                self.ctx.llm,
+                thinking_enabled=self.ctx.config.llm.thinking.to_thinking_enabled("proactive"),
+            )
             proactive_config = self.ctx.config.proactive.to_proactive_config(
                 persona_id=self.ctx.config.persona.id,
                 user_id="self",
