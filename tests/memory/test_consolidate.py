@@ -16,7 +16,7 @@ import pytest
 from sqlmodel import Session as DbSession
 from sqlmodel import select
 
-from echovessel.core.types import MessageRole, NodeType, SessionStatus
+from echovessel.core.types import EventTime, MessageRole, NodeType, SessionStatus
 from echovessel.memory import (
     ConceptNodeFilling,
     Persona,
@@ -925,6 +925,118 @@ async def test_resume_rehydrates_extraction_payload_for_derived_writes():
         db.refresh(sess)
         assert sess.status == SessionStatus.CLOSED
         assert sess.extraction_payload is None
+
+
+async def test_resume_includes_intention_nodes_from_prior_attempt():
+    """When extraction produced both a plain EVENT and an INTENTION
+    (subject='persona' + event_time) and reflection failed transiently,
+    the retry must rehydrate both node types: the intention drives SHOCK
+    detection, reaches the reflector, stays wired to its entity junction,
+    and appears exactly once in ``events_created``.
+    """
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+
+    extraction = ExtractionResult(
+        events=[
+            ExtractedEvent(
+                description="Scott 说下周要交申请材料",
+                emotional_impact=2,
+            ),
+            ExtractedEvent(
+                description="我答应明早九点提醒 Scott 交材料",
+                emotional_impact=SHOCK_IMPACT_THRESHOLD,
+                subject="persona",
+                event_time=EventTime(start=datetime(2026, 6, 13, 9, 0)),
+            ),
+        ],
+        mentioned_entities=[
+            ExtractedEntity(canonical_name="Scott", aliases=[], kind="person", in_events=[0, 1])
+        ],
+    )
+
+    with DbSession(engine) as db:
+        _seed(db)
+        sess = _make_session(db)
+        _add_messages(db, "s_test", ["a" * 40, "b" * 40, "c" * 40, "d" * 40, "e" * 40])
+
+        async def extractor(_msgs):
+            return extraction
+
+        async def exploding_reflect(_nodes, _reason):
+            raise RuntimeError("reflection outage")
+
+        with pytest.raises(RuntimeError, match="reflection outage"):
+            await consolidate_session(
+                db=db,
+                backend=backend,
+                session=sess,
+                extract_fn=extractor,
+                reflect_fn=exploding_reflect,
+                embed_fn=_deterministic_embed,
+            )
+
+    with DbSession(engine) as db:
+        sess_again = db.get(Session, "s_test")
+        assert sess_again is not None
+
+        async def must_not_extract(_msgs):
+            raise AssertionError("extract_fn must not run on resume")
+
+        reflect_input_ids: list[list[int]] = []
+
+        async def reflector(nodes, reason):
+            reflect_input_ids.append([n.id for n in nodes])
+            return [
+                ExtractedThought(
+                    description="这个承诺对她很重要",
+                    emotional_impact=4,
+                    filling=[n.id for n in nodes],
+                )
+            ]
+
+        result = await consolidate_session(
+            db=db,
+            backend=backend,
+            session=sess_again,
+            extract_fn=must_not_extract,
+            reflect_fn=reflector,
+            embed_fn=_deterministic_embed,
+        )
+
+        assert result.reflection_reason == "shock"
+        assert len(result.events_created) == 2
+        intentions = [
+            n
+            for n in result.events_created
+            if getattr(n.type, "value", n.type) == NodeType.INTENTION.value
+        ]
+        assert len(intentions) == 1, "rehydrated set must include the INTENTION exactly once"
+        assert reflect_input_ids and intentions[0].id in reflect_input_ids[0]
+
+    with DbSession(engine) as db:
+        intention_rows = db.exec(
+            select(ConceptNode).where(
+                ConceptNode.source_session_id == "s_test",
+                ConceptNode.type == NodeType.INTENTION.value,
+            )
+        ).all()
+        assert len(intention_rows) == 1
+        event_rows = db.exec(
+            select(ConceptNode).where(
+                ConceptNode.source_session_id == "s_test",
+                ConceptNode.type == NodeType.EVENT.value,
+            )
+        ).all()
+        assert len(event_rows) == 1
+
+        junctions = db.exec(select(ConceptNodeEntity)).all()
+        assert {j.node_id for j in junctions} == {event_rows[0].id, intention_rows[0].id}
+
+        sess_done = db.get(Session, "s_test")
+        assert sess_done is not None
+        assert sess_done.status == SessionStatus.CLOSED
 
 
 async def test_resume_skips_reflection_when_already_reflected():
