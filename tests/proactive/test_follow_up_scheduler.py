@@ -293,6 +293,81 @@ async def test_suppressed_attempts_count_toward_attempt_cap(db_factory):
 
 
 # ---------------------------------------------------------------------------
+# Timer registry lifecycle
+# ---------------------------------------------------------------------------
+
+
+async def test_completed_timer_removed_from_registry(db_factory, fake_proactive_scheduler):
+    """A timer whose reschedule chain ends (phase fired, nothing left to
+    arm) must drop out of _active_timers instead of lingering as a dead
+    Task for the daemon's lifetime."""
+    event_id = _reminder_event(db_factory, fire_time=datetime.now() + timedelta(seconds=0.05))
+
+    sched = FollowUpScheduler(
+        db_factory=db_factory,
+        proactive_scheduler=fake_proactive_scheduler,
+        persona_id="p",
+        user_id="u",
+    )
+    with db_factory() as db:
+        sched.on_event_created(db.get(ConceptNode, event_id))
+
+    await asyncio.sleep(0.4)
+
+    assert len(fake_proactive_scheduler.events) == 1
+    assert event_id not in sched._active_timers
+
+    await sched.stop()
+
+
+async def test_reschedule_keeps_single_live_registry_entry(db_factory):
+    """A timer that re-arms itself (quiet-hours park) replaces its own
+    entry: exactly one live task remains, and the finished wake task's
+    cleanup must not evict the replacement."""
+    _seed_profile(db_factory, quiet_hours=[23, 7])
+    now = datetime(2026, 5, 1, 23, 30)
+    event_id = _reminder_event(db_factory, fire_time=datetime(2026, 5, 1, 23, 0))
+
+    fake = FakeProactiveScheduler(
+        db_factory=db_factory, action="suppress", suppress_reason="quiet_hours"
+    )
+    sched = FollowUpScheduler(
+        db_factory=db_factory,
+        proactive_scheduler=fake,
+        persona_id="p",
+        user_id="u",
+        now_fn=lambda: now,
+    )
+    with db_factory() as db:
+        sched.on_event_created(db.get(ConceptNode, event_id))
+
+    await asyncio.sleep(0.3)
+
+    assert list(sched._active_timers) == [event_id]
+    assert not sched._active_timers[event_id].done()
+
+    await sched.stop()
+
+
+async def test_stop_clears_registry(db_factory, fake_proactive_scheduler):
+    """stop() cancels pending timers and leaves the registry empty."""
+    event_id = _reminder_event(db_factory, fire_time=datetime.now() + timedelta(seconds=60))
+
+    sched = FollowUpScheduler(
+        db_factory=db_factory,
+        proactive_scheduler=fake_proactive_scheduler,
+        persona_id="p",
+        user_id="u",
+    )
+    with db_factory() as db:
+        sched.on_event_created(db.get(ConceptNode, event_id))
+
+    assert event_id in sched._active_timers
+    await sched.stop()
+    assert sched._active_timers == {}
+
+
+# ---------------------------------------------------------------------------
 # Quiet-hours retry window
 # ---------------------------------------------------------------------------
 

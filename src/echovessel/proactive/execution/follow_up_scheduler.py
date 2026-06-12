@@ -106,9 +106,16 @@ class FollowUpScheduler:
         phase, when = result
         delay = max(0.0, (when - self.now_fn()).total_seconds())
 
-        self._active_timers[event.id] = asyncio.create_task(
-            self._wake_and_attempt(event.id, phase, delay)
-        )
+        task = asyncio.create_task(self._wake_and_attempt(event.id, phase, delay))
+        self._active_timers[event.id] = task
+        task.add_done_callback(lambda t, eid=event.id: self._discard_timer(eid, t))
+
+    def _discard_timer(self, event_id: int, task: asyncio.Task) -> None:
+        # Identity check: a reschedule replaces the entry with a new task
+        # before the old one's callback runs — only the still-registered
+        # task may remove itself.
+        if self._active_timers.get(event_id) is task:
+            del self._active_timers[event_id]
 
     async def _wake_and_attempt(self, event_id: int, phase: str, delay: float) -> None:
         try:
