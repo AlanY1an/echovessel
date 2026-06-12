@@ -141,9 +141,13 @@ BEGIN
 END
 """
 
+# Scoped to the indexed column: bookkeeping writes (deleted_at
+# soft-deletes) must not delete + reinsert trigram rows for unchanged
+# content. Row-level filtering of deleted messages happens in
+# fts_search's WHERE clause, not in the index.
 _FTS_TRIGGER_UPDATE = """
 CREATE TRIGGER IF NOT EXISTS recall_fts_update
-AFTER UPDATE ON recall_messages
+AFTER UPDATE OF content ON recall_messages
 BEGIN
     INSERT INTO recall_messages_fts(recall_messages_fts, rowid, content)
     VALUES('delete', old.id, old.content);
@@ -212,15 +216,39 @@ BEGIN
 END
 """
 
+# Scoped to the indexed column: access_count / mention_count /
+# follow-up bookkeeping updates must not rewrite the trigram entry.
 _CONCEPT_FTS_TRIGGER_UPDATE = """
 CREATE TRIGGER IF NOT EXISTS concept_fts_update
-AFTER UPDATE ON concept_nodes
+AFTER UPDATE OF description ON concept_nodes
 BEGIN
     INSERT INTO concept_nodes_fts(concept_nodes_fts, rowid, description)
     VALUES('delete', old.id, old.description);
     INSERT INTO concept_nodes_fts(rowid, description)
     VALUES (new.id, new.description);
 END
+"""
+
+# Migration support: ensure_schema_up_to_date drops + recreates any
+# UPDATE trigger whose on-disk DDL lacks the ``UPDATE OF`` column scope
+# (CREATE TRIGGER IF NOT EXISTS never replaces an existing definition).
+FTS_UPDATE_TRIGGERS: tuple[tuple[str, str], ...] = (
+    ("recall_fts_update", _FTS_TRIGGER_UPDATE),
+    ("concept_fts_update", _CONCEPT_FTS_TRIGGER_UPDATE),
+)
+
+# v0.7 · partial index for the proactive scanner hot path. Excludes
+# deleted / superseded / user-suppressed events so the scan query is
+# O(active follow-ups) not O(all concept_nodes). Created here, after
+# metadata.create_all, so concept_nodes is guaranteed to exist — on a
+# fresh DB the migration runs before the table does.
+_CONCEPT_FOLLOW_UP_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_concept_follow_up_active
+ON concept_nodes(follow_up_at)
+WHERE follow_up_at IS NOT NULL
+AND deleted_at IS NULL
+AND superseded_by_id IS NULL
+AND proactive_suppressed_at IS NULL
 """
 
 # Backfill any concept_nodes rows that exist on disk but are missing
@@ -268,6 +296,7 @@ def create_all_tables(engine: Engine) -> None:
         conn.execute(text(_CONCEPT_FTS_TRIGGER_INSERT))
         conn.execute(text(_CONCEPT_FTS_TRIGGER_DELETE))
         conn.execute(text(_CONCEPT_FTS_TRIGGER_UPDATE))
+        conn.execute(text(_CONCEPT_FOLLOW_UP_INDEX))
         # Idempotent backfill — covers legacy DBs and fresh DBs that
         # had rows seeded before the trigger existed (e.g. tests that
         # bulk-INSERT then build their first FTS index).
