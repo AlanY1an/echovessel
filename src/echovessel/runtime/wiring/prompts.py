@@ -71,6 +71,7 @@ from echovessel.prompts import (
     parse_slow_cycle_response,
 )
 from echovessel.runtime.llm.base import LLMProvider
+from echovessel.runtime.llm.errors import LLMTransientError
 
 log = logging.getLogger(__name__)
 
@@ -151,12 +152,19 @@ def make_extract_fn(
         try:
             parsed = parse_extraction_response(raw)
         except ExtractionParseError as e:
+            # A parse failure is retriable; an empty result is a decision.
+            # Returning empty here would let consolidate commit
+            # `extracted_events=True` with zero events and close the
+            # session permanently. Raising LLMTransientError instead hands
+            # the failure to the consolidate worker's retry loop (a fresh
+            # sample usually parses); if it never parses, the worker marks
+            # the session FAILED — operator-visible, L2 messages intact.
             log.warning(
-                "extraction parse error (dropping events for session %s): %s",
+                "extraction parse error for session %s (raising for retry): %s",
                 messages[0].session_id,
                 e,
             )
-            return ExtractionResult()
+            raise LLMTransientError(f"extraction response failed to parse: {e}") from e
 
         # prompts-layer → memory-layer. We explicitly map each field
         # rather than `**asdict(re)` because `asdict` recursively dict-

@@ -476,3 +476,149 @@ async def test_worker_initial_session_ids_are_processed_first():
     processed = await worker.drain_once()
     assert processed == 1
     assert called == ["s_init"]
+
+
+# --- extraction parse failure → transient retry path -----------------------
+#
+# These two tests wire the REAL `make_extract_fn` (not a hand-rolled
+# extractor) into the worker, pinning the end-to-end contract: a
+# malformed LLM response surfaces as `LLMTransientError`, lands in the
+# worker's transient retry branch, and — because `extracted_events`
+# stays False on the failed attempt — the retry re-runs extraction
+# instead of skipping it. An unrecoverable parse drift ends FAILED
+# (operator-visible, L2 intact), never silently CLOSED with zero events.
+
+_VALID_EXTRACTION_JSON = """\
+{
+  "events": [
+    {
+      "description": "user lost father suddenly",
+      "emotional_impact": 9,
+      "emotion_tags": ["grief"],
+      "relational_tags": []
+    }
+  ],
+  "self_check_notes": "single high-impact event"
+}
+"""
+
+
+def _add_heavy_closing_session(engine, sid: str) -> None:
+    # "走了" is a strong-emotion keyword → skips trivial, forces extraction.
+    _add_closing_session(
+        engine,
+        sid,
+        [
+            "我今天心情糟透了",
+            "出了一件很难接受的事情",
+            "我爸突然走了",
+            "我还没缓过来",
+            "整个人都不对了",
+        ],
+    )
+
+
+async def test_worker_marks_failed_when_extraction_never_parses(monkeypatch):
+    from echovessel.runtime.llm import StubProvider
+    from echovessel.runtime.wiring.prompts import make_extract_fn
+
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+    _seed(engine)
+    _add_heavy_closing_session(engine, "s_parse_dead")
+
+    stub = StubProvider(fallback="definitely { not json")
+
+    def db_factory():
+        return DbSession(engine)
+
+    worker = ConsolidateWorker(
+        db_factory=db_factory,
+        backend=backend,
+        extract_fn=make_extract_fn(stub),
+        reflect_fn=_noop_reflect,
+        embed_fn=_embed,
+        max_retries=2,
+    )
+
+    import asyncio as _asyncio
+
+    async def fast(_t):
+        return None
+
+    monkeypatch.setattr(_asyncio, "sleep", fast)
+    await worker.drain_once()
+
+    with DbSession(engine) as db:
+        sess = db.get(Session, "s_parse_dead")
+        assert sess is not None
+        assert sess.status == SessionStatus.FAILED
+        # The resume flag must stay False: a parse failure produced no
+        # events, so a future re-run must re-attempt extraction.
+        assert sess.extracted_events is False
+
+        events = db.exec(
+            select(ConceptNode).where(
+                ConceptNode.source_session_id == "s_parse_dead",
+                ConceptNode.type == NodeType.EVENT,
+            )
+        ).all()
+        assert events == []
+
+
+async def test_worker_recovers_when_extraction_parse_fails_once(monkeypatch):
+    from echovessel.runtime.llm import StubProvider
+    from echovessel.runtime.wiring.prompts import make_extract_fn
+
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+    _seed(engine)
+    _add_heavy_closing_session(engine, "s_parse_flaky")
+
+    llm_calls = [0]
+
+    def responder(**kwargs):
+        llm_calls[0] += 1
+        if llm_calls[0] == 1:
+            return "definitely { not json"
+        return _VALID_EXTRACTION_JSON
+
+    stub = StubProvider(responder=responder)
+
+    def db_factory():
+        return DbSession(engine)
+
+    worker = ConsolidateWorker(
+        db_factory=db_factory,
+        backend=backend,
+        extract_fn=make_extract_fn(stub),
+        reflect_fn=_noop_reflect,
+        embed_fn=_embed,
+        max_retries=2,
+    )
+
+    import asyncio as _asyncio
+
+    async def fast(_t):
+        return None
+
+    monkeypatch.setattr(_asyncio, "sleep", fast)
+    await worker.drain_once()
+
+    assert llm_calls[0] == 2
+    with DbSession(engine) as db:
+        sess = db.get(Session, "s_parse_flaky")
+        assert sess is not None
+        assert sess.status == SessionStatus.CLOSED
+        assert sess.extracted is True
+
+        events = db.exec(
+            select(ConceptNode).where(
+                ConceptNode.source_session_id == "s_parse_flaky",
+                ConceptNode.type == NodeType.EVENT,
+            )
+        ).all()
+        assert len(events) == 1
+        assert events[0].description == "user lost father suddenly"

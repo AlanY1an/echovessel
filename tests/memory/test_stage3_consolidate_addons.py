@@ -2,10 +2,11 @@
 
 Four tests covering the failure / recovery paths:
 
-- **3.6** ``make_extract_fn`` returns an empty list when the LLM emits
-  malformed JSON, instead of letting the parser exception surface and
-  marking the entire session FAILED. Sessions with garbage extractor
-  output close cleanly with zero events.
+- **3.6** ``make_extract_fn`` raises ``LLMTransientError`` when the LLM
+  emits malformed JSON. A parse failure is retriable; an empty result is
+  a decision — degrading to ``[]`` would let the session close cleanly
+  with zero events and no flag for re-extraction. The worker's retry
+  loop re-samples; exhaustion ends FAILED with L2 intact.
 - **3.7** Bad ``relational_tags`` are filtered at the parser layer when
   the data flows through ``make_extract_fn`` end-to-end (regression
   guard around the prompts → memory adapter).
@@ -23,6 +24,7 @@ from __future__ import annotations
 import json
 from datetime import date
 
+import pytest
 from sqlalchemy import func
 from sqlmodel import Session as DbSession
 from sqlmodel import select
@@ -44,6 +46,7 @@ from echovessel.memory.consolidate import (
 )
 from echovessel.memory.models import ConceptNode
 from echovessel.runtime.llm import StubProvider
+from echovessel.runtime.llm.errors import LLMTransientError
 from echovessel.runtime.loops.consolidate_worker import ConsolidateWorker
 from echovessel.runtime.wiring.prompts import make_extract_fn
 
@@ -110,33 +113,33 @@ def _make_msg() -> RecallMessage:
 
 
 # ---------------------------------------------------------------------------
-# 3.6 · malformed LLM JSON → make_extract_fn returns []
+# 3.6 · malformed LLM JSON → make_extract_fn raises LLMTransientError
 # ---------------------------------------------------------------------------
 
 
-async def test_make_extract_fn_returns_empty_list_on_malformed_llm_output() -> None:
-    """The wrapper around ``parse_extraction_response`` must catch
-    ``ExtractionParseError`` and degrade to ``[]``, so a single bad LLM
-    response does not propagate up and mark the session FAILED.
+async def test_make_extract_fn_raises_transient_on_malformed_llm_output() -> None:
+    """The wrapper around ``parse_extraction_response`` converts
+    ``ExtractionParseError`` into ``LLMTransientError`` so the worker's
+    retry loop re-samples instead of committing an empty extraction and
+    closing the session with zero events.
     """
 
     llm = StubProvider(fallback="this is definitely not JSON")
     extract_fn = make_extract_fn(llm)
 
-    result = await extract_fn([_make_msg()])
+    with pytest.raises(LLMTransientError):
+        await extract_fn([_make_msg()])
 
-    assert result.events == []
 
-
-async def test_make_extract_fn_returns_empty_on_top_level_array() -> None:
+async def test_make_extract_fn_raises_transient_on_top_level_array() -> None:
     """Wrong top-level shape (array instead of object) is also a parse
-    failure that must degrade silently."""
+    failure, and equally retriable."""
 
     llm = StubProvider(fallback=json.dumps([{"description": "x"}]))
     extract_fn = make_extract_fn(llm)
 
-    result = await extract_fn([_make_msg()])
-    assert result.events == []
+    with pytest.raises(LLMTransientError):
+        await extract_fn([_make_msg()])
 
 
 # ---------------------------------------------------------------------------
