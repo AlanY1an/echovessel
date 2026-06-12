@@ -52,7 +52,7 @@ class _LLMLike(Protocol):
         max_tokens: int = ...,
         temperature: float = ...,
         timeout: float | None = ...,
-    ) -> str: ...
+    ) -> tuple[str, Any]: ...
 
 
 # Defensive cap on LLM output tokens. Roughly 2x the combined cap on the
@@ -195,7 +195,3 @@ __all__: tuple[str, ...] = (
     "fallback_empty_extraction",
     "format_events_thoughts_as_context",
 )
-
-
-# Satisfy mypy on ``Any`` import (re-exported for downstream typing).
-_ = Any

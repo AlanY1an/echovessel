@@ -322,7 +322,85 @@ async def test_assemble_turn_on_turn_done_exception_swallowed():
 
 
 # ---------------------------------------------------------------------------
-# 6. Latency metrics are monotonic deltas (clock-source independent)
+# 6. Live turn renders exactly once in the user prompt
+# ---------------------------------------------------------------------------
+
+
+async def test_current_turn_text_appears_exactly_once_in_user_prompt():
+    """The live turn's text is owned by `# What they just said` — the
+    `# Our recent conversation` window carries only prior turns, so the
+    same user text never renders twice in one prompt.
+    """
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+
+    with DbSession(engine) as db:
+        _seed(db)
+        stub = _TokenRecordingStub(fallback="sure")
+
+        prior = IncomingTurn.from_single_message(
+            IncomingMessage(
+                channel_id="web",
+                user_id="self",
+                content="quokka sighting at the lighthouse",
+                received_at=datetime(2026, 4, 14, 9, 0, 0),
+            ),
+            turn_id="t-prior",
+        )
+        await assemble_turn(_ctx(db, backend), prior, stub)
+
+        live = IncomingTurn.from_single_message(
+            IncomingMessage(
+                channel_id="web",
+                user_id="self",
+                content="zebra pancakes for breakfast",
+                received_at=datetime(2026, 4, 14, 9, 5, 0),
+            ),
+            turn_id="t-live",
+        )
+        result = await assemble_turn(_ctx(db, backend), live, stub)
+
+        assert result.user_prompt.count("zebra pancakes for breakfast") == 1
+        _, _, current_section = result.user_prompt.partition("# What they just said")
+        assert "zebra pancakes for breakfast" in current_section
+        # Prior exchange still shows in the recent-conversation window.
+        assert "quokka sighting at the lighthouse" in result.user_prompt
+
+
+async def test_burst_messages_appear_exactly_once_in_user_prompt():
+    """Multi-message burst: every message of the live turn renders once."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+
+    with DbSession(engine) as db:
+        _seed(db)
+        now = datetime(2026, 4, 14, 11, 0, 0)
+        msgs = [
+            IncomingMessage(
+                channel_id="web",
+                user_id="self",
+                content=f"burst-fragment-{i}",
+                received_at=now,
+            )
+            for i in range(3)
+        ]
+        turn = IncomingTurn(
+            turn_id="t-burst-once",
+            channel_id="web",
+            user_id="self",
+            messages=msgs,
+            received_at=now,
+        )
+        result = await assemble_turn(_ctx(db, backend), turn, _TokenRecordingStub(fallback="ok"))
+
+        for i in range(3):
+            assert result.user_prompt.count(f"burst-fragment-{i}") == 1
+
+
+# ---------------------------------------------------------------------------
+# 7. Latency metrics are monotonic deltas (clock-source independent)
 # ---------------------------------------------------------------------------
 
 
