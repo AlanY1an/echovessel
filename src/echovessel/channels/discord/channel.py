@@ -43,6 +43,7 @@ import asyncio
 import base64
 import contextlib
 import logging
+import re
 import shutil
 import uuid
 from collections.abc import AsyncIterator
@@ -74,6 +75,55 @@ MAX_CHARS_PER_TURN = 20_000
 # Discord native voice message flag (1 << 13). Set on the message so
 # the client renders it as a playable voice bubble instead of a file.
 _VOICE_MESSAGE_FLAG = 1 << 13
+
+# Discord rejects messages over 2000 characters with an HTTP 400 —
+# discord.py raises, it never truncates. Replies longer than this are
+# split into sequential messages on paragraph / sentence boundaries.
+DISCORD_MESSAGE_LIMIT = 2000
+
+# Boundary preferences for splitting: paragraph break first, then
+# sentence-ending punctuation (Latin + CJK) or a line break. Both
+# patterns are zero-width lookbehinds so the boundary characters stay
+# attached to the preceding piece.
+_PARAGRAPH_BOUNDARY = re.compile(r"(?<=\n\n)")
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?。！？\n])")
+
+
+def split_message(content: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
+    """Split ``content`` into chunks of at most ``limit`` characters.
+
+    Greedy packing over boundary-aligned pieces: paragraphs first,
+    oversized paragraphs broken on sentence boundaries, and anything
+    still over the limit hard-split. Chunks are trimmed of trailing
+    whitespace (the boundary newlines) before being returned.
+    """
+    if len(content) <= limit:
+        return [content]
+
+    chunks: list[str] = []
+    buf = ""
+    for piece in _boundary_pieces(content, limit):
+        if len(buf) + len(piece) <= limit:
+            buf += piece
+        else:
+            chunks.append(buf)
+            buf = piece
+    chunks.append(buf)
+    return [c for c in (chunk.rstrip() for chunk in chunks) if c]
+
+
+def _boundary_pieces(content: str, limit: int) -> list[str]:
+    pieces: list[str] = []
+    for paragraph in _PARAGRAPH_BOUNDARY.split(content):
+        if len(paragraph) <= limit:
+            pieces.append(paragraph)
+            continue
+        for sentence in _SENTENCE_BOUNDARY.split(paragraph):
+            if len(sentence) <= limit:
+                pieces.append(sentence)
+                continue
+            pieces.extend(sentence[i : i + limit] for i in range(0, len(sentence), limit))
+    return pieces
 
 
 async def _convert_to_ogg_opus(mp3_path: Path) -> Path | None:
@@ -236,6 +286,12 @@ class DiscordChannel:
 
     channel_id: ClassVar[str] = "discord"
     name: ClassVar[str] = "Discord"
+    # Proactive's delivery router probes this flag. OutgoingMessage
+    # carries no recipient, and this channel routes replies by the
+    # in-flight turn's author — there is no DM target for a
+    # persona-initiated push, so opt out and let the router fall back
+    # to its default channel.
+    supports_outgoing_push: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -304,23 +360,56 @@ class DiscordChannel:
         return self._bot is not None and self._bot.is_ready()
 
     async def start(self) -> None:
-        """Spin up the ``discord.py`` client on the running loop.
+        """Log in to Discord, then run the gateway connection in the background.
 
-        Uses ``asyncio.create_task`` with ``self._bot.start(token)`` so
-        the client runs concurrently with the rest of the runtime. If
-        the token is rejected, ``discord.py`` raises
-        ``discord.LoginFailure`` which propagates out of the background
-        task — runtime's task exception handler surfaces the error.
+        ``login`` is awaited inline so a rejected or misconfigured
+        token raises straight out of ``start()`` — the channel registry
+        logs the failure and leaves the channel out of the started set,
+        so ``/api/state`` reflects reality instead of showing
+        "connecting" forever. The long-lived websocket ``connect`` runs
+        as a background task wrapped in :meth:`_run_gateway`, which
+        logs any later gateway failure (e.g. missing privileged
+        intents) at error level.
         """
         if self._bot is not None:
             return  # already started; idempotent
 
-        self._bot = DiscordBot(
+        bot = DiscordBot(
             on_dm_received=self._handle_dm,
             allowed_user_ids=self._allowed_user_ids,
         )
-        loop = asyncio.get_running_loop()
-        self._bot_task = loop.create_task(self._bot.start(self._token))
+        try:
+            await bot.login(self._token)
+        except Exception as exc:
+            log.error(
+                "discord login failed (%s: %s); channel will not start",
+                type(exc).__name__,
+                exc,
+            )
+            with contextlib.suppress(Exception):
+                await bot.close()
+            raise
+
+        self._bot = bot
+        self._bot_task = asyncio.create_task(self._run_gateway(bot), name="discord-gateway")
+
+    async def _run_gateway(self, bot: DiscordBot) -> None:
+        """Hold the gateway websocket open; surface failures loudly.
+
+        ``connect`` only returns on close/cancel. Any exception other
+        than cancellation means the channel is dead — log it at error
+        level so the operator can see why ``is_ready()`` stays False.
+        """
+        try:
+            await bot.connect()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.error(
+                "discord gateway connection failed (%s: %s); channel is not ready",
+                type(exc).__name__,
+                exc,
+            )
 
     async def stop(self) -> None:
         """Gracefully tear down the discord client and the state machine.
@@ -432,6 +521,13 @@ class DiscordChannel:
         Mutates the event-loop-owned buffers directly and uses
         ``put_nowait`` on the queue since the channel owns it.
 
+        Only the leading run of messages sharing one ``user_id`` is
+        flushed — the IncomingTurn invariant says every message in a
+        turn belongs to the same sender, and the reply routes to that
+        sender's DM. Messages from a different user that landed in the
+        same window park in ``_next_turn`` and get their own turn after
+        ``on_turn_done`` promotes them.
+
         Also records ``_current_user_id`` so :meth:`send` knows which
         Discord DM channel to deliver the reply to.
         """
@@ -439,23 +535,29 @@ class DiscordChannel:
             self._debounce_handle = None
             return
 
+        first_user_id = self._current_turn[0].user_id
+        split = next(
+            (i for i, m in enumerate(self._current_turn) if m.user_id != first_user_id),
+            len(self._current_turn),
+        )
+        batch = self._current_turn[:split]
+        remainder = self._current_turn[split:]
+
         turn_id = _generate_turn_id()
-        stamped_msgs = [replace(m, turn_id=turn_id) for m in self._current_turn]
+        stamped_msgs = [replace(m, turn_id=turn_id) for m in batch]
         turn = IncomingTurn(
             turn_id=turn_id,
             channel_id=self.channel_id,
-            user_id=stamped_msgs[0].user_id,
+            user_id=first_user_id,
             messages=stamped_msgs,
             received_at=datetime.now(),
         )
         self._current_turn = []
+        if remainder:
+            self._next_turn = remainder + self._next_turn
         self._debounce_handle = None
         self.in_flight_turn_id = turn_id
-        # Remember who sent this turn so ``send`` can pick the right
-        # DM channel. Every message in a single IncomingTurn shares a
-        # user_id by invariant, so taking the first message's id is
-        # sufficient.
-        self._current_user_id = stamped_msgs[0].user_id
+        self._current_user_id = first_user_id
         self._out_queue.put_nowait(turn)
 
     # ---- Inbound iterator (channel → runtime) ----------------------------
@@ -483,13 +585,10 @@ class DiscordChannel:
         synthetic test path, or an edge case during startup), logs a
         warning and drops the message rather than raising.
 
-        Discord's own ``Messageable.send`` handles markdown, embeds,
-        and the 2000-character per-message limit. Messages longer
-        than that are truncated by ``discord.py`` itself and the
-        caller sees a ``HTTPException`` — we do not attempt to split
-        here because chunking is a downstream concern handled by the
-        runtime's streaming path (which already keeps token deltas
-        bounded).
+        Discord rejects messages over :data:`DISCORD_MESSAGE_LIMIT`
+        characters (HTTP 400; discord.py never truncates), so the
+        content is split on paragraph / sentence boundaries via
+        :func:`split_message` and delivered as sequential messages.
         """
         if self._current_user_id is None:
             log.warning(
@@ -557,9 +656,16 @@ class DiscordChannel:
                             f"reply-{msg.voice_result.duration_seconds:.1f}s.mp3"
                         ),
                     )
-                    await target_dm.send(content=msg.content, file=fallback_file)
+                    chunks = split_message(msg.content)
+                    await target_dm.send(
+                        content=chunks[0],
+                        file=fallback_file,
+                    )
+                    for chunk in chunks[1:]:
+                        await target_dm.send(chunk)
             else:
-                await target_dm.send(msg.content)
+                for chunk in split_message(msg.content):
+                    await target_dm.send(chunk)
         except Exception as exc:  # noqa: BLE001
             # Discord transient errors (5xx, rate limits) would come
             # through here. We do not retry at this layer — runtime's
@@ -628,6 +734,8 @@ def _generate_turn_id() -> str:
 
 __all__ = [
     "DiscordChannel",
+    "DISCORD_MESSAGE_LIMIT",
+    "split_message",
     "MAX_MESSAGES_PER_TURN",
     "MAX_CHARS_PER_TURN",
 ]

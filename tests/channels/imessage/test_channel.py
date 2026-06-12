@@ -27,6 +27,7 @@ class FakeRpcClient:
         # Mimic the real client's attribute so IMessageChannel.is_ready
         # can introspect without caring about the implementation.
         self._proc = None
+        self._closed_event = asyncio.Event()
 
     async def start(self) -> None:
         self._started = True
@@ -35,6 +36,15 @@ class FakeRpcClient:
     async def stop(self) -> None:
         self._started = False
         self._proc = None
+        self._closed_event.set()
+
+    async def wait_closed(self) -> None:
+        await self._closed_event.wait()
+
+    def simulate_exit(self) -> None:
+        """Pretend the imsg subprocess died out from under us."""
+        self._proc = None
+        self._closed_event.set()
 
     def subscribe(self, method: str, handler) -> None:
         self._subscribers.setdefault(method, []).append(handler)
@@ -586,18 +596,21 @@ async def test_send_without_current_user_is_dropped():
 
 
 # ---------------------------------------------------------------------------
-# Rate limiter · echo storm triggers suppression
+# Rate limiter · echo storms and bot↔bot traffic both trip suppression
 # ---------------------------------------------------------------------------
 
 
 async def test_repeated_echo_triggers_rate_limit():
     """Seed enough echo hits that the limiter suppresses the conversation."""
+    from echovessel.channels.imessage.rate_limiter import LoopRateLimiter
+
     ch, client = await _make_channel()
     ch._current_user_id = "+14155551234"
+    ch._rate_limiter = LoopRateLimiter(window_s=60.0, threshold=6)
     try:
-        await ch.send(OutgoingMessage(content="hi"))
+        await ch.send(OutgoingMessage(content="hi"))  # 1 outbound event
         # Inject 5 identical echoes — each trips the echo cache and
-        # records a drop. Threshold is 5 by default.
+        # records an event, reaching the threshold of 6.
         for i in range(5):
             await client.inject(
                 "message",
@@ -608,7 +621,7 @@ async def test_repeated_echo_triggers_rate_limit():
                     "guid": f"dup-{i}",
                 },
             )
-        # The 6th message — new text, but same peer — should be
+        # The next message — new text, but same peer — should be
         # suppressed by the rate limiter.
         await client.inject(
             "message",
@@ -623,6 +636,188 @@ async def test_repeated_echo_triggers_rate_limit():
             await _collect_turn(ch, timeout=0.3)
     finally:
         await ch.stop()
+
+
+async def test_sustained_fresh_traffic_trips_rate_limit():
+    """The persona↔persona loop scenario: a peer bot's replies are fresh
+    text (never echo-cache hits), so suppression must come from raw
+    traffic volume — every accepted inbound message counts toward the
+    window, and the conversation is cut off once it exceeds the
+    threshold."""
+    from echovessel.channels.imessage.rate_limiter import LoopRateLimiter
+
+    # Long debounce so nothing flushes mid-test; the buffer shows
+    # exactly which messages were accepted.
+    ch, client = await _make_channel(debounce_ms=10_000)
+    ch._rate_limiter = LoopRateLimiter(window_s=60.0, threshold=3)
+    try:
+        for i in range(6):
+            await client.inject(
+                "message",
+                {
+                    "destination_caller_id": "anya-persona@icloud.com",
+                    "sender": "+14155551234",
+                    "text": f"fresh bot reply {i}",
+                    "guid": f"loop-{i}",
+                },
+            )
+        # Messages 0-2 accepted (events 1-3); from message 3 on the
+        # conversation is suppressed.
+        assert [m.content for m in ch._current_turn] == [
+            "fresh bot reply 0",
+            "fresh bot reply 1",
+            "fresh bot reply 2",
+        ]
+    finally:
+        await ch.stop()
+
+
+async def test_outbound_sends_count_toward_rate_limit():
+    from echovessel.channels.imessage.rate_limiter import LoopRateLimiter
+
+    ch, client = await _make_channel(debounce_ms=10_000)
+    ch._current_user_id = "+14155551234"
+    ch._rate_limiter = LoopRateLimiter(window_s=60.0, threshold=3)
+    try:
+        await ch.send(OutgoingMessage(content="ping 1"))
+        await ch.send(OutgoingMessage(content="ping 2"))
+        await ch.send(OutgoingMessage(content="ping 3"))
+        # Three outbound events fill the window; the peer's next
+        # message is suppressed before reaching the state machine.
+        await client.inject(
+            "message",
+            {
+                "destination_caller_id": "anya-persona@icloud.com",
+                "sender": "+14155551234",
+                "text": "pong",
+                "guid": "pong-1",
+            },
+        )
+        assert ch._current_turn == []
+    finally:
+        await ch.stop()
+
+
+# ---------------------------------------------------------------------------
+# Subprocess death detection + restart
+# ---------------------------------------------------------------------------
+
+
+async def _wait_for(predicate, *, timeout: float = 2.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition not met within timeout")
+        await asyncio.sleep(0.01)
+
+
+async def test_subprocess_death_flips_not_ready():
+    """An injected client cannot be rebuilt, but a dead subprocess must
+    still show up as not-ready instead of pretending to be connected."""
+    ch, client = await _make_channel()
+    try:
+        assert ch.is_ready() is True
+        client.simulate_exit()
+        await _wait_for(lambda: not ch.is_ready())
+    finally:
+        await ch.stop()
+
+
+async def test_owned_client_restarts_after_subprocess_death(monkeypatch):
+    """When the channel built the client itself, a dead subprocess is
+    respawned with backoff and watch.subscribe is re-issued."""
+    from echovessel.channels.imessage import channel as channel_module
+
+    monkeypatch.setattr(channel_module, "RESTART_BACKOFF_INITIAL_S", 0.01)
+
+    first = FakeRpcClient()
+    second = FakeRpcClient()
+    replacements = [first, second]
+
+    ch = IMessageChannel(
+        persona_apple_id="anya-persona@icloud.com",
+        cli_path="fake-imsg",
+        debounce_ms=50,
+    )
+    assert ch._owns_client is True
+    ch._build_client = lambda: replacements.pop(0)  # type: ignore[method-assign]
+
+    await ch.start()
+    try:
+        assert ch._client is first
+        assert ch.is_ready() is True
+
+        first.simulate_exit()
+        await _wait_for(lambda: ch._client is second and ch.is_ready())
+
+        # The replacement client went through the full connect path.
+        assert "message" in second._subscribers
+        assert ("watch.subscribe", {}) in second.calls
+    finally:
+        await ch.stop()
+
+
+async def test_send_dropped_while_subprocess_dead():
+    ch, client = await _make_channel()
+    ch._current_user_id = "+14155551234"
+    try:
+        client.simulate_exit()
+        await _wait_for(lambda: not ch.is_ready())
+        await ch.send(OutgoingMessage(content="into the void"))
+        assert not any(m == "send" for (m, _) in client.calls)
+    finally:
+        await ch.stop()
+
+
+# ---------------------------------------------------------------------------
+# Multi-sender debounce · one turn never mixes peers
+# ---------------------------------------------------------------------------
+
+
+async def test_interleaved_senders_split_into_separate_turns():
+    """Two peers landing inside the same debounce window must not merge
+    into one IncomingTurn — each gets a turn under their own user_id and
+    the reply target follows the flushed turn's sender."""
+    ch, client = await _make_channel(debounce_ms=50)
+    try:
+        for sender, text in (
+            ("+14155551234", "from alice"),
+            ("+19998887777", "from bob"),
+        ):
+            await client.inject(
+                "message",
+                {
+                    "destination_caller_id": "anya-persona@icloud.com",
+                    "sender": sender,
+                    "text": text,
+                    "guid": f"g-{sender}",
+                },
+            )
+
+        turn1 = await _collect_turn(ch, timeout=2.0)
+        assert turn1.user_id == "+14155551234"
+        assert [m.content for m in turn1.messages] == ["from alice"]
+        assert all(m.user_id == "+14155551234" for m in turn1.messages)
+        assert ch._current_user_id == "+14155551234"
+
+        await ch.on_turn_done(turn1.turn_id)
+        turn2 = await _collect_turn(ch, timeout=2.0)
+        assert turn2.user_id == "+19998887777"
+        assert [m.content for m in turn2.messages] == ["from bob"]
+    finally:
+        await ch.stop()
+
+
+# ---------------------------------------------------------------------------
+# Proactive push capability
+# ---------------------------------------------------------------------------
+
+
+def test_imessage_opts_out_of_proactive_push():
+    """Proactive's delivery router probes this flag; the channel routes
+    sends by the in-flight turn's peer, so it cannot deliver a push and
+    must not advertise the capability."""
+    assert IMessageChannel.supports_outgoing_push is False
 
 
 # ---------------------------------------------------------------------------
