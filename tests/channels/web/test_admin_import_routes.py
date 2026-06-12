@@ -25,6 +25,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from echovessel.channels.web.app import build_web_app
@@ -167,6 +168,100 @@ def test_upload_file_returns_upload_id_and_hash() -> None:
     import hashlib
 
     assert body["file_hash"] == hashlib.sha256(payload).hexdigest()
+
+
+def test_upload_over_limit_returns_413_without_reading_body(monkeypatch) -> None:
+    """Oversize uploads 413 via the Content-Length header before the
+    body is read — a multi-GB body must never materialize in memory
+    just to be rejected.
+    """
+    from starlette.datastructures import UploadFile as StarletteUploadFile
+
+    from echovessel.channels.web.routes import admin_import as module
+
+    # Dial the ceiling down so the test doesn't need a 50 MiB body.
+    monkeypatch.setattr(module, "MAX_UPLOAD_BYTES", 64)
+
+    read_calls: list[int] = []
+    original_read = StarletteUploadFile.read
+
+    async def tracking_read(self, *args, **kwargs):
+        read_calls.append(1)
+        return await original_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(StarletteUploadFile, "read", tracking_read)
+
+    _rt, _facade, client = _build_rig()
+    with client:
+        # Payload is 1000 bytes against a 64-byte ceiling, so the
+        # multipart Content-Length is far over the cap and the header
+        # check fires before any body read.
+        resp = client.post(
+            "/api/admin/import/upload",
+            files={"file": ("big.md", b"x" * 1000, "text/markdown")},
+        )
+
+    assert resp.status_code == 413, resp.text
+    assert "ceiling" in resp.json()["detail"]
+    assert read_calls == [], (
+        "UploadFile.read must NOT be called when Content-Length exceeds "
+        "the ceiling — the header check has to short-circuit the handler"
+    )
+
+
+async def test_upload_chunked_read_aborts_once_total_exceeds_ceiling(
+    monkeypatch,
+) -> None:
+    """Body-side guard: when Content-Length is absent or understated,
+    the chunked read stops as soon as the running total crosses the
+    ceiling instead of draining (and buffering) the rest of the stream.
+    """
+    from echovessel.channels.web.routes import admin_import as module
+
+    monkeypatch.setattr(module, "MAX_UPLOAD_BYTES", 1024)
+    monkeypatch.setattr(module, "_UPLOAD_CHUNK_BYTES", 256)
+
+    class _Stream:
+        """UploadFile stand-in serving 100 chunks of 256 bytes."""
+
+        def __init__(self) -> None:
+            self.reads = 0
+
+        async def read(self, size: int = -1) -> bytes:
+            if self.reads >= 100:
+                return b""
+            self.reads += 1
+            return b"x" * 256
+
+    stream = _Stream()
+    with pytest.raises(HTTPException) as exc_info:
+        await module._read_capped(stream)
+
+    assert exc_info.value.status_code == 413
+    assert "ceiling" in exc_info.value.detail
+    # Crossing 1024 bytes happens on the 5th 256-byte chunk; the read
+    # loop must abort there, not consume all 100 chunks.
+    assert stream.reads == 5
+
+
+async def test_upload_chunked_read_accepts_body_at_ceiling(monkeypatch) -> None:
+    from echovessel.channels.web.routes import admin_import as module
+
+    monkeypatch.setattr(module, "MAX_UPLOAD_BYTES", 1024)
+    monkeypatch.setattr(module, "_UPLOAD_CHUNK_BYTES", 256)
+
+    class _Stream:
+        def __init__(self) -> None:
+            self.remaining = 4  # 4 × 256 == exactly the ceiling
+
+        async def read(self, size: int = -1) -> bytes:
+            if self.remaining == 0:
+                return b""
+            self.remaining -= 1
+            return b"x" * 256
+
+    data = await module._read_capped(_Stream())
+    assert data == b"x" * 1024
 
 
 def test_upload_missing_file_returns_400() -> None:

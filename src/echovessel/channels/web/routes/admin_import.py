@@ -37,7 +37,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
@@ -49,6 +49,33 @@ log = logging.getLogger(__name__)
 # 50 MiB upload ceiling — spec §9 caps the pre-flight path at this size
 # and we'd rather reject early than buffer the whole file then error.
 MAX_UPLOAD_BYTES: int = 50 * 1024 * 1024
+
+# Streamed-read granularity for /upload. Small enough that an oversized
+# body is rejected within one chunk of crossing the ceiling.
+_UPLOAD_CHUNK_BYTES: int = 1024 * 1024
+
+
+def _over_limit() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        detail=f"upload exceeds {MAX_UPLOAD_BYTES} byte ceiling",
+    )
+
+
+async def _read_capped(file: UploadFile) -> bytes:
+    """Read an upload in bounded chunks, aborting as soon as the running
+    total crosses :data:`MAX_UPLOAD_BYTES` — an oversized body must never
+    fully materialize in memory just to be rejected.
+    """
+
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
+        total += len(chunk)
+        if total > MAX_UPLOAD_BYTES:
+            raise _over_limit()
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +262,7 @@ def build_admin_import_router(
         status_code=status.HTTP_200_OK,
     )
     async def upload(
+        request: Request,
         file: Annotated[UploadFile | None, File()] = None,
         source_label: Annotated[str | None, Form()] = None,
     ) -> dict[str, Any]:
@@ -245,6 +273,18 @@ def build_admin_import_router(
         it sends ``application/json`` we fall through and parse via
         :class:`UploadTextBody`.
         """
+
+        # Fast reject from the declared Content-Length before touching
+        # the body. The chunked read below stays the authoritative
+        # guard — clients can omit or understate the header.
+        declared_length = request.headers.get("content-length")
+        if declared_length is not None:
+            try:
+                if int(declared_length) > MAX_UPLOAD_BYTES:
+                    raise _over_limit()
+            except ValueError:
+                # Malformed header — let the bounded read catch it.
+                pass
 
         if file is None:
             # No file — the client needs the JSON-only path so the
@@ -258,7 +298,7 @@ def build_admin_import_router(
                 ),
             )
 
-        data = await file.read()
+        data = await _read_capped(file)
         raw_name = file.filename or ""
         suffix = Path(raw_name).suffix  # includes leading "." or ""
         meta = store.write(
