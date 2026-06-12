@@ -26,6 +26,7 @@ owns text production.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -135,9 +136,9 @@ class TurnContext:
 
     `db` is the per-turn SQLModel session. `backend` is the memory storage
     backend (sqlite-vec wrapper). `embed_fn` is sync because
-    sentence-transformers is sync; we wrap it in asyncio.to_thread inside
-    assemble_turn if future code needs non-blocking embedding, but MVP calls
-    it directly on the loop.
+    sentence-transformers is sync; the expectation check runs it via
+    asyncio.to_thread, while the retrieve path still calls it directly on
+    the loop (MVP trade-off).
     """
 
     persona_id: str
@@ -587,16 +588,22 @@ async def assemble_turn(
             )
 
         # ---- Step 4: L2 recent window ------------------------------
+        # Stage 2 already committed this turn's user messages, so the
+        # newest L2 rows ARE the live burst. The live turn is owned by
+        # the `# What they just said` section; `# Our recent
+        # conversation` carries prior turns only. Over-fetch by the
+        # burst size, drop the live turn's rows, trim to the window.
         recent: list[RecallMessage] = []
         try:
             recent_desc = list_recall_messages(
                 ctx.db,
                 persona_id=ctx.persona_id,
                 user_id=resolved_user_id,
-                limit=ctx.recent_window_size,
+                limit=ctx.recent_window_size + len(turn.messages),
                 before=None,
             )
-            recent = list(reversed(recent_desc))  # chronological order
+            prior_desc = [m for m in recent_desc if m.turn_id != turn.turn_id]
+            recent = list(reversed(prior_desc[: ctx.recent_window_size]))  # chronological
         except Exception as e:  # noqa: BLE001
             log.warning("list_recall_messages failed; continuing with empty L2: %s", e)
 
@@ -640,10 +647,15 @@ async def assemble_turn(
         except Exception as e:  # noqa: BLE001
             log.warning("load recent session summaries failed; continuing: %s", e)
 
-        # Spec 6 · Pending expectations for the user prompt + a fast-loop
-        # embedding check against the current user message for the system
-        # prompt's "# Expectation match" hint. Both best-effort: failure
-        # in either path leaves the prompt intact without the section.
+        # Spec 6 · Pending expectations, loaded once and reused twice:
+        # the "# You've been expecting" user-prompt section and the
+        # fast-loop embedding check against the current user message for
+        # the system prompt's "# Expectation match" hint. The check runs
+        # in a worker thread (sentence-transformers is sync) with a
+        # process-wide embedding cache keyed by node id — expectation
+        # descriptions are immutable, so only the user message needs a
+        # fresh embedding per turn. Both best-effort: failure in either
+        # path leaves the prompt intact without the section.
         pending_expectations: list[ConceptNode] = []
         try:
             pending_expectations = _load_pending_expectations(
@@ -657,13 +669,12 @@ async def assemble_turn(
 
         expectation_matches: list[tuple[ConceptNode, str]] = []
         try:
-            expectation_matches = check_pending_expectations(
-                ctx.db,
-                persona_id=ctx.persona_id,
-                user_id=resolved_user_id,
+            expectation_matches = await asyncio.to_thread(
+                check_pending_expectations,
+                pending_expectations,
                 user_message_text=last_message.content,
                 embed_fn=ctx.embed_fn,
-                now=user_now,
+                embedding_cache=_EXPECTATION_EMBED_CACHE,
             )
         except Exception as e:  # noqa: BLE001
             log.warning("check pending expectations failed; continuing: %s", e)
@@ -941,31 +952,50 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (math.sqrt(norm_a) * math.sqrt(norm_b))
 
 
+# Process-wide expectation-embedding cache used by assemble_turn.
+# Expectation descriptions are immutable once created (see
+# bulk_create_expectations), so their embeddings are stable for the
+# node's lifetime. Keyed by ConceptNode id; pruned to the live pending
+# set on every check so fulfilled / expired expectations don't pin
+# vectors forever.
+_EXPECTATION_EMBED_CACHE: dict[int, list[float]] = {}
+
+
 def check_pending_expectations(
-    db: DbSession,
+    pending: list[ConceptNode],
     *,
-    persona_id: str,
-    user_id: str,
     user_message_text: str,
     embed_fn: Callable[[str], list[float]],
-    now: datetime,
+    embedding_cache: dict[int, list[float]] | None = None,
     threshold: float = EXPECTATION_MATCH_COSINE_THRESHOLD,
 ) -> list[tuple[ConceptNode, str]]:
     """Find pending expectations likely fulfilled by ``user_message_text``.
 
     Fast-loop embedding-only check (plan §7.6 + §8 invariants). Does
-    NOT call an LLM. Returns a list of (expectation_node, status_str)
-    pairs where ``status_str`` is currently always ``'fulfilled'`` —
-    the "violated" distinction is deferred to the next slow cycle
-    which has more context. Empty result when no pending expectation
-    clears the cosine threshold, or when there are no pending ones
-    at all.
+    NOT call an LLM and does not touch the database — the caller
+    supplies the already-loaded ``pending`` list (assemble_turn loads
+    it once for the ``# You've been expecting`` section and reuses it
+    here). Sync by design so assemble_turn can push the embedding work
+    off the event loop via ``asyncio.to_thread``.
+
+    ``embedding_cache`` maps expectation node id → description
+    embedding. Descriptions are immutable after creation, so a cache
+    hit skips the embed entirely; entries whose ids are no longer in
+    ``pending`` are evicted, keeping the cache bounded by the live
+    pending set.
+
+    Returns a list of (expectation_node, status_str) pairs where
+    ``status_str`` is currently always ``'fulfilled'`` — the
+    "violated" distinction is deferred to the next slow cycle which
+    has more context. Empty result when no pending expectation clears
+    the cosine threshold, or when there are no pending ones at all.
     """
+    if embedding_cache is not None:
+        live_ids = {exp.id for exp in pending}
+        for stale_id in [k for k in embedding_cache if k not in live_ids]:
+            del embedding_cache[stale_id]
     if not user_message_text or not user_message_text.strip():
         return []
-    pending = _load_pending_expectations(
-        db, persona_id=persona_id, user_id=user_id, now=now
-    )
     if not pending:
         return []
     try:
@@ -976,15 +1006,21 @@ def check_pending_expectations(
 
     matched: list[tuple[ConceptNode, str]] = []
     for exp in pending:
-        try:
-            target_emb = embed_fn(exp.description or "")
-        except Exception as e:  # noqa: BLE001
-            log.warning(
-                "check_pending_expectations target embed failed (exp id=%s): %s",
-                exp.id,
-                e,
-            )
-            continue
+        target_emb: list[float] | None = None
+        if embedding_cache is not None and exp.id is not None:
+            target_emb = embedding_cache.get(exp.id)
+        if target_emb is None:
+            try:
+                target_emb = embed_fn(exp.description or "")
+            except Exception as e:  # noqa: BLE001
+                log.warning(
+                    "check_pending_expectations target embed failed (exp id=%s): %s",
+                    exp.id,
+                    e,
+                )
+                continue
+            if embedding_cache is not None and exp.id is not None:
+                embedding_cache[exp.id] = target_emb
         if _cosine(msg_emb, target_emb) >= threshold:
             matched.append((exp, "fulfilled"))
     return matched
