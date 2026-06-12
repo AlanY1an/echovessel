@@ -26,8 +26,8 @@ from sqlalchemy import Engine, event, text
 from sqlalchemy import create_engine as _sa_create_engine
 from sqlmodel import SQLModel
 
-# Embedding dimension. Matches intfloat/multilingual-e5-small.
-# See docs/memory/04-schema-v0.2.md Q-schema-1.
+# Embedding dimension. Matches the default embedder,
+# intfloat/multilingual-e5-small (config [memory].embedder).
 VECTOR_DIM = 384
 
 MIN_SQLITE_VERSION = (3, 34, 0)

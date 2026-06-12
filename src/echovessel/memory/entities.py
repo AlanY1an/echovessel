@@ -95,6 +95,17 @@ ResolutionPath = str
 # ---------------------------------------------------------------------------
 
 
+def entity_embed_input(canonical_name: str, description: str | None) -> str:
+    """Text embedded for an entity's ``entities_vec`` row.
+
+    Shared by ``resolve_entity`` and ``embedding_sync.ensure_embedding_model``
+    so a re-embed reproduces exactly the input the original vector came from.
+    """
+    if description:
+        return f"{canonical_name}. {description}"
+    return canonical_name
+
+
 def resolve_entity(
     db: DbSession,
     backend: StorageBackend,
@@ -138,10 +149,7 @@ def resolve_entity(
     # ------------------------------------------------------------------
     # Level 2: canonical-embedding cosine search
     # ------------------------------------------------------------------
-    embed_input = canonical_name
-    if description:
-        embed_input = f"{canonical_name}. {description}"
-    new_embedding = embed_fn(embed_input)
+    new_embedding = embed_fn(entity_embed_input(canonical_name, description))
 
     candidates = backend.vec_search_entities(
         query_embedding=new_embedding,
