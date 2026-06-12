@@ -145,6 +145,33 @@ async def test_hard_message_limit_flushes_immediately():
     assert len(turn.messages) == MAX_MESSAGES_PER_TURN
 
 
+async def test_messages_from_different_users_never_share_a_turn():
+    """The IncomingTurn invariant: every message in a turn belongs to
+    one sender. A second user landing inside the first user's debounce
+    window gets their own turn instead of being merged (and having the
+    reply routed to the first sender)."""
+    ch = DiscordChannel(token="xxx.fake.token", debounce_ms=DEBOUNCE_MS)
+    await ch.push_user_message(_msg("a-1", user_id="1001"))
+    await ch.push_user_message(_msg("from bob", user_id="2002"))
+    await ch.push_user_message(_msg("a-2", user_id="1001"))
+
+    turn1 = await _next_turn(ch)
+    assert turn1.user_id == "1001"
+    assert [m.content for m in turn1.messages] == ["a-1"]
+    assert all(m.user_id == "1001" for m in turn1.messages)
+    assert ch._current_user_id == "1001"
+
+    await ch.on_turn_done(turn1.turn_id)
+    turn2 = await _next_turn(ch)
+    assert turn2.user_id == "2002"
+    assert [m.content for m in turn2.messages] == ["from bob"]
+
+    await ch.on_turn_done(turn2.turn_id)
+    turn3 = await _next_turn(ch)
+    assert turn3.user_id == "1001"
+    assert [m.content for m in turn3.messages] == ["a-2"]
+
+
 async def test_stop_terminates_incoming_iterator():
     ch = DiscordChannel(token="xxx.fake.token", debounce_ms=DEBOUNCE_MS)
     await ch.push_user_message(_msg("before stop"))

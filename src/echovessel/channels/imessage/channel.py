@@ -25,7 +25,9 @@ Deferred:
 
 - Group chats (dropped at pipeline step 4)
 - Attachments / reactions / tapbacks
-- Proactive pushes initiated by persona (OutgoingKind="proactive")
+- Proactive pushes initiated by persona (OutgoingKind="proactive") —
+  the channel sets ``supports_outgoing_push = False`` so proactive's
+  delivery router never selects it
 - SMS-vs-iMessage service auto-detect beyond what imsg chooses
 """
 
@@ -61,6 +63,10 @@ MAX_CHARS_PER_TURN = 10_000
 DropReason = str  # "wrong_destination" | "is_from_me" | "group"
 # | "unauthorized" | "echo" | "rate_limited" | "empty"
 
+# Supervisor backoff for respawning a dead imsg subprocess.
+RESTART_BACKOFF_INITIAL_S = 1.0
+RESTART_BACKOFF_MAX_S = 60.0
+
 
 class IMessageChannel:
     """Channel Protocol implementation for iMessage via ``imsg``.
@@ -89,6 +95,12 @@ class IMessageChannel:
 
     channel_id: ClassVar[str] = "imessage"
     name: ClassVar[str] = "iMessage"
+    # Proactive's delivery router probes this flag. OutgoingMessage
+    # carries no recipient, and this channel routes replies by the
+    # in-flight turn's peer handle — there is no peer to target for a
+    # persona-initiated push, so opt out and let the router fall back
+    # to its default channel.
+    supports_outgoing_push: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -179,17 +191,25 @@ class IMessageChannel:
         self._echo = EchoCache()
         self._rate_limiter = LoopRateLimiter()
 
+        # Lifecycle truth. ``_ready`` flips True once watch.subscribe
+        # succeeds and False the moment the subprocess dies; the
+        # supervisor task owns the death detection.
+        self._ready = False
+        self._stopping = False
+        self._supervisor_task: asyncio.Task[None] | None = None
+
     # ---- Lifecycle -------------------------------------------------------
 
     def is_ready(self) -> bool:
-        """Return True once the RPC client is started.
+        """Return True while the imsg subprocess is alive and subscribed.
 
         imsg itself has no explicit "ready" signal — a successful
-        ``watch.subscribe`` response is the closest analogue, and
-        ``start()`` waits for that to resolve, so by the time ``start()``
-        returns the channel is usable.
+        ``watch.subscribe`` response is the closest analogue. ``_ready``
+        is set after that resolves and cleared by the supervisor task
+        when the subprocess exits, so a dead imsg shows up as
+        not-ready instead of silently pretending to be connected.
         """
-        return self._client is not None and self._client._proc is not None
+        return self._ready and self._client is not None
 
     async def start(self) -> None:
         """Spawn imsg, subscribe to message notifications.
@@ -200,32 +220,15 @@ class IMessageChannel:
         if self._client is not None and self._client._proc is not None:
             return
 
+        self._stopping = False
         if self._client is None:
-            # imsg's `rpc` subcommand accepts `--db <path>` to read from
-            # a non-default chat.db. The flag lives after the subcommand
-            # in the argv, matching how openclaw invokes it.
-            extra_args: tuple[str, ...] = ("rpc",)
-            if self._db_path:
-                extra_args = ("rpc", "--db", self._db_path)
-            self._client = ImsgRpcClient(cli_path=self._cli_path, extra_args=extra_args)
+            self._client = self._build_client()
 
-        await self._client.start()
-        self._client.subscribe("message", self._handle_notification)
-        # imsg also emits `error` notifications when the watch pipeline
-        # itself has trouble (FSEvents hiccup, transient db lock, …).
-        # Log them at warning level — they do not correspond to a user
-        # message but are useful for triage.
-        self._client.subscribe("error", self._handle_watch_error)
-
-        # Ask imsg to start pushing new-message notifications.
-        try:
-            await self._client.request("watch.subscribe", {})
-        except ImsgRpcError:
-            # Surface the failure so runtime's startup logs show it
-            # with the diagnostic string the client assembled; the
-            # channel is unusable at this point.
-            await self._client.stop()
-            raise
+        await self._connect_client(self._client)
+        self._ready = True
+        self._supervisor_task = asyncio.create_task(
+            self._supervise_client(), name="imessage-supervisor"
+        )
 
         log.info(
             "imessage: channel started · persona=%s allowlist=%d",
@@ -233,12 +236,94 @@ class IMessageChannel:
             len(self._allowed_handles),
         )
 
+    def _build_client(self) -> ImsgRpcClient:
+        # imsg's `rpc` subcommand accepts `--db <path>` to read from
+        # a non-default chat.db. The flag lives after the subcommand
+        # in the argv, matching how openclaw invokes it.
+        extra_args: tuple[str, ...] = ("rpc",)
+        if self._db_path:
+            extra_args = ("rpc", "--db", self._db_path)
+        return ImsgRpcClient(cli_path=self._cli_path, extra_args=extra_args)
+
+    async def _connect_client(self, client: ImsgRpcClient) -> None:
+        """Start one client, wire notification handlers, begin watching."""
+        await client.start()
+        client.subscribe("message", self._handle_notification)
+        # imsg also emits `error` notifications when the watch pipeline
+        # itself has trouble (FSEvents hiccup, transient db lock, …).
+        # Log them at warning level — they do not correspond to a user
+        # message but are useful for triage.
+        client.subscribe("error", self._handle_watch_error)
+
+        # Ask imsg to start pushing new-message notifications.
+        try:
+            await client.request("watch.subscribe", {})
+        except ImsgRpcError:
+            # Surface the failure so runtime's startup logs show it
+            # with the diagnostic string the client assembled; the
+            # channel is unusable at this point.
+            await client.stop()
+            raise
+
+    async def _supervise_client(self) -> None:
+        """Detect subprocess death; respawn with backoff when we own the client.
+
+        ``ImsgRpcClient`` instances are single-use, so recovery means
+        building a fresh client and re-issuing ``watch.subscribe``. A
+        channel that was handed an external client cannot rebuild it —
+        it only flips ``_ready`` off so status reporting tells the truth.
+        """
+        backoff = RESTART_BACKOFF_INITIAL_S
+        while not self._stopping:
+            client = self._client
+            if client is None:
+                return
+            await client.wait_closed()
+            if self._stopping:
+                return
+
+            self._ready = False
+            log.error("imessage: imsg subprocess exited unexpectedly; channel not ready")
+            if not self._owns_client:
+                return
+
+            while not self._stopping:
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, RESTART_BACKOFF_MAX_S)
+                if self._stopping:
+                    return
+                new_client = self._build_client()
+                try:
+                    await self._connect_client(new_client)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "imessage: imsg restart failed (%s: %s); retrying in %.0fs",
+                        type(exc).__name__,
+                        exc,
+                        backoff,
+                    )
+                    continue
+                self._client = new_client
+                self._ready = True
+                backoff = RESTART_BACKOFF_INITIAL_S
+                log.info("imessage: imsg subprocess restarted; channel ready")
+                break
+
     async def stop(self) -> None:
         """Tear down the subprocess and the state machine.
 
         Idempotent. Always drops a ``None`` sentinel onto the queue so
         any live ``incoming()`` iterator terminates cleanly.
         """
+        self._stopping = True
+        self._ready = False
+
+        if self._supervisor_task is not None:
+            self._supervisor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._supervisor_task
+            self._supervisor_task = None
+
         if self._debounce_handle is not None:
             self._debounce_handle.cancel()
             self._debounce_handle = None
@@ -353,16 +438,19 @@ class IMessageChannel:
         # Step 6 · echo cache. Our own send records these so the
         # watch-subscribe feedback loop doesn't spam the LLM.
         if self._echo.contains(text=text, message_id=message_id):
-            self._rate_limiter.record_drop(handle)
+            self._rate_limiter.record_event(handle)
             self._drop("echo", params, extra={"handle": handle})
             return None
 
-        # Step 7 · per-conversation loop rate limit. Takes effect
-        # *after* echo counts toward the limit, so a genuine echo
-        # storm (two personas talking) trips suppression quickly.
+        # Step 7 · per-conversation loop rate limit. Every accepted
+        # inbound message, outbound send, and echo hit counts toward
+        # the window, so a sustained bot↔bot exchange — whose replies
+        # are fresh text, never echoes — still trips suppression once
+        # the traffic volume exceeds a plausible human pace.
         if self._rate_limiter.is_suppressed(handle):
             self._drop("rate_limited", params, extra={"handle": handle})
             return None
+        self._rate_limiter.record_event(handle)
 
         # Step 8 · construct the envelope · user_id is the peer
         # handle (matches Discord's convention: user_id = external
@@ -417,24 +505,42 @@ class IMessageChannel:
         )
 
     def _flush_current_turn(self) -> None:
-        """Emit ``_current_turn`` as an :class:`IncomingTurn`."""
+        """Emit ``_current_turn`` as an :class:`IncomingTurn`.
+
+        Only the leading run of messages sharing one ``user_id`` is
+        flushed — the IncomingTurn invariant says every message in a
+        turn belongs to the same sender, and the reply routes to that
+        sender. Messages from a different peer that landed in the same
+        window park in ``_next_turn`` and get their own turn after
+        ``on_turn_done`` promotes them.
+        """
         if not self._current_turn:
             self._debounce_handle = None
             return
 
+        first_user_id = self._current_turn[0].user_id
+        split = next(
+            (i for i, m in enumerate(self._current_turn) if m.user_id != first_user_id),
+            len(self._current_turn),
+        )
+        batch = self._current_turn[:split]
+        remainder = self._current_turn[split:]
+
         turn_id = _generate_turn_id()
-        stamped_msgs = [replace(m, turn_id=turn_id) for m in self._current_turn]
+        stamped_msgs = [replace(m, turn_id=turn_id) for m in batch]
         turn = IncomingTurn(
             turn_id=turn_id,
             channel_id=self.channel_id,
-            user_id=stamped_msgs[0].user_id,
+            user_id=first_user_id,
             messages=stamped_msgs,
             received_at=datetime.now(),
         )
         self._current_turn = []
+        if remainder:
+            self._next_turn = remainder + self._next_turn
         self._debounce_handle = None
         self.in_flight_turn_id = turn_id
-        self._current_user_id = stamped_msgs[0].user_id
+        self._current_user_id = first_user_id
         self._out_queue.put_nowait(turn)
 
     # ---- Inbound iterator -----------------------------------------------
@@ -521,6 +627,7 @@ class IMessageChannel:
                     sent_id = str(val)
                     break
         self._echo.add(text=msg.content, message_id=sent_id)
+        self._rate_limiter.record_event(self._current_user_id)
 
     # ---- Runtime callback ------------------------------------------------
 

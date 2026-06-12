@@ -103,6 +103,34 @@ async def test_send_routes_to_distinct_users_without_crosswiring():
     assert dm_alice.send.await_count == 1
 
 
+async def test_interleaved_users_get_replies_on_their_own_dms():
+    """Bob DMing inside Alice's debounce window must not leak Alice's
+    reply to Bob or Bob's message into Alice's turn."""
+    ch = DiscordChannel(token="xxx.fake.token", debounce_ms=DEBOUNCE_MS)
+    dm_alice = _make_dm_channel()
+    dm_bob = _make_dm_channel()
+
+    # Both messages land before the debounce window elapses.
+    await ch._handle_dm(_msg("from alice", user_id="1001"), dm_alice)
+    await ch._handle_dm(_msg("from bob", user_id="2002"), dm_bob)
+
+    turn1 = await _next_turn(ch)
+    assert turn1.user_id == "1001"
+    assert [m.content for m in turn1.messages] == ["from alice"]
+
+    await ch.send(OutgoingMessage(content="reply to alice"))
+    dm_alice.send.assert_awaited_once_with("reply to alice")
+    dm_bob.send.assert_not_called()
+
+    await ch.on_turn_done(turn1.turn_id)
+    turn2 = await _next_turn(ch)
+    assert turn2.user_id == "2002"
+
+    await ch.send(OutgoingMessage(content="reply to bob"))
+    dm_bob.send.assert_awaited_once_with("reply to bob")
+    assert dm_alice.send.await_count == 1
+
+
 async def test_send_with_no_current_user_drops_gracefully(caplog):
     ch = DiscordChannel(token="xxx.fake.token", debounce_ms=DEBOUNCE_MS)
     # No turn has flushed, so _current_user_id is None.
