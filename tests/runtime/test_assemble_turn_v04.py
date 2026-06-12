@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import datetime
 
+from sqlalchemy import text
 from sqlmodel import Session as DbSession
 from sqlmodel import select
 
@@ -28,6 +29,7 @@ from echovessel.memory import (
     create_engine,
 )
 from echovessel.memory.backends.sqlite import SQLiteBackend
+from echovessel.memory.migrations import ensure_schema_up_to_date
 from echovessel.runtime.llm import StubProvider
 from echovessel.runtime.llm.errors import LLMTransientError
 from echovessel.runtime.turn.coordinator import (
@@ -317,3 +319,55 @@ async def test_assemble_turn_on_turn_done_exception_swallowed():
         result = await assemble_turn(_ctx(db, backend), turn, stub, on_turn_done=_angry_done)
         assert not result.skipped
         assert result.reply == "reply"
+
+
+# ---------------------------------------------------------------------------
+# 6. Latency metrics are monotonic deltas (clock-source independent)
+# ---------------------------------------------------------------------------
+
+
+async def test_latency_metrics_use_monotonic_deltas():
+    """first_token_ms / duration_ms come from ``time.monotonic()`` deltas.
+
+    The injected ``now_fn`` runs on an arbitrary wall clock (years away
+    from real now) — if either metric mixed that wall clock with another
+    clock source, the persisted values would be wildly inflated.
+    """
+    engine = create_engine(":memory:")
+    ensure_schema_up_to_date(engine)
+    create_all_tables(engine)
+    ensure_schema_up_to_date(engine)
+    backend = SQLiteBackend(engine)
+
+    wall = datetime(2020, 1, 1, 0, 0, 0)
+
+    with DbSession(engine) as db:
+        _seed(db)
+        ctx = TurnContext(
+            persona_id="p",
+            persona_display_name="Sage",
+            db=db,
+            backend=backend,
+            embed_fn=_embed,
+            dev_trace_enabled=True,
+        )
+        turn = IncomingTurn.from_single_message(
+            IncomingMessage(
+                channel_id="web",
+                user_id="self",
+                content="hi",
+                received_at=wall,
+            ),
+            turn_id="t-clock",
+        )
+        stub = _TokenRecordingStub(fallback="hello")
+        result = await assemble_turn(ctx, turn, stub, now_fn=lambda: wall)
+        assert not result.skipped
+
+        row = db.execute(
+            text("SELECT duration_ms, first_token_ms FROM turn_traces WHERE turn_id=:t"),
+            {"t": "t-clock"},
+        ).fetchone()
+    assert row is not None
+    duration_ms, first_token_ms = row
+    assert 0 <= first_token_ms <= duration_ms < 60_000

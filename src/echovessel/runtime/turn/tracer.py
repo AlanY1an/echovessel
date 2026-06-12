@@ -1,9 +1,12 @@
 """Per-turn dev-mode trace recorder (Spec 4 · plan §4).
 
 Captures a 12-stage waterfall for one invocation of
-``runtime.interaction.assemble_turn`` — each stage carries its wall-
-clock duration, its offset from turn start, and a detail dict the
-instrumentation site controls. The drawer on the chat page renders the
+``runtime.interaction.assemble_turn`` — each stage carries its
+duration, its offset from turn start, and a detail dict the
+instrumentation site controls. Stage timing runs on ``time.monotonic()``
+(wall-clock datetimes are kept only for the persisted ``started_at`` /
+``finished_at`` columns) so the waterfall is immune to clock source
+mismatches and system clock adjustments. The drawer on the chat page renders the
 list top-to-bottom and lets the user (developer) drill into any stage's
 payload, view the verbatim system/user prompts, and inspect the
 retrieval candidate table with its per-candidate score components.
@@ -31,6 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -96,7 +100,10 @@ class TurnTracer:
     finished_at: datetime | None = None
 
     _steps: list[TurnStep] = field(default_factory=list)
-    _pending: dict[str, datetime] = field(default_factory=dict)
+    _pending: dict[str, float] = field(default_factory=dict)
+    # Monotonic anchor for stage offsets. The tracer is constructed at
+    # turn start, so offsets from this anchor are offsets from the turn.
+    _t0_mono: float = field(default_factory=lambda: time.monotonic())
 
     # The class is truthy in `if tracer:` checks so callers can use the
     # same variable for both recording and null variants.
@@ -108,7 +115,7 @@ class TurnTracer:
         the second start overwrites the first; the paired stage_end
         still closes exactly one step.
         """
-        self._pending[name] = datetime.utcnow()
+        self._pending[name] = time.monotonic()
 
     def stage_end(self, name: str, **detail: Any) -> None:
         """Close the matching ``stage_start`` and emit a :class:`TurnStep`.
@@ -120,9 +127,9 @@ class TurnTracer:
         start = self._pending.pop(name, None)
         if start is None:
             return
-        ended = datetime.utcnow()
-        duration_ms = max(0, int((ended - start).total_seconds() * 1000))
-        t_ms = max(0, int((start - self.started_at).total_seconds() * 1000))
+        ended = time.monotonic()
+        duration_ms = int((ended - start) * 1000)
+        t_ms = max(0, int((start - self._t0_mono) * 1000))
         self._steps.append(
             TurnStep(stage=name, t_ms=t_ms, duration_ms=duration_ms, detail=dict(detail))
         )
@@ -294,5 +301,5 @@ def make_turn_tracer(
         persona_id=persona_id,
         user_id=user_id,
         channel_id=channel_id,
-        started_at=started_at or datetime.utcnow(),
+        started_at=started_at or datetime.now(),
     )

@@ -84,6 +84,7 @@ from echovessel.runtime.wiring.memory import (
     ProactiveChannelRegistry,
 )
 from echovessel.runtime.wiring.memory_observer import RuntimeMemoryObserver
+from echovessel.runtime.wiring.proactive import make_engagement_maintenance_fn
 from echovessel.runtime.wiring.prompts import (
     make_extract_fn,
     make_proactive_fn,
@@ -587,6 +588,23 @@ class Runtime:
             else None
         )
 
+        # BA engagement loop (proactive v2 Stage 4): the maintainer
+        # settles unanswered fires and applies silence decay on
+        # ``proactive_state.engagement_score``. It rides the consolidate
+        # worker's idle branch — `maintain_engagement` is the periodic
+        # entry point designed for exactly that cadence and is
+        # idempotent per cycle. Only built when proactive is enabled;
+        # without the scheduler there are no fires to settle.
+        engagement_maintenance_fn = (
+            make_engagement_maintenance_fn(
+                db_factory=_db_factory,
+                persona_id=self.ctx.config.persona.id,
+                user_id="self",
+            )
+            if self.ctx.config.proactive.enabled
+            else None
+        )
+
         self._worker = ConsolidateWorker(
             db_factory=_db_factory,
             backend=self.ctx.backend,
@@ -609,6 +627,7 @@ class Runtime:
             slow_tick_input_token_limit=self.ctx.config.slow_tick.input_token_limit,
             slow_tick_transcript_dir=slow_tick_transcript_dir,
             dev_trace_enabled=self.ctx.config.dev_trace.enabled,
+            engagement_maintenance_fn=engagement_maintenance_fn,
         )
 
         self._scanner = IdleScanner(
@@ -1068,11 +1087,43 @@ class Runtime:
             access_log=False,
         )
         server = uvicorn.Server(config)
+
+        async def _serve_web() -> None:
+            # uvicorn calls sys.exit(1) when the socket bind fails (port
+            # already held by another process). SystemExit escaping a
+            # task tears down the whole event loop, so convert it into a
+            # regular exception the startup poll below can surface
+            # through start()'s web rollback handler.
+            try:
+                await server.serve()
+            except SystemExit as e:
+                raise RuntimeError(f"uvicorn server exited with code {e.code}") from e
+
         # `serve()` blocks for the lifetime of the server, so wrap it in
         # a task. The runtime keeps a reference so `stop()` can request
         # graceful shutdown.
         self._web_uvicorn_server = server
-        self._web_uvicorn_task = asyncio.create_task(server.serve(), name="web_uvicorn_server")
+        task = asyncio.create_task(_serve_web(), name="web_uvicorn_server")
+        self._web_uvicorn_task = task
+
+        # Wait for the server to actually bind before claiming success —
+        # same poll `start_control_server` uses for the control plane.
+        # The bind happens asynchronously inside serve(), so without
+        # this check a held port would still log 'serving'.
+        for _ in range(100):  # ~1s
+            if task.done():
+                exc = task.exception()
+                raise RuntimeError(
+                    f"web channel: uvicorn exited during startup "
+                    f"(is {web_cfg.host}:{web_cfg.port} already in use?): {exc}"
+                ) from exc
+            if server.started and server.servers:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            task.cancel()
+            raise RuntimeError("web channel: uvicorn did not finish starting within 1s")
+
         log.info(
             "web channel: serving on http://%s:%d (debounce_ms=%d)",
             web_cfg.host,
@@ -1380,6 +1431,38 @@ class Runtime:
             with contextlib.suppress(Exception):
                 channel.in_flight_turn_id = turn.turn_id  # type: ignore[attr-defined]
 
+        try:
+            await self._run_turn_body(turn, llm, channel)
+        finally:
+            # Fires on EVERY exit — successful send, skipped turn, handler
+            # exception, dispatcher turn-timeout cancellation — so the
+            # channel's debounce state machine and the proactive
+            # `any_channel_in_flight` gate never see a turn stuck in
+            # flight. on_turn_done MUST run after channel.send so the
+            # channel's _current_user_id (Discord) / in_flight_turn_id
+            # state is still set while send runs; channels document it as
+            # idempotent and never-raising for exactly these recovery
+            # paths. CancelledError re-raises after cleanup.
+            if channel_on_turn_done is not None:
+                try:
+                    await channel_on_turn_done(turn.turn_id)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("channel.on_turn_done raised: %s", e)
+            elif channel is not None:
+                with contextlib.suppress(Exception):
+                    channel.in_flight_turn_id = None  # type: ignore[attr-defined]
+
+    async def _run_turn_body(
+        self,
+        turn: IncomingTurn,
+        llm: Any,
+        channel: Any | None,
+    ) -> None:
+        """Turn pipeline: SSE mirroring → assemble_turn → voice → send.
+
+        Called exclusively by :meth:`_handle_turn_body`, which owns the
+        in-flight bookkeeping around it.
+        """
         # Worker X · Cross-channel live SSE. When the turn arrives from
         # anything other than the Web channel (Discord, future iMessage),
         # mirror every event to the runtime-level broadcaster so Web
@@ -1443,8 +1526,8 @@ class Runtime:
                 on_token=None,
                 # Do NOT pass on_turn_done to assemble_turn — it would fire
                 # before channel.send, clearing the channel's _current_user_id
-                # and breaking Discord reply routing. We call on_turn_done
-                # manually AFTER channel.send in the finally block below.
+                # and breaking Discord reply routing. _handle_turn_body calls
+                # on_turn_done AFTER channel.send in its finally block.
                 on_turn_done=None,
             )
 
@@ -1507,16 +1590,6 @@ class Runtime:
             # because WebChannel.send already did the broadcast.
             if mirror_to_web:
                 self._publish_cross_channel_done(outgoing, turn)
-        finally:
-            # on_turn_done MUST fire after channel.send so the channel's
-            # _current_user_id (Discord) or in_flight_turn_id state is still
-            # set while send runs. The finally block guarantees it fires even
-            # if send raises.
-            if channel_on_turn_done is not None:
-                try:
-                    await channel_on_turn_done(turn.turn_id)
-                except Exception as e:  # noqa: BLE001
-                    log.warning("channel.on_turn_done raised: %s", e)
 
     # ---- Signal handling ---------------------------------------------------
 

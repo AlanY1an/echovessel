@@ -100,11 +100,20 @@ def _resolve_config_path(override: str | None) -> Path:
 
 def _pidfile_for(config_path: Path) -> Path:
     # Load config purely to resolve data_dir. Fall back to ~/.echovessel/
+    # Config validation needs the API-key env vars, so callers must run
+    # _load_dotenv() first — same order `run` uses.
     try:
         cfg = load_config(config_path)
         return Path(cfg.runtime.data_dir).expanduser() / "runtime.pid"
-    except Exception:  # noqa: BLE001
-        return Path("~/.echovessel/runtime.pid").expanduser()
+    except Exception as e:  # noqa: BLE001
+        fallback = Path("~/.echovessel/runtime.pid").expanduser()
+        log.debug(
+            "could not resolve data_dir from %s (%s); using fallback pidfile %s",
+            config_path,
+            e,
+            fallback,
+        )
+        return fallback
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +447,9 @@ def stop(config_path: str | None) -> None:
     success acknowledgement. Falls back to SIGTERM when the pidfile is
     v1 (no control_port) or the control plane is unreachable.
     """
+    # Same .env load `run` performs: config validation inside
+    # _pidfile_for needs the API-key env vars to resolve data_dir.
+    _load_dotenv()
     pid_path = _pidfile_for(_resolve_config_path(config_path))
     if not pid_path.exists():
         click.echo(f"no pidfile at {pid_path}; is the daemon running?", err=True)
@@ -477,6 +489,7 @@ def reload(config_path: str | None) -> None:
     back to SIGHUP when the pidfile is v1 or the control plane is
     unreachable.
     """
+    _load_dotenv()
     pid_path = _pidfile_for(_resolve_config_path(config_path))
     if not pid_path.exists():
         click.echo(f"no pidfile at {pid_path}; is the daemon running?", err=True)
@@ -524,6 +537,7 @@ def status(config_path: str | None) -> None:
     still running but its HTTP admin surface has died) — worth
     flagging so the operator knows to investigate.
     """
+    _load_dotenv()
     pid_path = _pidfile_for(_resolve_config_path(config_path))
     if not pid_path.exists():
         click.echo("stopped")

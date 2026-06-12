@@ -251,18 +251,27 @@ class ImporterFacade:
             q.put_nowait(None)
 
     async def resume_pipeline(self, pipeline_id: str) -> None:
-        """Resume a pipeline that was paused by a transient error.
+        """Resume a pipeline that stopped on a failure or a cancel.
 
         Re-invokes ``run_pipeline`` starting from the stored
-        :class:`ProgressSnapshot.current_chunk`. Only works when the
-        original ``start_pipeline`` call had enough runtime arguments
-        to spawn a real task — smoke-mode pipelines just re-emit a
-        ``pipeline.resumed`` event.
+        :class:`ProgressSnapshot` — its ``written_concept_node_ids``
+        ledger is how nodes committed before a cancel get embedded.
+        Only resumable when the run payload is still held: pipelines
+        that completed (kwargs released) or never spawned a real task
+        warn and return without touching status, mirroring the
+        unknown-id no-op the admin routes already rely on.
         """
         state = self._pipelines.get(pipeline_id)
         if state is None:
             log.warning(
                 "resume_pipeline: unknown pipeline_id=%s (no-op)", pipeline_id
+            )
+            return
+        if not state.kwargs:
+            log.warning(
+                "resume_pipeline: pipeline_id=%s has no run payload "
+                "(completed or smoke-mode) — cannot resume (no-op)",
+                pipeline_id,
             )
             return
         state.status = "running"
@@ -280,7 +289,7 @@ class ImporterFacade:
                 },
             ),
         )
-        if state.kwargs and state.task is not None and state.task.done():
+        if state.task is not None and state.task.done():
             # Re-spawn the task; progress snapshot tells run_pipeline
             # where to pick up.
             state.task = asyncio.create_task(self._run_pipeline(pipeline_id))
@@ -361,6 +370,7 @@ class ImporterFacade:
             log.exception(
                 "import pipeline %s crashed: %s", pipeline_id, exc
             )
+            state.status = "failed"
             await self._emit(
                 pipeline_id,
                 PipelineEvent(
@@ -369,11 +379,46 @@ class ImporterFacade:
                     payload={"status": "failed", "error": str(exc)},
                 ),
             )
+        else:
+            # run_pipeline reports its own outcome through the event
+            # sink; mirror the final ``pipeline.done`` status onto the
+            # facade state so terminal pipelines are distinguishable
+            # from running ones.
+            state.status = self._final_status(state)
         finally:
+            # Resumable terminal states (failed, cancelled) keep
+            # ``kwargs`` so resume_pipeline can re-spawn from the
+            # stored ProgressSnapshot — that bounded, user-initiated
+            # retention is the price of resumability. Every other
+            # terminal state releases the run payload — most
+            # importantly ``raw_bytes`` (the full upload, up to tens of
+            # MiB) — so completed imports stop pinning memory for the
+            # daemon's lifetime. ``history`` / ``progress`` stay for
+            # late SSE subscribers.
+            if state.status not in ("failed", "cancelled"):
+                self._release_run_payload(state)
             # Wake subscribers so their async-for loops exit — unless
             # a cancel_pipeline already did it.
             for q in state.subscribers:
                 q.put_nowait(None)
+
+    @staticmethod
+    def _final_status(state: _PipelineState) -> str:
+        """Terminal status as reported by the last ``pipeline.done``
+        event (``success`` / ``partial_success`` / ``failed`` /
+        ``cancelled``). Defaults to ``completed`` when the pipeline
+        never emitted one."""
+        for ev in reversed(state.history):
+            if ev.type == "pipeline.done":
+                return str(ev.payload.get("status") or "completed")
+        return "completed"
+
+    @staticmethod
+    def _release_run_payload(state: _PipelineState) -> None:
+        """Drop the per-run arguments (upload bytes, dependency refs)
+        once they can no longer be needed. An empty ``kwargs`` also
+        keeps ``resume_pipeline`` from re-spawning a terminal run."""
+        state.kwargs = {}
 
     async def _emit(self, pipeline_id: str, event: PipelineEvent) -> None:
         state = self._pipelines.get(pipeline_id)
