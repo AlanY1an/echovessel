@@ -130,6 +130,11 @@ def build_chat_router(
             try:
                 while True:
                     frame = await queue.get()
+                    if frame is None:
+                        # Broadcaster dropped this client (queue overflow).
+                        # End the stream so the response closes and the
+                        # browser's EventSource reconnects.
+                        return
                     yield ServerSentEvent(
                         event=frame["event"],
                         data=_json_dump(frame["data"]),

@@ -39,8 +39,9 @@ class SSEFrame(TypedDict):
 
 
 # Per-client queue cap. If a client falls this far behind we assume it's
-# dead, drop it, and let the browser reconnect. Keeps one slow tab from
-# pinning unbounded memory.
+# dead, drop it, and signal EOF (a ``None`` sentinel) so its consumer
+# closes the SSE response and the browser's EventSource reconnects.
+# Keeps one slow tab from pinning unbounded memory.
 _CLIENT_QUEUE_MAXSIZE = 256
 
 
@@ -66,21 +67,25 @@ class SSEBroadcaster:
     """
 
     def __init__(self) -> None:
-        self._clients: set[asyncio.Queue[SSEFrame]] = set()
+        self._clients: set[asyncio.Queue[SSEFrame | None]] = set()
 
-    async def register(self) -> asyncio.Queue[SSEFrame]:
+    async def register(self) -> asyncio.Queue[SSEFrame | None]:
         """Allocate a fresh client queue and add it to the fan-out set.
+
+        A ``None`` item on the queue means the broadcaster has dropped
+        this client (e.g. queue overflow) — the consumer must stop
+        draining and close its SSE response so the browser reconnects.
 
         The caller is responsible for eventually calling :meth:`unregister`
         in a ``finally`` clause so disconnected clients don't leak.
         """
 
-        q: asyncio.Queue[SSEFrame] = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAXSIZE)
+        q: asyncio.Queue[SSEFrame | None] = asyncio.Queue(maxsize=_CLIENT_QUEUE_MAXSIZE)
         self._clients.add(q)
         log.debug("SSE client registered (total=%d)", len(self._clients))
         return q
 
-    async def unregister(self, queue: asyncio.Queue[SSEFrame]) -> None:
+    async def unregister(self, queue: asyncio.Queue[SSEFrame | None]) -> None:
         """Remove a client queue from the fan-out set.
 
         Idempotent: unregistering an unknown queue is a no-op with a
@@ -113,7 +118,7 @@ class SSEBroadcaster:
         """
 
         frame: SSEFrame = {"event": event, "data": payload}
-        dead: list[asyncio.Queue[SSEFrame]] = []
+        dead: list[asyncio.Queue[SSEFrame | None]] = []
         # Snapshot the set — dropping from the live set while iterating
         # raises RuntimeError.
         for q in list(self._clients):
@@ -129,6 +134,26 @@ class SSEBroadcaster:
                 dead.append(q)
         for q in dead:
             self._clients.discard(q)
+            self._signal_close(q)
+
+    @staticmethod
+    def _signal_close(q: asyncio.Queue[SSEFrame | None]) -> None:
+        """Push the EOF sentinel into a dropped client queue.
+
+        Without it the client's route handler would drain the backlog
+        and then block on ``queue.get()`` forever while the connection
+        stays open — the browser's EventSource only reconnects after it
+        sees the stream actually end. A full queue evicts its oldest
+        frame to make room: the consumer is being disconnected anyway,
+        so the sentinel matters more than the backlog.
+        """
+
+        try:
+            if q.full():
+                q.get_nowait()
+            q.put_nowait(None)
+        except (asyncio.QueueEmpty, asyncio.QueueFull):  # pragma: no cover
+            pass
 
     async def heartbeat_task(self, interval_seconds: float = 30.0) -> None:
         """Emit a periodic heartbeat so proxies keep the SSE stream open.
