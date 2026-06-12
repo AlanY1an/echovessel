@@ -47,9 +47,9 @@ voice_enabled = false
 # SQLite database file, relative to runtime.data_dir (or an absolute
 # path). Use ":memory:" for tests.
 db_path = "memory.db"
-# sentence-transformers model name. Downloaded on first boot (~90 MB)
+# sentence-transformers model name. Downloaded on first boot (~450 MB)
 # and cached under <data_dir>/embedder.cache.
-embedder = "all-MiniLM-L6-v2"
+embedder = "intfloat/multilingual-e5-small"
 # Default top-K for the L3/L4 retrieval reranker.
 retrieve_k = 10
 # Weight applied to the relational-bonus term in the rerank formula.
@@ -134,8 +134,9 @@ interval_seconds = 60
 # Voice subsystem master switch. When true the daemon loads the TTS
 # provider at startup so admin-UI voice toggles are instant. When
 # false, every voice codepath gracefully degrades to text even if
-# persona.voice_enabled=true. Default true — flip to false only if
-# you want to run text-only or do not have a TTS API key yet.
+# persona.voice_enabled=true. Default false (when this key or section
+# is omitted the daemon boots text-only) — this sample enables it so
+# voice works once a TTS API key is set.
 enabled = true
 # TTS provider. One of "fishaudio" | "stub".
 tts_provider = "fishaudio"
@@ -153,35 +154,17 @@ default_audio_format = "mp3"
 [proactive]
 # Autonomous-message scheduler master switch. Keep false unless you
 # have explicitly opted in to proactive nudges.
+#
+# Behavioral knobs (quiet hours, forbidden topics, style summary) are
+# NOT config fields — they live on the per-persona profile, edited via
+# the admin "行为侧写" tab.
 enabled = false
-# Interval between scheduler ticks. 60s matches the idle scanner so
-# the two stay in rough lockstep.
-tick_interval_seconds = 60
-# Quiet hours (local time, 24-hour clock). The range wraps midnight,
-# so start=23 end=7 means "from 23:00 until 07:00 the following day".
-quiet_hours_start = 23
-quiet_hours_end = 7
 # Rate-limit ceiling: max proactive messages sent in any rolling 24h
 # window. Gate evaluated before send.
 max_per_24h = 3
-# Cold-user detection: if the user ignored this many proactive pings
-# inside `cold_user_response_window_hours`, pause proactive until the
-# user speaks first.
-cold_user_threshold = 2
-cold_user_response_window_hours = 6
-# Long-silence trigger: send a gentle nudge after this many hours of
-# total inactivity. Still subject to quiet-hours and rate-limit gates.
-long_silence_hours = 48
 # Hard ceiling on the in-memory event queue; excess events are
 # dropped oldest-first so the scheduler never OOMs under load.
 max_events_in_queue = 64
-# When voice is available (VoiceService built, persona has a voice_id,
-# persona.voice_enabled=true), deliver proactive messages as voice.
-# When false, proactive stays text-only even if voice is otherwise on.
-use_voice_when_available = true
-# Audit sink for ProactiveDecision records. MVP only supports "jsonl";
-# v1.x may add "memory_db" to pipe decisions into the same SQLite DB.
-audit_sink = "jsonl"
 # Timeout given to the scheduler to drain in-flight sends on graceful
 # shutdown before the runtime hard-cancels its task.
 stop_grace_seconds = 10

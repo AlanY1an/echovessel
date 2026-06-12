@@ -6,6 +6,18 @@ def test_presets_have_expected_anthropic_entries() -> None:
     assert "claude-haiku-4-5" in ids
     assert "claude-sonnet-4-6" in ids
     assert "claude-opus-4-7" in ids
+    assert "claude-opus-4-8" in ids
+    assert "claude-fable-5" in ids
+
+
+def test_every_preset_has_a_price_entry() -> None:
+    """Every model we put in the picker must resolve through
+    lookup_price — otherwise cost estimates silently fall back to
+    role rates for a model we ourselves recommend."""
+    from echovessel.core.llm.prices import lookup_price
+
+    for entry in PRESETS:
+        assert lookup_price(entry.provider, entry.model) is not None, entry.model
 
 
 def test_presets_have_expected_openai_entries() -> None:

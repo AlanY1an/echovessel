@@ -27,9 +27,10 @@ PRESETS: tuple[PresetEntry, ...] = (
     PresetEntry("anthropic", "claude-haiku-4-5", "Claude Haiku 4.5"),
     PresetEntry("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6"),
     PresetEntry("anthropic", "claude-opus-4-7", "Claude Opus 4.7"),
+    PresetEntry("anthropic", "claude-opus-4-8", "Claude Opus 4.8"),
+    PresetEntry("anthropic", "claude-fable-5", "Claude Fable 5"),
     PresetEntry("openai_compat", "gpt-4o-mini", "GPT-4o mini"),
     PresetEntry("openai_compat", "gpt-4o", "GPT-4o"),
-    PresetEntry("openai_compat", "gpt-4-turbo", "GPT-4 Turbo"),
 )
 
 
