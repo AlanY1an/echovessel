@@ -24,6 +24,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 
+from sqlalchemy import event
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session as DbSession
 from sqlmodel import select
@@ -59,21 +60,61 @@ def set_session_idle_minutes(minutes: int) -> None:
 #
 # We use a tiny module-level pending list to relay new-session / closed-
 # session events between creator and committer without changing any
-# existing function signature. The committing caller drains it via
+# existing function signature. Events enter the list only for committed
+# state: new-session tuples are staged on the originating DbSession and
+# promoted on `after_commit`; closed-session tuples are queued by the
+# committer after its commit returns. The committing caller drains via
 # `drain_and_fire_pending_lifecycle_events()` right after `db.commit()`.
 #
 # This is single-threaded-only (SQLite MVP is single-writer). A future
 # concurrent backend would need a ContextVar instead; that's v1.x.
 
 _pending_new_sessions: list[tuple[str, str, str]] = []
-"""(session_id, persona_id, user_id) tuples queued by
-`get_or_create_open_session` when it flushed a fresh Session row.
+"""(session_id, persona_id, user_id) tuples for fresh Session rows whose
+creating transaction has COMMITTED. `get_or_create_open_session` stages
+the tuple on the originating DbSession; it is promoted here by an
+`after_commit` listener, so a transaction that fails to commit (or rolls
+back) never leaves an event queued for a row that was never persisted.
 Drained by `drain_and_fire_pending_lifecycle_events`."""
 
 _pending_closed_sessions: list[tuple[str, str, str]] = []
 """(session_id, persona_id, user_id) tuples queued when a session is
 transitioned to `CLOSED`. Drained by
 `drain_and_fire_pending_lifecycle_events`."""
+
+_STAGED_INFO_KEY = "echovessel.staged_new_session_events"
+"""`DbSession.info` key holding new-session tuples staged inside a
+still-open transaction. Promoted to `_pending_new_sessions` on commit,
+discarded on rollback — see `_stage_new_session_event`."""
+
+
+def _stage_new_session_event(db: DbSession, session_id: str, persona_id: str, user_id: str) -> None:
+    """Stage a new-session lifecycle event on its originating DbSession.
+
+    The tuple moves into `_pending_new_sessions` only when the
+    transaction that created the row durably commits (`after_commit`);
+    a rollback discards it. The closed-session path needs no staging:
+    `track_pending_session_closed` is called by its committer strictly
+    after `db.commit()` returns, so both queues only ever hold events
+    for committed state.
+    """
+    staged: list[tuple[str, str, str]] | None = db.info.get(_STAGED_INFO_KEY)
+    if staged is None:
+        staged = []
+        db.info[_STAGED_INFO_KEY] = staged
+        event.listen(db, "after_commit", _promote_staged_new_session_events)
+        event.listen(db, "after_rollback", _discard_staged_new_session_events)
+    staged.append((session_id, persona_id, user_id))
+
+
+def _promote_staged_new_session_events(db: DbSession) -> None:
+    staged: list[tuple[str, str, str]] = db.info[_STAGED_INFO_KEY]
+    _pending_new_sessions.extend(staged)
+    staged.clear()
+
+
+def _discard_staged_new_session_events(db: DbSession) -> None:
+    db.info[_STAGED_INFO_KEY].clear()
 
 
 def track_pending_session_closed(session: Session) -> None:
@@ -206,13 +247,12 @@ def get_or_create_open_session(
             # error to the caller rather than silently return None.
             raise
         return winner
-    # Queue the new-session lifecycle event for the committer to fire
-    # after its `db.commit()` lands. The event is NOT fired here because
-    # the write is not yet durable. The append is INSIDE the post-flush
-    # path so a failed insert never leaves a stale pending event.
-    _pending_new_sessions.append(
-        (new_session.id, persona_id, user_id)
-    )
+    # Stage the new-session lifecycle event on the db session: it enters
+    # the pending queue only once the committer's `db.commit()` lands
+    # (after_commit) and is discarded on rollback, so neither a failed
+    # insert nor a failed commit leaves a stale pending event for a row
+    # that was never persisted.
+    _stage_new_session_event(db, new_session.id, persona_id, user_id)
     return new_session
 
 
