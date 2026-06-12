@@ -109,14 +109,19 @@ def search_concept_nodes(
 
     if use_like_fallback:
         # LIKE path — stable across CJK / short queries, no FTS5 trigram
-        # length floor. Snippet is hand-rolled in
-        # :func:`_build_like_snippet` below.
-        like_pattern = f"%{tokens[0]}%" if tokens else "%"
+        # length floor. Every token must appear somewhere in the
+        # description (AND), mirroring the implicit-AND of the FTS5
+        # path. Snippet is hand-rolled in :func:`_build_like_snippet`.
+        if not tokens:
+            # Query reduced to nothing after stripping quotes — a bare
+            # ``%`` pattern would match every row.
+            return [], 0
+        like_clause = " AND ".join(f"cn.description LIKE :like_{i}" for i in range(len(tokens)))
         page_sql = _text(
             f"""
             SELECT cn.id, cn.description
             FROM concept_nodes AS cn
-            WHERE cn.description LIKE :like_pat
+            WHERE {like_clause}
               AND cn.persona_id = :persona_id
               AND cn.user_id = :user_id
               AND cn.deleted_at IS NULL
@@ -130,7 +135,7 @@ def search_concept_nodes(
             f"""
             SELECT COUNT(*)
             FROM concept_nodes AS cn
-            WHERE cn.description LIKE :like_pat
+            WHERE {like_clause}
               AND cn.persona_id = :persona_id
               AND cn.user_id = :user_id
               AND cn.deleted_at IS NULL
@@ -139,12 +144,13 @@ def search_concept_nodes(
             """
         )
         params: dict = {
-            "like_pat": like_pattern,
             "persona_id": persona_id,
             "user_id": user_id,
             "limit": limit,
             "offset": offset,
         }
+        for i, tok in enumerate(tokens):
+            params[f"like_{i}"] = f"%{tok}%"
     else:
         page_sql = _text(
             f"""
@@ -214,7 +220,9 @@ def search_concept_nodes(
         if node is None or node.deleted_at is not None:
             continue
         if use_like_fallback:
-            snippet = _build_like_snippet(str(row[1] or ""), tokens[0] if tokens else "")
+            # Highlight the longest token — the most specific term is
+            # the one worth surfacing in a one-line snippet.
+            snippet = _build_like_snippet(str(row[1] or ""), max(tokens, key=len))
             rank = 0.0
         else:
             snippet = str(row[1] or "")

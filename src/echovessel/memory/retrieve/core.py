@@ -39,6 +39,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import lru_cache
 
 from sqlmodel import Session as DbSession
 from sqlmodel import select
@@ -62,13 +63,29 @@ from echovessel.memory.retrieve.scoring import (
     _score_node,
 )
 
-# Regex for splitting the query into candidate alias tokens. Alias
-# matching is case-sensitive exact (plan decision 4). We deliberately
-# split on non-word characters across Unicode so CJK runs stay intact
-# — ``re.split(r"\W+", "Scott黄逸扬")`` under ``re.UNICODE`` drops the
-# CJK chars; the simpler rule here keeps every contiguous run that is
-# NOT ASCII whitespace / common punctuation.
+# Regex for splitting the query into candidate alias tokens. We
+# deliberately split on non-word characters across Unicode so CJK runs
+# stay intact — ``re.split(r"\W+", "Scott黄逸扬")`` under ``re.UNICODE``
+# drops the CJK chars; the simpler rule here keeps every contiguous
+# run that is NOT ASCII whitespace / common punctuation.
 _QUERY_TOKEN_SEPARATORS = re.compile(r"[\s,.?!;:()\[\]{}<>/\"'\\]+")
+
+
+@lru_cache(maxsize=1024)
+def _ascii_alias_pattern(alias: str) -> re.Pattern[str]:
+    """Word-bounded pattern for a pure-ASCII alias.
+
+    ``\\b`` would treat CJK as word characters and reject the common
+    mixed-script mention "Scott最近怎么样", so the boundary is "no ASCII
+    alphanumeric neighbour" instead: "Sam" stays out of "Samsung" and
+    "Ann" out of "planning", while a CJK neighbour still counts as a
+    boundary. Matching stays case-sensitive (plan decision 4 —
+    normalisation is a v2 concern): common-word names like "Will" or
+    "May" must not anchor on their generic lowercase uses, because an
+    anchor grants the relevance-floor exemption. Cached because the
+    same alias set is rescanned every turn.
+    """
+    return re.compile(rf"(?<![A-Za-z0-9]){re.escape(alias)}(?![A-Za-z0-9])")
 
 
 @dataclass(slots=True)
@@ -157,14 +174,21 @@ def find_query_entities(
     persona_id: str,
     user_id: str,
 ) -> list[int]:
-    """Return entity ids whose alias exactly matches a token in ``query_text``.
+    """Return entity ids whose alias appears as a mention in ``query_text``.
 
-    Alias matching is case-sensitive (plan decision 4 — normalisation
-    is a v2 concern). Tokens are split on ASCII whitespace + common
-    punctuation; the full ``query_text`` is also tried as a single
-    token so multi-character aliases that cross token boundaries
-    ("黄逸扬") still match a query like "Scott 最近怎么样" where the
-    alias sits inside a whitespace-delimited fragment.
+    Two matching modes by alias script:
+
+    - Pure-ASCII aliases match as whole words, case-insensitively —
+      "Sam" matches "did sam call?" and the mixed-script "Sam最近怎么样",
+      but never "Samsung" or "Annie's". Boundaries are "no ASCII
+      alphanumeric neighbour" rather than ``\\b`` so a CJK neighbour
+      still counts as a word edge.
+    - Aliases with any non-ASCII character match by raw substring
+      containment ("黄逸扬" inside "关于黄逸扬的事") — CJK has no word
+      boundaries, so containment is the only workable test.
+
+    An exact token match (split on ASCII whitespace + common
+    punctuation) is accepted for either kind.
 
     Soft-deleted entities are skipped. An empty query or one whose
     tokens match no aliases returns ``[]``.
@@ -173,9 +197,8 @@ def find_query_entities(
         return []
 
     candidates = {tok for tok in _QUERY_TOKEN_SEPARATORS.split(query_text) if tok}
-    # Also try every substring occurrence of stored aliases inside the
-    # raw query (case-sensitive). Scans every alias for this scope once
-    # — small on a personal deployment, and the alternative (trigram
+    # The per-alias scan touches every alias for this scope once —
+    # small on a personal deployment, and the alternative (trigram
     # scan across all aliases) would need its own index. If alias count
     # ever grows, the right move is a trigram index keyed on
     # (persona_id, user_id), not more Python loops.
@@ -193,7 +216,12 @@ def find_query_entities(
     for alias, ent in alias_rows:
         if ent.id is None:
             continue
-        if alias.alias in candidates or alias.alias in query_text:
+        if alias.alias in candidates:
+            matched.add(ent.id)
+        elif alias.alias.isascii():
+            if _ascii_alias_pattern(alias.alias).search(query_text):
+                matched.add(ent.id)
+        elif alias.alias in query_text:
             matched.add(ent.id)
     return list(matched)
 
