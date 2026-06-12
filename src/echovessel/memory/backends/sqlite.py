@@ -251,6 +251,15 @@ class SQLiteBackend(StorageBackend):
         user_id: str,
         top_k: int,
     ) -> list[FtsHit]:
+        # The trigram tokenizer produces no trigrams for a quoted phrase
+        # shorter than 3 characters, so an all-short-token query — the
+        # typical Chinese search shape (妈妈 / 小猫) — matches nothing in
+        # FTS5. Scan with LIKE instead. Mixed queries stay on FTS: the
+        # >= 3-char tokens carry the match and short ones are ignored.
+        tokens = [t for t in query_text.replace('"', " ").split() if t]
+        if tokens and all(len(t) < 3 for t in tokens):
+            return self._like_search(tokens, persona_id, user_id, top_k)
+
         # FTS5 rank is bm25; lower is better. We join back to recall_messages
         # to filter by persona/user and exclude deleted rows.
         #
@@ -281,3 +290,43 @@ class SQLiteBackend(StorageBackend):
                 },
             ).all()
         return [FtsHit(recall_message_id=r[0], rank=float(r[1])) for r in rows]
+
+    def _like_search(
+        self,
+        tokens: list[str],
+        persona_id: str,
+        user_id: str,
+        top_k: int,
+    ) -> list[FtsHit]:
+        """Substring scan over recall_messages for sub-trigram tokens.
+
+        Mirrors fts_search's AND-of-tokens semantics, scoping, and limit.
+        LIKE has no bm25 rank, so hits carry rank 0.0 and order by
+        recency (newest first).
+        """
+        match_clause = " AND ".join(
+            f"rm.content LIKE :pat_{i} ESCAPE '\\'" for i in range(len(tokens))
+        )
+        sql = text(
+            f"""
+            SELECT rm.id
+            FROM recall_messages rm
+            WHERE {match_clause}
+              AND rm.persona_id = :persona_id
+              AND rm.user_id = :user_id
+              AND rm.deleted_at IS NULL
+            ORDER BY rm.id DESC
+            LIMIT :top_k
+            """
+        )
+        params: dict[str, Any] = {
+            "persona_id": persona_id,
+            "user_id": user_id,
+            "top_k": top_k,
+        }
+        for i, token in enumerate(tokens):
+            escaped = token.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+            params[f"pat_{i}"] = f"%{escaped}%"
+        with self._engine.connect() as conn:
+            rows = conn.execute(sql, params).all()
+        return [FtsHit(recall_message_id=r[0], rank=0.0) for r in rows]

@@ -46,8 +46,9 @@ import logging
 from dataclasses import dataclass
 
 from sqlalchemy import Engine, text
+from sqlmodel import SQLModel
 
-from echovessel.memory.db import vec_table_ddl
+from echovessel.memory.db import FTS_UPDATE_TRIGGERS, vec_table_ddl
 from echovessel.memory.models import (
     EPISODIC_STATE_SQL_DEFAULT as _EPISODIC_STATE_SQL_DEFAULT_FOR_MIGRATION,
 )
@@ -201,8 +202,9 @@ _V0_5_ENTITY_COLUMNS: tuple[_ColumnSpec, ...] = (
 
 
 # v0.7 · proactive follow-up annotation columns (memory-driven-proactive plan).
-# All nullable; existing rows get NULL. Partial index for the active-scan hot
-# path is added separately in ensure_schema_up_to_date below.
+# All nullable; existing rows get NULL. The partial index for the active-scan
+# hot path lives in db.py::create_all_tables (after metadata.create_all, so
+# concept_nodes exists regardless of which path created it).
 _V0_7_PROACTIVE_FOLLOW_UP_COLUMNS: tuple[_ColumnSpec, ...] = (
     _ColumnSpec(table="concept_nodes", column="follow_up_at", sql_type="DATETIME"),
     _ColumnSpec(table="concept_nodes", column="follow_up_hint", sql_type="TEXT"),
@@ -509,30 +511,28 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
                     e,
                 )
 
-        # v0.7 · partial index for proactive scanner hot path. Excludes
-        # deleted / superseded / user-suppressed events so the scan query
-        # is O(active follow-ups) not O(all concept_nodes).
-        if _table_exists(conn, "concept_nodes") and not _index_exists(
-            conn, "idx_concept_follow_up_active"
-        ):
-            try:
-                conn.execute(
-                    text(
-                        "CREATE INDEX IF NOT EXISTS "
-                        "idx_concept_follow_up_active "
-                        "ON concept_nodes(follow_up_at) "
-                        "WHERE follow_up_at IS NOT NULL "
-                        "AND deleted_at IS NULL "
-                        "AND superseded_by_id IS NULL "
-                        "AND proactive_suppressed_at IS NULL"
+        # Secondary indexes declared on the SQLModel metadata. The raw-DDL
+        # table loop above runs before ``metadata.create_all``, whose
+        # checkfirst skips the entire CreateTable — indexes included —
+        # once the table exists. Emitting every model-declared index here
+        # makes both creation paths converge on the same index set. Runs
+        # after the column loop so legacy tables already carry any column
+        # an index references.
+        for table in SQLModel.metadata.tables.values():
+            if not _table_exists(conn, table.name):
+                continue
+            for index in table.indexes:
+                if index.name is None or _index_exists(conn, index.name):
+                    continue
+                try:
+                    index.create(conn)
+                    log.info("schema migration: created index %s", index.name)
+                except Exception as e:  # noqa: BLE001
+                    log.warning(
+                        "schema migration: could not create index %s: %s",
+                        index.name,
+                        e,
                     )
-                )
-                log.info("schema migration: added idx_concept_follow_up_active")
-            except Exception as e:  # noqa: BLE001
-                log.warning(
-                    "schema migration: could not create idx_concept_follow_up_active: %s",
-                    e,
-                )
 
         # v0.4 · backfill concept_nodes.source_turn_ids from the legacy
         # singular source_turn_id column. Idempotent: targets only rows
@@ -606,6 +606,28 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
         if _table_exists(conn, "follow_up_threads"):
             conn.execute(text("DROP TABLE follow_up_threads"))
             log.info("schema migration: dropped deprecated follow_up_threads table")
+
+        # Rebuild FTS UPDATE triggers that predate the ``UPDATE OF``
+        # column scope. The scoped triggers fire only when the indexed
+        # content column changes, so bookkeeping writes (access_count
+        # bumps, soft-delete timestamps) don't delete + reinsert trigram
+        # rows. ``CREATE TRIGGER IF NOT EXISTS`` never replaces an
+        # existing definition, so the unscoped shape needs an explicit
+        # drop + recreate. Idempotent: the recreated DDL contains the
+        # scope, so subsequent runs skip.
+        for trigger_name, trigger_ddl in FTS_UPDATE_TRIGGERS:
+            row = conn.execute(
+                text("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=:name"),
+                {"name": trigger_name},
+            ).first()
+            if row is None or "UPDATE OF" in (row[0] or ""):
+                continue
+            conn.exec_driver_sql(f"DROP TRIGGER {trigger_name}")
+            conn.execute(text(trigger_ddl))
+            log.info(
+                "schema migration: rebuilt trigger %s with UPDATE OF column scope",
+                trigger_name,
+            )
 
         # Rebuild vec0 tables that predate the declared cosine metric.
         # Without ``distance_metric=cosine`` in the DDL, sqlite-vec
