@@ -11,6 +11,7 @@ Spec: docs/voice/01-spec-v0.1.md §4.7 (speak / transcribe / clone) and
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -305,18 +306,15 @@ class VoiceService:
         audio_bytes = b"".join(chunks)
 
         # Step 3 · atomic write to <voice_cache_dir>/<message_id>.mp3.
+        # write + fsync + replace are blocking syscalls, so the whole
+        # sequence runs in a worker thread (the only legal blocking-I/O
+        # pattern on the daemon's single event loop — see fishaudio.py).
         try:
-            self._voice_cache_dir.mkdir(parents=True, exist_ok=True)
-            tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
-            with open(tmp_path, "wb") as fh:
-                fh.write(audio_bytes)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp_path, cache_path)
+            await asyncio.to_thread(
+                _write_cache_atomic, self._voice_cache_dir, cache_path, audio_bytes
+            )
         except OSError as e:
-            raise VoicePermanentError(
-                f"voice cache write failed: {e}"
-            ) from e
+            raise VoicePermanentError(f"voice cache write failed: {e}") from e
 
         # Step 4 · assemble VoiceResult. Cost is a hard-coded estimate
         # based on input character count (spec §4.7a 方案 Z).
@@ -330,6 +328,26 @@ class VoiceService:
             cost_usd=cost_usd,
             cached=False,
         )
+
+
+# ---------------------------------------------------------------------------
+# Cache write helper
+# ---------------------------------------------------------------------------
+
+
+def _write_cache_atomic(cache_dir: Path, cache_path: Path, audio_bytes: bytes) -> None:
+    """Write `audio_bytes` to `cache_path` atomically (tmp + fsync + replace).
+
+    Synchronous on purpose: `generate_voice` runs it via
+    `asyncio.to_thread` so the fsync stall never blocks the event loop.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+    with open(tmp_path, "wb") as fh:
+        fh.write(audio_bytes)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp_path, cache_path)
 
 
 # ---------------------------------------------------------------------------

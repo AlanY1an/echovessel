@@ -293,7 +293,47 @@ async def test_generate_voice_provider_error_leaves_no_cache_file(
 
 
 # ---------------------------------------------------------------------------
-# 8. cache write failure raises VoicePermanentError (spec §4.7a.7)
+# 8. cache write runs off the event-loop thread (CLAUDE.md blocking-I/O rule)
+# ---------------------------------------------------------------------------
+
+
+async def test_generate_voice_cache_write_runs_off_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The atomic write (open/write/fsync/replace) must execute in a
+    worker thread via asyncio.to_thread, never on the loop thread."""
+    import threading
+
+    from echovessel.voice import service as service_mod
+
+    loop_thread = threading.current_thread()
+    writer_threads: list[threading.Thread] = []
+    real_writer = service_mod._write_cache_atomic
+
+    def spying_writer(*args, **kwargs):
+        writer_threads.append(threading.current_thread())
+        return real_writer(*args, **kwargs)
+
+    monkeypatch.setattr(service_mod, "_write_cache_atomic", spying_writer)
+
+    svc = _make_service(tmp_path)
+    result = await svc.generate_voice(
+        "off the loop",
+        voice_id="v_persona",
+        message_id=314,
+    )
+
+    assert result.cached is False
+    assert len(writer_threads) == 1
+    assert writer_threads[0] is not loop_thread
+    # Atomic-replace semantics preserved: final file, no .tmp leftover.
+    assert (tmp_path / "voice_cache" / "314.mp3").exists()
+    assert not (tmp_path / "voice_cache" / "314.mp3.tmp").exists()
+
+
+# ---------------------------------------------------------------------------
+# 9. cache write failure raises VoicePermanentError (spec §4.7a.7)
 # ---------------------------------------------------------------------------
 
 
