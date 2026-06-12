@@ -17,6 +17,7 @@ Coverage:
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 
@@ -31,6 +32,7 @@ from echovessel.runtime.cost_logger import (
     list_recent,
     summarize,
 )
+from echovessel.runtime.llm.base import LLMProvider
 from echovessel.runtime.llm.usage import Usage
 
 # ---------------------------------------------------------------------------
@@ -69,9 +71,17 @@ class _FakeProvider:
         model_role: str = "main",
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        thinking_enabled: bool | None = None,
         timeout: float | None = None,
     ) -> tuple[str, Usage | None]:
-        self.complete_calls.append({"system": system, "user": user, "model_role": model_role})
+        self.complete_calls.append(
+            {
+                "system": system,
+                "user": user,
+                "model_role": model_role,
+                "thinking_enabled": thinking_enabled,
+            }
+        )
         return "ok response", None
 
     async def stream(
@@ -82,9 +92,17 @@ class _FakeProvider:
         model_role: str = "main",
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        thinking_enabled: bool | None = None,
         timeout: float | None = None,
     ) -> AsyncIterator[str | Usage]:
-        self.stream_calls.append({"system": system, "user": user, "model_role": model_role})
+        self.stream_calls.append(
+            {
+                "system": system,
+                "user": user,
+                "model_role": model_role,
+                "thinking_enabled": thinking_enabled,
+            }
+        )
         for piece in ("hel", "lo ", "wor", "ld"):
             yield piece
 
@@ -192,6 +210,49 @@ async def test_feature_context_default_when_unset() -> None:
         rows = list_recent(db, limit=5)
     assert len(rows) == 1
     assert rows[0].feature == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_tracking_provider_forwards_thinking_enabled_on_complete() -> None:
+    """thinking_enabled must reach the inner provider unchanged — wiring
+    (consolidate / reflect / slow-cycle / proactive) passes it on every call."""
+    _engine, recorder = _build_engine_and_recorder()
+    inner = _FakeProvider()
+    wrapped = CostTrackingProvider(inner, recorder)
+
+    await wrapped.complete("sys", "usr", model_role="fast", thinking_enabled=True)
+    assert inner.complete_calls[0]["thinking_enabled"] is True
+
+    await wrapped.complete("sys", "usr", model_role="fast", thinking_enabled=False)
+    assert inner.complete_calls[1]["thinking_enabled"] is False
+
+    await wrapped.complete("sys", "usr", model_role="fast")
+    assert inner.complete_calls[2]["thinking_enabled"] is None
+
+
+@pytest.mark.asyncio
+async def test_tracking_provider_forwards_thinking_enabled_on_stream() -> None:
+    _engine, recorder = _build_engine_and_recorder()
+    inner = _FakeProvider()
+    wrapped = CostTrackingProvider(inner, recorder)
+
+    async for _ in wrapped.stream("sys", "usr", model_role="main", thinking_enabled=True):
+        pass
+    assert inner.stream_calls[0]["thinking_enabled"] is True
+
+    async for _ in wrapped.stream("sys", "usr", model_role="main"):
+        pass
+    assert inner.stream_calls[1]["thinking_enabled"] is None
+
+
+@pytest.mark.parametrize("method_name", ["complete", "stream"])
+def test_tracking_provider_signature_matches_protocol(method_name: str) -> None:
+    """Guard against signature drift: runtime_checkable Protocols only check
+    method names, so a kwarg added to LLMProvider but missing here would
+    surface as a TypeError in production instead of a test failure."""
+    protocol_params = list(inspect.signature(getattr(LLMProvider, method_name)).parameters)
+    wrapper_params = list(inspect.signature(getattr(CostTrackingProvider, method_name)).parameters)
+    assert wrapper_params == protocol_params
 
 
 # ---------------------------------------------------------------------------
