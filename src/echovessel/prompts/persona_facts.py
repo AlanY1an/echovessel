@@ -6,7 +6,7 @@ actual round-trip by combining the template with ``runtime.ctx.llm``.
 
 One LLM call produces two halves of the onboarding output:
 
-- **5 core blocks** (persona / self / user / mood / relationship) —
+- **2 core blocks** (persona / user) —
   same role as :mod:`echovessel.prompts.persona_bootstrap`.
 - **15 biographic facts** — structured columns on the ``personas``
   row (full_name / gender / birth_date / nationality / timezone / …)

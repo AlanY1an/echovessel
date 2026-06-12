@@ -7,7 +7,7 @@ template with `runtime.ctx.llm` and the just-imported events/thoughts.
 
 The prompt is deliberately single-shot: read a user's imported
 material (already extracted into events + thoughts by the import
-pipeline), and return five initial core blocks the persona can live
+pipeline), and return two initial core blocks the persona can live
 with on day one. The result is SUGGESTIVE — the frontend shows it to
 the user for review and lets them edit each block before they hit
 ``POST /api/admin/persona/onboarding``.
@@ -184,8 +184,9 @@ def format_persona_bootstrap_user_prompt(
         "Each THOUGHT is a higher-level long-term impression the reflection",
         "step formed.",
         "",
-        "Write the FIVE initial core blocks for the persona based on this",
-        "material, following the system prompt's output schema.",
+        "Write the TWO initial core blocks (persona_block, user_block) for",
+        "the persona based on this material, following the system prompt's",
+        "output schema.",
         "",
     ]
     if persona_display_name:
