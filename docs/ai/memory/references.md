@@ -30,7 +30,7 @@ src/echovessel/memory/
 │   ├── phase_bce.py         extraction helpers + SHOCK/TIMER thresholds
 │   └── tracer.py            per-session dev-mode trace recorder
 ├── slow_cycle.py            phase G — cross-session reflection
-├── forget.py                soft-delete + retention sweep
+├── forget.py                soft-delete + sweep_dead_vectors (index rows only)
 ├── observers.py             MemoryEventObserver Protocol + registry
 ├── events.py                re-export shim for memory.observers
 ├── tokens.py                tiktoken wrapper
@@ -57,6 +57,7 @@ tests/memory/
 ├── test_migrations_idempotent.py             idempotent ALTER path
 ├── test_migrations_from_old_db.py            legacy DB upgrade
 ├── test_v04_migration.py                     v0.4 schema bump
+├── test_embedding_sync.py                    embedding-model tag + startup re-embed
 │
 ├── test_ingest.py                            ingest_message happy path
 ├── test_sessions_concurrency.py              partial unique index guards
@@ -71,11 +72,13 @@ tests/memory/
 │
 ├── test_retrieve.py                          retrieve pipeline
 ├── test_retrieve_entity_anchor.py            entity-anchor bonus
+├── test_impact_decay.py                      impact decay + reinforcement floor
 ├── test_recall_messages_turn_id.py           L2 turn_id read path
 ├── test_force_load_persona_thoughts.py       v0.5 persona_thoughts
 │
 ├── test_slow_cycle.py                        phase G
 ├── test_forget.py                            soft-delete + retention
+├── test_forget_sweep.py                      sweep_dead_vectors vec/FTS cleanup
 │
 ├── test_observer_called.py                   per-write hook
 ├── test_lifecycle_on_new_session_started.py  lifecycle hook fires post-commit

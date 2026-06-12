@@ -45,8 +45,12 @@ Every table that can lose rows has a `deleted_at: datetime | None`
 column. Reads filter `WHERE deleted_at IS NULL`.
 
 `forget.py` is the **soft-delete** writer — it sets `deleted_at`, it
-does NOT physically remove rows. A future cron (`v1.1`, not implemented)
-will sweep rows past their retention window and physically delete them.
+does NOT physically remove node rows. `sweep_dead_vectors` (same file,
+run once per day by the consolidate worker's idle branch) physically
+removes only the *search-index* rows: nodes soft-deleted >30 days lose
+their `concept_nodes_vec` row + `concept_nodes_fts` entry; nodes
+superseded >30 days (measured from the successor's `created_at`) lose
+the vec row only. `concept_nodes` rows are kept in both cases.
 The one exception is `delete_core_block_append` which is a true
 `db.delete()` for the audit row only.
 

@@ -31,7 +31,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import sqlalchemy.exc
@@ -53,6 +53,7 @@ from echovessel.memory.consolidate.tracer import (
     NullConsolidateTracer,
     make_consolidate_tracer,
 )
+from echovessel.memory.forget import sweep_dead_vectors
 from echovessel.memory.models import Persona, Session
 from echovessel.memory.observers import MemoryEventObserver
 from echovessel.memory.slow_cycle import (
@@ -153,6 +154,10 @@ class ConsolidateWorker:
     # None (default) keeps the loop proactive-free.
     engagement_maintenance_fn: Callable[[datetime], Awaitable[None]] | None = None
     _queue: list[str] = field(default_factory=list, init=False)
+    # Last calendar day the dead-vector sweep ran. In-memory only — a
+    # daemon restart re-runs the sweep once, which is harmless (the
+    # sweep is idempotent).
+    _last_vector_sweep_date: date | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         for sid in self.initial_session_ids:
@@ -171,6 +176,7 @@ class ConsolidateWorker:
 
             if not self._queue:
                 await self._maybe_maintain_engagement()
+                await self._maybe_sweep_dead_vectors()
                 await asyncio.sleep(self.poll_seconds)
                 continue
 
@@ -206,6 +212,38 @@ class ConsolidateWorker:
             await self.engagement_maintenance_fn(self.now_fn())
         except Exception as e:  # noqa: BLE001
             log.warning("engagement maintenance failed: %s", e)
+
+    async def _maybe_sweep_dead_vectors(self) -> None:
+        """Idle-branch hook for the dead-vector retention sweep.
+
+        ``sweep_dead_vectors`` drops vec/FTS index rows for nodes that
+        have been soft-deleted or superseded past the retention window;
+        node rows survive. Guarded to at most once per calendar day —
+        the guard date is set before the attempt, so a failing sweep
+        burns its day instead of retrying every poll. Failure never
+        blocks consolidation — log and move on.
+        """
+        if self.backend is None:
+            return
+        today = self.now_fn().date()
+        if self._last_vector_sweep_date == today:
+            return
+        self._last_vector_sweep_date = today
+        try:
+            with self.db_factory() as db:  # type: ignore[operator]
+                counts = sweep_dead_vectors(
+                    db,  # type: ignore[arg-type]
+                    self.backend,
+                    now=self.now_fn(),
+                )
+            if counts.soft_deleted or counts.superseded:
+                log.info(
+                    "dead-vector sweep: soft_deleted=%d superseded=%d",
+                    counts.soft_deleted,
+                    counts.superseded,
+                )
+        except Exception as e:  # noqa: BLE001
+            log.warning("dead-vector sweep failed: %s", e)
 
     def _poll_closing_sessions(self) -> None:
         with self.db_factory() as db:  # type: ignore[operator]
