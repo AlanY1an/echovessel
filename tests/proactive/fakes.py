@@ -7,15 +7,21 @@ FakeVoiceService than with Mock.call_args assertions.
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from echovessel.memory.models import (
+    ProactiveDecision as PersistedDecision,
+)
 from echovessel.proactive.core.base import (
     AuditSink,
     ChannelProtocol,
     PersonaView,
     ProactiveDecision,
+    ProactiveEvent,
     ProactiveMessage,
 )
 
@@ -264,6 +270,9 @@ class FakeAuditSink(AuditSink):
         self,
         decision_id: str,
         *,
+        action: str | None = None,
+        skip_reason: str | None = None,
+        message_text: str | None = None,
         send_ok: bool | None = None,
         send_error: str | None = None,
         ingest_message_id: int | None = None,
@@ -284,6 +293,9 @@ class FakeAuditSink(AuditSink):
         if target is None:
             return
         target.update_outcome(
+            action=action,
+            skip_reason=skip_reason,
+            message_text=message_text,
             send_ok=send_ok,
             send_error=send_error,
             ingest_message_id=ingest_message_id,
@@ -300,6 +312,68 @@ class FakeAuditSink(AuditSink):
 
     def count_sends_in_last_24h(self, *, now: datetime) -> int:
         return self.sends_count_24h
+
+
+# ---------------------------------------------------------------------------
+# ProactiveScheduler fake
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FakeProactiveScheduler:
+    """ProactiveScheduler fake for FollowUpScheduler tests.
+
+    ``notify`` records events; ``tick_once`` drains the pending ones
+    and — when ``db_factory`` is wired — persists one
+    ``proactive_decisions`` row per event (``action`` /
+    ``suppress_reason`` configurable). That mirrors DefaultScheduler's
+    drain semantics, so the FollowUpScheduler's post-tick reschedule
+    sees the same decision-row state production produces.
+
+    ``calls`` records the notify/tick interleaving so tests can assert
+    the wake path drains *before* it reschedules.
+    """
+
+    db_factory: Callable[[], Any] | None = None
+    action: str = "fire"
+    suppress_reason: str | None = None
+    events: list[ProactiveEvent] = field(default_factory=list)
+    calls: list[str] = field(default_factory=list)
+    tick_count: int = field(default=0, init=False)
+    _pending: list[ProactiveEvent] = field(default_factory=list, init=False)
+
+    async def start(self) -> None: ...
+
+    async def stop(self) -> None: ...
+
+    def notify(self, event: ProactiveEvent) -> None:
+        self.events.append(event)
+        self._pending.append(event)
+        self.calls.append(f"notify:{event.payload.get('phase')}")
+
+    async def tick_once(self) -> None:
+        self.tick_count += 1
+        self.calls.append("tick")
+        pending, self._pending = self._pending, []
+        if self.db_factory is None:
+            return
+        for ev in pending:
+            with self.db_factory() as db:
+                db.add(
+                    PersistedDecision(
+                        decision_id=ev.payload.get("decision_id") or str(uuid.uuid4()),
+                        timestamp=ev.created_at,
+                        persona_id=ev.persona_id,
+                        user_id=ev.user_id,
+                        trigger_type="follow_up",
+                        source_event_id=ev.payload.get("event_id"),
+                        phase=ev.payload.get("phase"),
+                        action=self.action,
+                        suppress_reason=self.suppress_reason,
+                        created_at=ev.created_at,
+                    )
+                )
+                db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -337,5 +411,6 @@ __all__ = [
     "FakeVoiceResult",
     "FakePersonaView",
     "FakeAuditSink",
+    "FakeProactiveScheduler",
     "make_fake_proactive_fn",
 ]

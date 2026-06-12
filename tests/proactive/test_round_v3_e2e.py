@@ -14,15 +14,15 @@ signal).
 Real components: SQLite memory store, real consolidate pipeline, real
 ``FollowUpScheduler``, real observer wiring. Stubs: ``extract_fn``
 returns scripted ``ExtractionResult``; ``embed_fn`` is deterministic;
-``ProactiveScheduler.notify`` is a ``MagicMock`` so we read the
-dispatched events without spinning up the full delivery stack.
+the ``ProactiveScheduler`` is a ``FakeProactiveScheduler`` that records
+dispatched events and persists a decision row per drain, so we exercise
+the full notify → tick → reschedule loop without the delivery stack.
 """
 
 from __future__ import annotations
 
 import asyncio
 from datetime import date, datetime, timedelta
-from unittest.mock import MagicMock
 
 import pytest
 from sqlmodel import Session as DbSession
@@ -46,6 +46,7 @@ from echovessel.memory.models import ConceptNode
 from echovessel.proactive.core.base import EventType
 from echovessel.proactive.execution.follow_up_scheduler import FollowUpScheduler
 from echovessel.proactive.execution.observer import MemoryFollowUpObserver
+from tests.proactive.fakes import FakeProactiveScheduler
 
 PERSONA_ID = "p_e2e"
 USER_ID = "u_e2e"
@@ -124,7 +125,7 @@ async def test_v3_happy_path_supersede_stops_post():
         _seed(db)
 
     # ----- Phase 1 · user mentions exam → consolidate writes event ------
-    fake_proactive_scheduler = MagicMock(notify=MagicMock())
+    fake_proactive_scheduler = FakeProactiveScheduler(db_factory=db_factory)
     follow_up_scheduler = FollowUpScheduler(
         db_factory=db_factory,
         proactive_scheduler=fake_proactive_scheduler,
@@ -179,10 +180,10 @@ async def test_v3_happy_path_supersede_stops_post():
     # ----- Phase 2 · scheduler timer fires → notify dispatched ----------
     await asyncio.sleep(0.3)
 
-    assert fake_proactive_scheduler.notify.called, (
+    assert fake_proactive_scheduler.events, (
         "FollowUpScheduler should dispatch FOLLOW_UP_DUE at the pre window"
     )
-    pre_event = fake_proactive_scheduler.notify.call_args.args[0]
+    pre_event = fake_proactive_scheduler.events[-1]
     assert pre_event.event_type == EventType.FOLLOW_UP_DUE
     assert pre_event.payload["event_id"] == event_id
     assert pre_event.payload["phase"] == "pre"
@@ -229,7 +230,7 @@ async def test_v3_happy_path_supersede_stops_post():
         assert original.superseded_by_id is not None, "supersede chain must mark the closed event"
 
     # ----- Phase 4 · post window arrives → scheduler does NOT fire ------
-    fake_proactive_scheduler.notify.reset_mock()
+    fake_proactive_scheduler.events.clear()
 
     post_phase_scheduler = FollowUpScheduler(
         db_factory=db_factory,
@@ -241,7 +242,7 @@ async def test_v3_happy_path_supersede_stops_post():
     await post_phase_scheduler.start()
     await asyncio.sleep(0.3)
 
-    fake_proactive_scheduler.notify.assert_not_called()
+    assert fake_proactive_scheduler.events == []
 
     await post_phase_scheduler.stop()
 
@@ -307,7 +308,7 @@ async def test_supersede_blocks_every_phase(phase_under_test: str):
         "post": POST_WINDOW + timedelta(seconds=0.05),
     }[phase_under_test]
 
-    fake_scheduler = MagicMock(notify=MagicMock())
+    fake_scheduler = FakeProactiveScheduler(db_factory=db_factory)
     sched = FollowUpScheduler(
         db_factory=db_factory,
         proactive_scheduler=fake_scheduler,
@@ -318,11 +319,11 @@ async def test_supersede_blocks_every_phase(phase_under_test: str):
     await sched.start()
     await asyncio.sleep(0.3)
 
-    fake_scheduler.notify.assert_not_called()
+    assert fake_scheduler.events == []
     # _eligible also rejects on direct on_event_created.
     with db_factory() as db:
         sched.on_event_created(db.get(ConceptNode, original_id))
     await asyncio.sleep(0.1)
-    fake_scheduler.notify.assert_not_called()
+    assert fake_scheduler.events == []
 
     await sched.stop()

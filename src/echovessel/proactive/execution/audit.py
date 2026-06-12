@@ -142,6 +142,9 @@ class SQLiteAuditSink:
         self,
         decision_id: str,
         *,
+        action: str | None = None,
+        skip_reason: str | None = None,
+        message_text: str | None = None,
         send_ok: bool | None = None,
         send_error: str | None = None,
         ingest_message_id: int | None = None,
@@ -153,6 +156,13 @@ class SQLiteAuditSink:
         completion_tokens: int | None = None,
     ) -> None:
         """Update the audit row identified by ``decision_id``.
+
+        ``action`` / ``skip_reason`` persist the scheduler's post-send
+        downgrade (generation failed, no eligible channel) so the row
+        reflects the real outcome — a row left as ``fire`` would burn
+        rate-limit budget and retire the (event, phase) follow-up for a
+        message that was never delivered. ``message_text`` lands after
+        generation, since ``record`` runs before the LLM call.
 
         Diagnostic fields the v0.6 schema doesn't carry
         (``send_ok`` / ``send_error`` / ``llm_latency_ms`` / token
@@ -169,6 +179,12 @@ class SQLiteAuditSink:
                 ).first()
                 if row is None:
                     return
+                if action is not None:
+                    row.action = _action_to_row(action)
+                if skip_reason is not None:
+                    row.suppress_reason = skip_reason
+                if message_text is not None:
+                    row.message_text = message_text
                 if ingest_message_id is not None:
                     row.sent_message_id = ingest_message_id
                 if voice_used is not None:

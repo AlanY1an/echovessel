@@ -29,6 +29,8 @@ from echovessel.proactive.core.base import (
     ProactiveEvent,
     ProactiveScheduler,
 )
+from echovessel.proactive.core.models import PersonaProfile
+from echovessel.proactive.engines.policy import quiet_window_end
 
 log = logging.getLogger(__name__)
 
@@ -121,26 +123,37 @@ class FollowUpScheduler:
             event = db.get(ConceptNode, event_id)
             if event is None or not self._eligible(event):
                 return
+            persona_id = event.persona_id
+            user_id = event.user_id
+            follow_up_hint = event.follow_up_hint
 
-            decision_id = str(uuid.uuid4())
-            self.proactive_scheduler.notify(
-                ProactiveEvent(
-                    event_type=EventType.FOLLOW_UP_DUE,
-                    persona_id=event.persona_id,
-                    user_id=event.user_id,
-                    created_at=self.now_fn(),
-                    payload={
-                        "event_id": event_id,
-                        "phase": phase,
-                        "follow_up_hint": event.follow_up_hint,
-                        "decision_id": decision_id,
-                    },
-                    critical=False,
-                )
+        decision_id = str(uuid.uuid4())
+        self.proactive_scheduler.notify(
+            ProactiveEvent(
+                event_type=EventType.FOLLOW_UP_DUE,
+                persona_id=persona_id,
+                user_id=user_id,
+                created_at=self.now_fn(),
+                payload={
+                    "event_id": event_id,
+                    "phase": phase,
+                    "follow_up_hint": follow_up_hint,
+                    "decision_id": decision_id,
+                },
+                critical=False,
             )
-            # notify is sync; policy.evaluate runs inline in v3. After fire/
-            # suppress lands an audit row, reload and reschedule next phase.
-            db.refresh(event)
+        )
+        # notify only enqueues — evaluation runs in a deferred task.
+        # Await the inline drain so the fire/suppress row exists before
+        # the next attempt is computed; rescheduling against pre-notify
+        # state would re-arm the SAME phase at delay 0 and double-send.
+        await self.proactive_scheduler.tick_once()
+
+        if self._shutdown:
+            return
+        with self.db_factory() as db:
+            event = db.get(ConceptNode, event_id)
+        if event is not None:
             self._schedule_next(event)
 
     def _compute_next_attempt(self, event: ConceptNode) -> tuple[str, datetime] | None:
@@ -210,12 +223,26 @@ class FollowUpScheduler:
             return None
 
         if last.suppress_reason == "quiet_hours":
-            return max(base, now)
+            # Retrying inside the window would just be suppressed again
+            # — wait until the persona's quiet window ends.
+            return max(base, self._quiet_window_resume(now))
 
         if last.suppress_reason == "rate_limit":
             return max(base, last.timestamp + timedelta(hours=DEFAULT_COOLDOWN_HOURS))
 
         return max(base, last.timestamp + timedelta(hours=DEFAULT_COOLDOWN_HOURS))
+
+    def _quiet_window_resume(self, now: datetime) -> datetime:
+        """Earliest retry moment for a quiet-hours-suppressed attempt:
+        the end of the persona's quiet window, or ``now`` when the
+        window has already passed (recompute after restart) or no
+        profile exists (the quiet gate then never suppresses)."""
+        with self.db_factory() as db:
+            profile = db.get(PersonaProfile, self.persona_id)
+        if profile is None:
+            return now
+        end = quiet_window_end(now, profile.quiet_hours)
+        return end if end is not None else now
 
     def _eligible(self, event: ConceptNode | None) -> bool:
         if event is None:
