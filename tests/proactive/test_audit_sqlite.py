@@ -366,3 +366,69 @@ def test_record_persists_each_phase_value():
     with Session(engine) as db:
         rows = list(db.exec(select(PersistedDecision).order_by(PersistedDecision.id)))
     assert [r.phase for r in rows] == ["pre", "on", "post", "check_1", "check_3"]
+
+
+# ---------------------------------------------------------------------------
+# update_latest · post-send outcome persistence
+# ---------------------------------------------------------------------------
+
+
+def test_update_latest_persists_action_downgrade():
+    """A fire row downgraded after generation failure must persist as
+    suppress — otherwise it burns rate-limit budget and retires the
+    (event, phase) follow-up for a message that was never delivered."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    _seed(engine)
+    sink = _build_sink(engine)
+
+    sink.record(
+        _decision(
+            decision_id="d-downgrade",
+            action=ActionType.SEND.value,
+            trigger=TriggerReason.FOLLOW_UP.value,
+            skip_reason=None,
+            trigger_payload={"event_id": 7, "phase": "on"},
+        )
+    )
+
+    sink.update_latest(
+        "d-downgrade",
+        action=ActionType.SKIP.value,
+        skip_reason=SkipReason.LLM_ERROR.value,
+    )
+
+    with Session(engine) as db:
+        row = db.exec(select(PersistedDecision)).first()
+    assert row.action == "suppress"
+    assert row.suppress_reason == "llm_error"
+    # Provenance untouched — the retry machinery still sees the attempt.
+    assert row.source_event_id == 7
+    assert row.phase == "on"
+
+
+def test_update_latest_persists_message_text():
+    """record() runs before generation (message_text is None at that
+    point); update_latest carries the generated text into the row the
+    admin history tab reads."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    _seed(engine)
+    sink = _build_sink(engine)
+
+    sink.record(
+        _decision(
+            decision_id="d-text",
+            action=ActionType.SEND.value,
+            trigger=TriggerReason.FOLLOW_UP.value,
+            skip_reason=None,
+            message_text=None,
+        )
+    )
+
+    sink.update_latest("d-text", message_text="面试顺利吗？", ingest_message_id=11)
+
+    with Session(engine) as db:
+        row = db.exec(select(PersistedDecision)).first()
+    assert row.message_text == "面试顺利吗？"
+    assert row.sent_message_id == 11

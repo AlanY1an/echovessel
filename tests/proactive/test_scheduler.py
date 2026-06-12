@@ -336,3 +336,99 @@ def test_voice_failure_downgrades_to_text():
     assert audited.voice_used is False
     assert audited.voice_error == "VoiceTransientError"
     assert audited.delivery == "text"
+
+
+# ---------------------------------------------------------------------------
+# Persisted outcome · SQLite audit round-trip
+#
+# FakeAuditSink shares the decision object by reference, so in-memory
+# mutations are invisible to it as a persistence check. These tests run
+# the tick against the real SQLiteAuditSink to pin what actually lands
+# in the proactive_decisions table.
+# ---------------------------------------------------------------------------
+
+
+def _sqlite_sink():
+    from sqlmodel import Session, select
+
+    from echovessel.memory import create_all_tables, create_engine
+    from echovessel.memory.models import Persona, User
+    from echovessel.memory.models import ProactiveDecision as PersistedDecision
+    from echovessel.proactive.execution.audit import SQLiteAuditSink
+
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    with Session(engine) as db:
+        db.add(Persona(id="p", display_name="P"))
+        db.add(User(id="u", display_name="U"))
+        db.commit()
+
+    sink = SQLiteAuditSink(db_factory=lambda: Session(engine))
+
+    def _rows():
+        with Session(engine) as db:
+            return list(db.exec(select(PersistedDecision)))
+
+    return sink, _rows
+
+
+def test_generation_failure_persists_suppress_row():
+    """A fire downgraded by LLM failure must not stay action='fire' in
+    the table — that would burn max_per_24h budget and retire the
+    (event, phase) follow-up without anything being delivered."""
+    now = datetime(2026, 4, 15, 12, 0)
+    sink, rows = _sqlite_sink()
+    boom = make_fake_proactive_fn(raise_exc=RuntimeError)
+    scheduler, _ = _build_scheduler(audit=sink, proactive_fn=boom, clock=lambda: now)
+
+    scheduler.queue.push(_shock_event(now))
+    decision = _run(scheduler.tick_once())
+
+    assert decision.action == ActionType.SKIP.value
+    persisted = rows()
+    assert len(persisted) == 1
+    assert persisted[0].action == "suppress"
+    assert persisted[0].suppress_reason == SkipReason.LLM_ERROR.value
+    # A failed attempt does not count against the 24h fire budget.
+    assert sink.count_sends_in_last_24h(now=now) == 0
+
+
+def test_no_pushable_channel_persists_suppress_row():
+    now = datetime(2026, 4, 15, 12, 0)
+    sink, rows = _sqlite_sink()
+    channel = FakeChannel(name="web", channel_id="web", supports_outgoing_push=False)
+    scheduler, _ = _build_scheduler(audit=sink, channel=channel, clock=lambda: now)
+
+    scheduler.queue.push(_shock_event(now))
+    decision = _run(scheduler.tick_once())
+
+    assert decision.action == ActionType.SKIP.value
+    persisted = rows()
+    assert len(persisted) == 1
+    assert persisted[0].action == "suppress"
+    assert persisted[0].suppress_reason == decision.skip_reason
+    assert sink.count_sends_in_last_24h(now=now) == 0
+
+
+def test_fired_decision_persists_message_text():
+    """record() runs before generation, so the row starts with NULL
+    text; the post-send update must carry the generated text into the
+    column the admin history tab displays."""
+    now = datetime(2026, 4, 15, 12, 0)
+    sink, rows = _sqlite_sink()
+    scheduler, state = _build_scheduler(
+        audit=sink,
+        proactive_fn=make_fake_proactive_fn(text="想你了，今天过得怎么样？"),
+        clock=lambda: now,
+    )
+
+    scheduler.queue.push(_shock_event(now))
+    decision = _run(scheduler.tick_once())
+
+    assert decision.action == ActionType.SEND.value
+    assert state["channel"].sent == ["想你了，今天过得怎么样？"]
+    persisted = rows()
+    assert len(persisted) == 1
+    assert persisted[0].action == "fire"
+    assert persisted[0].message_text == "想你了，今天过得怎么样？"
+    assert persisted[0].sent_message_id is not None

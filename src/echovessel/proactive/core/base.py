@@ -176,6 +176,9 @@ class ProactiveDecision:
     def update_outcome(
         self,
         *,
+        action: str | None = None,
+        skip_reason: str | None = None,
+        message_text: str | None = None,
         send_ok: bool | None = None,
         send_error: str | None = None,
         ingest_message_id: int | None = None,
@@ -188,7 +191,15 @@ class ProactiveDecision:
     ) -> None:
         """Fill in post-evaluate fields. Called once by the scheduler after
         the send + ingest round-trip completes. Accepts None for 'don't
-        touch this field'."""
+        touch this field'. ``action`` / ``skip_reason`` cover the
+        downgrade path (generation failed, no channel) so the audit row
+        reflects the real outcome instead of the pre-send intent."""
+        if action is not None:
+            self.action = action
+        if skip_reason is not None:
+            self.skip_reason = skip_reason
+        if message_text is not None:
+            self.message_text = message_text
         if send_ok is not None:
             self.send_ok = send_ok
         if send_error is not None:
@@ -425,6 +436,9 @@ class AuditSink(Protocol):
         self,
         decision_id: str,
         *,
+        action: str | None = None,
+        skip_reason: str | None = None,
+        message_text: str | None = None,
         send_ok: bool | None = None,
         send_error: str | None = None,
         ingest_message_id: int | None = None,
@@ -464,6 +478,14 @@ class ProactiveScheduler(Protocol):
         """Push an event into the internal queue. MUST be non-blocking
         and safe to call from any thread/task context — the queue drops
         the oldest non-critical event when full (spec §2.5)."""
+
+    async def tick_once(self) -> Any:
+        """Drain and evaluate every queued event inline. Awaiting this
+        guarantees decisions for previously ``notify``-ed events have
+        been recorded to the audit sink before control returns —
+        producers that compute retries off the decision row (the
+        FollowUpScheduler) await this instead of racing the deferred
+        drain task that ``notify`` spawns."""
 
 
 __all__ = [

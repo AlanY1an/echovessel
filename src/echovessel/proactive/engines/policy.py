@@ -140,6 +140,13 @@ class PolicyEngine:
                 skip_reason=SkipReason.NO_TRIGGER_MATCH,
             )
 
+        # Provenance must land on every decision — fire AND skip. The
+        # audit sink derives source_event_id / phase from this payload,
+        # and FollowUpScheduler's cooldown / attempt-cap / suppression
+        # queries filter on those columns, so a gate skip without it
+        # would be invisible to the retry machinery.
+        decision.trigger_payload = dict(target.payload or {})
+
         # Load shared state once. The DB-backed gates short-circuit
         # gracefully when ``db_factory`` is unwired (legacy tests).
         profile = self._load_profile(persona_id)
@@ -220,7 +227,6 @@ class PolicyEngine:
         decision.action = ActionType.SEND.value
         decision.skip_reason = None
         decision.trigger = _trigger_for(target).value
-        decision.trigger_payload = dict(target.payload or {})
         return decision
 
     # ------------------------------------------------------------------
@@ -449,6 +455,19 @@ def _in_quiet_hours(now: datetime, quiet_hours: list[int]) -> bool:
     return h >= start or h < end
 
 
+def quiet_window_end(now: datetime, quiet_hours: list[int]) -> datetime | None:
+    """Next moment the quiet window ends, or ``None`` when ``now`` is
+    outside it. Same ``[start_hour, end_hour]`` wrap-midnight semantics
+    as :func:`_in_quiet_hours` — the window ends at ``end_hour:00``."""
+    if not _in_quiet_hours(now, quiet_hours):
+        return None
+    end = quiet_hours[1]
+    candidate = now.replace(hour=end, minute=0, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += timedelta(days=1)
+    return candidate
+
+
 def _matches_forbidden(hint: str, forbidden: list[str]) -> bool:
     """Case-insensitive substring match. Keyword filter, not a
     semantic gate — the LLM's ``follow_up_hint`` writer is responsible
@@ -478,4 +497,5 @@ __all__ = [
     "PolicyEngine",
     "SHOCK_IMPACT",
     "TriggerMatch",
+    "quiet_window_end",
 ]

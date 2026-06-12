@@ -198,6 +198,8 @@ class DefaultScheduler(ProactiveScheduler):
             decision.memory_snapshot_hash = outcome.snapshot.snapshot_hash
             self.audit.update_latest(
                 decision.decision_id,
+                action=decision.action,
+                skip_reason=decision.skip_reason,
                 llm_latency_ms=outcome.latency_ms,
                 send_error=outcome.error,
             )
@@ -222,6 +224,8 @@ class DefaultScheduler(ProactiveScheduler):
             )
             self.audit.update_latest(
                 decision.decision_id,
+                action=decision.action,
+                skip_reason=decision.skip_reason,
                 llm_latency_ms=outcome.latency_ms,
             )
             return
@@ -298,6 +302,7 @@ class DefaultScheduler(ProactiveScheduler):
 
         self.audit.update_latest(
             decision.decision_id,
+            message_text=outcome.message.text,
             send_ok=send_ok,
             send_error=send_error,
             ingest_message_id=ingest_message_id,

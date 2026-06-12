@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import pytest
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from echovessel.core.types import NodeType
 from echovessel.memory import create_all_tables, create_engine
@@ -37,7 +37,7 @@ from echovessel.proactive.core.models import (
     PersonaProfile,
     ProactiveState,
 )
-from echovessel.proactive.engines.policy import PolicyEngine
+from echovessel.proactive.engines.policy import PolicyEngine, quiet_window_end
 from echovessel.proactive.execution.audit import SQLiteAuditSink
 from tests.proactive.fakes import InMemoryMemoryApi
 
@@ -538,3 +538,135 @@ def test_missing_profile_does_not_crash_treats_as_no_quiet_hours():
         now=datetime(2026, 5, 1, 12, 0),
     )
     assert decision.action == ActionType.SEND.value
+
+
+# ---------------------------------------------------------------------------
+# Skip provenance · trigger_payload on gate skips
+# ---------------------------------------------------------------------------
+
+
+def test_gate_skip_carries_event_provenance():
+    """Every gate skip carries the event payload, so the persisted row
+    gets source_event_id/phase — the FollowUpScheduler's cooldown,
+    attempt-cap, and suppression queries filter on those columns and
+    would otherwise never see suppressed attempts."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    _seed(engine, profile=_profile(quiet_hours=[23, 7]))
+    with Session(engine) as db:
+        db.add(_state(score=0.7))
+        db.add(_event(relational_tags=["commitment"]))
+        db.commit()
+
+    pol = _build_engine(engine)
+    decision = pol.evaluate(
+        [_follow_up_event(event_id=1, phase="pre")],
+        persona_id="p",
+        user_id="self",
+        now=datetime(2026, 5, 2, 3, 0),  # inside quiet window
+    )
+
+    assert decision.action == ActionType.SKIP.value
+    assert decision.skip_reason == SkipReason.QUIET_HOURS.value
+    assert decision.trigger_payload["event_id"] == 1
+    assert decision.trigger_payload["phase"] == "pre"
+
+    # And it survives the round-trip into the audit table.
+    pol.audit.record(decision)
+    with Session(engine) as db:
+        row = db.exec(select(PersistedDecision)).first()
+    assert row is not None
+    assert row.action == "suppress"
+    assert row.suppress_reason == "quiet_hours"
+    assert row.source_event_id == 1
+    assert row.phase == "pre"
+
+
+@pytest.mark.parametrize(
+    "reason_builder",
+    [
+        "forbidden_topic",
+        "rate_limited",
+        "low_engagement",
+    ],
+)
+def test_every_gate_skip_persists_provenance(reason_builder: str):
+    """Gates 2 / 4 / 5 also stamp provenance before short-circuiting."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+
+    if reason_builder == "forbidden_topic":
+        _seed(engine, profile=_profile(forbidden_topics=["politics"]))
+        with Session(engine) as db:
+            db.add(_state(score=0.7))
+            db.add(_event(follow_up_hint="聊聊 politics"))
+            db.commit()
+    elif reason_builder == "rate_limited":
+        _seed(engine, profile=_profile())
+        with Session(engine) as db:
+            db.add(_state(score=0.7))
+            db.add(_event(relational_tags=["commitment"]))
+            for i in range(3):
+                db.add(
+                    PersistedDecision(
+                        decision_id=f"d-prior-{i}",
+                        timestamp=datetime(2026, 5, 1, 8 + i, 0),
+                        persona_id="p",
+                        user_id="self",
+                        trigger_type="follow_up",
+                        action="fire",
+                        created_at=datetime(2026, 5, 1, 8 + i, 0),
+                    )
+                )
+            db.commit()
+    else:  # low_engagement
+        _seed(engine, profile=_profile())
+        with Session(engine) as db:
+            db.add(_state(score=0.2))
+            db.add(_event(relational_tags=["unresolved"], emotional_impact=2))
+            db.commit()
+
+    pol = _build_engine(engine)
+    decision = pol.evaluate(
+        [_follow_up_event(event_id=1, phase="on")],
+        persona_id="p",
+        user_id="self",
+        now=datetime(2026, 5, 1, 12, 0),
+    )
+
+    assert decision.action == ActionType.SKIP.value
+    assert decision.skip_reason == reason_builder
+    assert decision.trigger_payload["event_id"] == 1
+    assert decision.trigger_payload["phase"] == "on"
+
+    pol.audit.record(decision)
+    with Session(engine) as db:
+        rows = db.exec(
+            select(PersistedDecision).where(PersistedDecision.source_event_id == 1)
+        ).all()
+    assert len(rows) == 1
+    assert rows[0].phase == "on"
+    assert rows[0].action == "suppress"
+
+
+# ---------------------------------------------------------------------------
+# quiet_window_end helper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "now,quiet,expected",
+    [
+        # wrap-midnight window, before midnight → ends tomorrow 07:00
+        (datetime(2026, 5, 1, 23, 30), [23, 7], datetime(2026, 5, 2, 7, 0)),
+        # wrap-midnight window, after midnight → ends today 07:00
+        (datetime(2026, 5, 2, 3, 0), [23, 7], datetime(2026, 5, 2, 7, 0)),
+        # same-day window → ends today 17:00
+        (datetime(2026, 5, 1, 12, 0), [9, 17], datetime(2026, 5, 1, 17, 0)),
+        # outside the window → None
+        (datetime(2026, 5, 1, 8, 0), [23, 7], None),
+        (datetime(2026, 5, 1, 7, 0), [23, 7], None),  # end boundary exclusive
+    ],
+)
+def test_quiet_window_end(now, quiet, expected):
+    assert quiet_window_end(now, quiet) == expected
