@@ -465,15 +465,20 @@ async def consolidate_session(
     if skip_extraction:
         # Load already-committed events from the prior attempt. No LLM
         # call, no new rows, no new vectors — just rehydrate what B
-        # already wrote so stages C / D / E can see them. The payload
-        # restores the derived outputs (entities / mood / summary) so
-        # the post-extraction writes below can replay idempotently.
+        # already wrote so stages C / D / E can see them. Extraction
+        # persists both EVENT and INTENTION rows (persona commitments),
+        # so both types must come back; the THOUGHT session-summary node
+        # stays excluded. The payload restores the derived outputs
+        # (entities / mood / summary) so the post-extraction writes
+        # below can replay idempotently.
         created_events = list(
             db.exec(
                 select(ConceptNode)
                 .where(
                     ConceptNode.source_session_id == session.id,
-                    ConceptNode.type == NodeType.EVENT,
+                    ConceptNode.type.in_(  # type: ignore[union-attr]
+                        (NodeType.EVENT, NodeType.INTENTION)
+                    ),
                     ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
                 )
                 .order_by(ConceptNode.created_at)
