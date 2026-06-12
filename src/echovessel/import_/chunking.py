@@ -6,9 +6,11 @@ Strategy summary:
     with a sliding window of ``WINDOW_CHARS`` (1500) / ``OVERLAP_CHARS``
     (500) so the LLM never sees more than a window at once but still
     gets context continuity between slices.
-  - For CSV-looking text (lines of comma-separated values) we emit one
-    chunk per ``CSV_BATCH`` rows so multiple rows share a single LLM
-    call while still keeping the chunk under the size cap.
+  - For CSV-looking text (lines of comma-separated values) we emit
+    batches of up to ``CSV_BATCH`` lines per chunk so multiple rows
+    share a single LLM call while still keeping the chunk under the
+    size cap. The header line is repeated at the top of every batch so
+    each independent LLM call sees the column names.
 
 The chunker is intentionally format-ignorant after normalization — the
 "is this csv" detection is a simple heuristic (every non-empty line
@@ -116,10 +118,24 @@ def _looks_like_csv(text: str) -> bool:
 
 
 def _csv_chunks(text: str) -> Iterator[str]:
+    """Batch CSV rows so each batch fits the LLM call budget.
+
+    Each chunk is an independent LLM call with no shared context, so
+    every batch leads with the header line — otherwise batches after
+    the first would present bare values with no column names. The
+    header counts toward the ``CSV_BATCH`` line budget, leaving
+    ``CSV_BATCH - 1`` data rows per chunk.
+    """
     lines = [ln for ln in text.splitlines() if ln.strip()]
-    for i in range(0, len(lines), CSV_BATCH):
-        batch = lines[i : i + CSV_BATCH]
-        yield "\n".join(batch)
+    if not lines:
+        return
+    header, rows = lines[0], lines[1:]
+    if not rows:
+        yield header
+        return
+    rows_per_batch = max(CSV_BATCH - 1, 1)
+    for i in range(0, len(rows), rows_per_batch):
+        yield "\n".join([header, *rows[i : i + rows_per_batch]])
 
 
 __all__ = [
