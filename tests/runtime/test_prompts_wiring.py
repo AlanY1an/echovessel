@@ -15,8 +15,10 @@ from echovessel.prompts import (
     EXTRACTION_SYSTEM_PROMPT,
     JUDGE_SYSTEM_PROMPT,
     REFLECTION_SYSTEM_PROMPT,
+    ExtractionParseError,
 )
 from echovessel.runtime.llm import StubProvider
+from echovessel.runtime.llm.errors import LLMTransientError
 from echovessel.runtime.wiring.prompts import (
     PROACTIVE_SYSTEM_PROMPT,
     make_extract_fn,
@@ -141,11 +143,17 @@ async def test_make_extract_fn_empty_messages_returns_empty_without_calling_llm(
     assert called == []
 
 
-async def test_make_extract_fn_drops_on_parse_error():
+async def test_make_extract_fn_raises_transient_on_parse_error():
+    # A parse failure is retriable; an empty result is a decision. Returning
+    # empty here would let consolidate commit `extracted_events=True` with
+    # zero events and close the session permanently — the worker's transient
+    # retry (and terminal FAILED state) is the correct escalation path.
     stub = StubProvider(fallback="not json")
     extract = make_extract_fn(stub)
-    out = await extract(_make_messages())
-    assert out.events == []
+    with pytest.raises(LLMTransientError) as excinfo:
+        await extract(_make_messages())
+    assert isinstance(excinfo.value.__cause__, ExtractionParseError)
+    assert "parse" in str(excinfo.value).lower()
 
 
 async def test_make_reflect_fn_happy_path():
