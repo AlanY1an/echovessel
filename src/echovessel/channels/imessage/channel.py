@@ -224,7 +224,15 @@ class IMessageChannel:
         if self._client is None:
             self._client = self._build_client()
 
-        await self._connect_client(self._client)
+        try:
+            await self._connect_client(self._client)
+        except BaseException:
+            # ImsgRpcClient is single-use — a client whose connect
+            # failed can never be restarted, so drop the reference and
+            # let a later start() build a fresh one.
+            if self._owns_client:
+                self._client = None
+            raise
         self._ready = True
         self._supervisor_task = asyncio.create_task(
             self._supervise_client(), name="imessage-supervisor"
@@ -248,21 +256,30 @@ class IMessageChannel:
     async def _connect_client(self, client: ImsgRpcClient) -> None:
         """Start one client, wire notification handlers, begin watching."""
         await client.start()
-        client.subscribe("message", self._handle_notification)
-        # imsg also emits `error` notifications when the watch pipeline
-        # itself has trouble (FSEvents hiccup, transient db lock, …).
-        # Log them at warning level — they do not correspond to a user
-        # message but are useful for triage.
-        client.subscribe("error", self._handle_watch_error)
-
-        # Ask imsg to start pushing new-message notifications.
+        # The subprocess is live from here on — every failure below must
+        # stop an owned client before propagating, or the imsg process
+        # (plus its reader/stderr tasks) outlives the failed connect.
+        # ImsgRpcTimeoutError subclasses TimeoutError, not ImsgRpcError,
+        # so the catch must be broad to cover the subscribe timeout.
+        # Injected clients are the injector's to stop (same ownership
+        # rule as ``stop()``).
         try:
+            client.subscribe("message", self._handle_notification)
+            # imsg also emits `error` notifications when the watch pipeline
+            # itself has trouble (FSEvents hiccup, transient db lock, …).
+            # Log them at warning level — they do not correspond to a user
+            # message but are useful for triage.
+            client.subscribe("error", self._handle_watch_error)
+
+            # Ask imsg to start pushing new-message notifications.
+            # Surface any failure so runtime's startup logs show it with
+            # the diagnostic string the client assembled; the channel is
+            # unusable at this point.
             await client.request("watch.subscribe", {})
-        except ImsgRpcError:
-            # Surface the failure so runtime's startup logs show it
-            # with the diagnostic string the client assembled; the
-            # channel is unusable at this point.
-            await client.stop()
+        except BaseException:
+            if self._owns_client:
+                with contextlib.suppress(Exception):
+                    await client.stop()
             raise
 
     async def _supervise_client(self) -> None:
