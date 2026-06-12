@@ -29,6 +29,7 @@ from importlib import resources
 from pathlib import Path
 
 import click
+from click.core import ParameterSource
 
 from echovessel.runtime.app import (
     Runtime,
@@ -86,10 +87,14 @@ def cli() -> None:
 
 
 def _setup_logging(level: str) -> None:
+    resolved = getattr(logging, level.upper(), logging.INFO)
     logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
+        level=resolved,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # basicConfig is a no-op when handlers already exist (e.g. a second
+    # call after config load), so apply the level explicitly.
+    logging.getLogger().setLevel(resolved)
 
 
 def _resolve_config_path(override: str | None) -> Path:
@@ -277,9 +282,29 @@ def run(config_path: str | None, log_level: str, no_embedder: bool) -> None:
         click.echo(f"Config invalid: {e}", err=True)
         sys.exit(2)
 
+    # `[runtime].log_level` applies when --log-level is left at its
+    # default; an explicit CLI flag always wins over the config file.
+    flag_source = click.get_current_context().get_parameter_source("log_level")
+    if flag_source == ParameterSource.DEFAULT:
+        _setup_logging(cfg.runtime.log_level)
+
     data_dir = Path(cfg.runtime.data_dir).expanduser()
     data_dir.mkdir(parents=True, exist_ok=True)
     pidfile = data_dir / "runtime.pid"
+
+    if pidfile.exists():
+        live_pid = _live_daemon_pid(pidfile)
+        if live_pid is not None:
+            click.echo(
+                f"error: daemon already running (pid={live_pid}, pidfile={pidfile})\n"
+                f"       run `echovessel stop` first, or `echovessel status` to inspect",
+                err=True,
+            )
+            sys.exit(1)
+        # Dead PID (or unreadable pidfile): the previous daemon exited
+        # without cleanup. Remove the stale file and start normally.
+        log.warning("removing stale pidfile %s (recorded process is gone)", pidfile)
+        pidfile.unlink(missing_ok=True)
 
     asyncio.run(_async_run(resolved, pidfile, no_embedder=no_embedder))
 
@@ -301,7 +326,10 @@ async def _async_run(config_path: Path, pidfile: Path, *, no_embedder: bool) -> 
             log.error("embedder load failed: %s", e)
             sys.exit(4)
 
-    rt = Runtime.build(config_path, embed_fn=embed_fn)
+    # --no-embedder injects a zero embedder that is NOT the configured
+    # model; skipping the sync keeps real vectors from being overwritten
+    # with placeholder ones.
+    rt = Runtime.build(config_path, embed_fn=embed_fn, sync_embedder=not no_embedder)
 
     try:
         await rt.start()
@@ -319,8 +347,11 @@ async def _async_run(config_path: Path, pidfile: Path, *, no_embedder: bool) -> 
         await rt.wait_until_shutdown()
     finally:
         await rt.stop()
+        # Only remove the pidfile if it still records THIS process — a
+        # pidfile owned by another daemon must survive our exit.
         try:
-            pidfile.unlink()
+            if _read_pidfile(pidfile).pid == os.getpid():
+                pidfile.unlink()
         except FileNotFoundError:
             pass
         except Exception as e:  # noqa: BLE001
@@ -387,6 +418,27 @@ def _read_pidfile(path: Path) -> PidfileInfo:
             port = None
     version = int(payload.get("version", 0) or 0)
     return PidfileInfo(pid=pid, control_port=port, version=version)
+
+
+def _live_daemon_pid(pidfile: Path) -> int | None:
+    """Return the PID recorded in *pidfile* if that process is alive.
+
+    Returns None when the pidfile is unreadable/malformed or the
+    recorded process no longer exists (stale file). PermissionError
+    from the liveness probe means the process exists but belongs to
+    another user — treated as alive.
+    """
+    try:
+        info = _read_pidfile(pidfile)
+    except (ValueError, OSError):
+        return None
+    try:
+        os.kill(info.pid, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        return info.pid
+    return info.pid
 
 
 # ---------------------------------------------------------------------------

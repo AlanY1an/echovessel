@@ -487,6 +487,121 @@ def test_stop_stale_pid_removes_pidfile(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# run · single-instance guard + config log_level
+# ---------------------------------------------------------------------------
+
+
+def _fake_async_runner(calls: list) -> object:
+    """Stand-in for asyncio.run: records the coroutine and closes it so
+    the daemon never actually starts inside a CliRunner invocation."""
+
+    def _fake(coro):
+        calls.append(coro)
+        coro.close()
+
+    return _fake
+
+
+def test_run_refuses_when_daemon_already_running(tmp_path: Path) -> None:
+    """A pidfile recording a live process (this very test process) must
+    make `run` exit 1 without touching the pidfile or starting a second
+    daemon."""
+    cfg = _write_config(tmp_path)
+    pidfile = tmp_path / "data" / "runtime.pid"
+    pidfile.write_text(str(os.getpid()))
+
+    calls: list = []
+    with patch("echovessel.runtime.launcher.asyncio.run", _fake_async_runner(calls)):
+        result = _runner().invoke(cli, ["run", "--config", str(cfg)])
+
+    assert result.exit_code == 1
+    assert "already running" in _stream(result)
+    assert f"pid={os.getpid()}" in _stream(result)
+    # The first daemon's pidfile survives untouched, and no second
+    # daemon was started.
+    assert pidfile.read_text() == str(os.getpid())
+    assert calls == []
+
+
+def test_run_removes_stale_pidfile_and_starts(tmp_path: Path) -> None:
+    """A pidfile whose recorded PID is dead is stale: `run` removes it
+    and proceeds with startup."""
+    cfg = _write_config(tmp_path)
+    pidfile = tmp_path / "data" / "runtime.pid"
+    pidfile.write_text("999999")
+
+    def fake_kill(pid: int, sig: int) -> None:
+        raise ProcessLookupError(f"no such process {pid}")
+
+    calls: list = []
+    with (
+        patch("echovessel.runtime.launcher.os.kill", fake_kill),
+        patch("echovessel.runtime.launcher.asyncio.run", _fake_async_runner(calls)),
+    ):
+        result = _runner().invoke(cli, ["run", "--config", str(cfg)])
+
+    assert result.exit_code == 0, _stream(result)
+    assert not pidfile.exists(), "stale pidfile should have been removed before startup"
+    assert len(calls) == 1, "daemon startup should have proceeded"
+
+
+def test_run_malformed_pidfile_treated_as_stale(tmp_path: Path) -> None:
+    cfg = _write_config(tmp_path)
+    pidfile = tmp_path / "data" / "runtime.pid"
+    pidfile.write_text("not-a-pid")
+
+    calls: list = []
+    with patch("echovessel.runtime.launcher.asyncio.run", _fake_async_runner(calls)):
+        result = _runner().invoke(cli, ["run", "--config", str(cfg)])
+
+    assert result.exit_code == 0, _stream(result)
+    assert not pidfile.exists()
+    assert len(calls) == 1
+
+
+def test_run_applies_config_log_level_when_flag_default(tmp_path: Path) -> None:
+    """`[runtime].log_level` drives the root logger when --log-level is
+    left at its CLI default."""
+    import logging
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(SMOKE_TOML.format(data_dir=str(data_dir)).replace('"warn"', '"debug"'))
+
+    root = logging.getLogger()
+    old_level = root.level
+    calls: list = []
+    try:
+        with patch("echovessel.runtime.launcher.asyncio.run", _fake_async_runner(calls)):
+            result = _runner().invoke(cli, ["run", "--config", str(cfg)])
+        assert result.exit_code == 0, _stream(result)
+        assert root.level == logging.DEBUG
+    finally:
+        root.setLevel(old_level)
+
+
+def test_run_explicit_log_level_flag_wins_over_config(tmp_path: Path) -> None:
+    import logging
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(SMOKE_TOML.format(data_dir=str(data_dir)).replace('"warn"', '"debug"'))
+
+    root = logging.getLogger()
+    old_level = root.level
+    calls: list = []
+    try:
+        with patch("echovessel.runtime.launcher.asyncio.run", _fake_async_runner(calls)):
+            result = _runner().invoke(cli, ["run", "--config", str(cfg), "--log-level", "error"])
+        assert result.exit_code == 0, _stream(result)
+        assert root.level == logging.ERROR
+    finally:
+        root.setLevel(old_level)
+
+
+# ---------------------------------------------------------------------------
 # Pidfile lifecycle + SIGTERM integration
 # ---------------------------------------------------------------------------
 

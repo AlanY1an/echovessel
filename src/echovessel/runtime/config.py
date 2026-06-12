@@ -90,7 +90,7 @@ class MemorySection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     db_path: str = "memory.db"
-    embedder: str = "all-MiniLM-L6-v2"
+    embedder: str = "intfloat/multilingual-e5-small"
     retrieve_k: int = Field(default=10, ge=1, le=50)
     relational_bonus_weight: float = 1.0
     recent_window_size: int = Field(default=20, ge=1, le=200)
@@ -401,7 +401,7 @@ class VoiceSection(BaseModel):
     enabled: bool = False
     tts_provider: Literal["fishaudio", "stub"] = "fishaudio"
     stt_provider: Literal["whisper_api", "stub"] = "whisper_api"
-    tts_api_key_env: str = "FISH_API_KEY"
+    tts_api_key_env: str = "FISH_AUDIO_KEY"
     stt_api_key_env: str = "OPENAI_API_KEY"
     default_audio_format: Literal["mp3", "wav", "pcm16"] = "mp3"
 

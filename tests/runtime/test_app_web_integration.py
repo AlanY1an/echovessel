@@ -208,6 +208,11 @@ async def test_runtime_web_bind_failure_is_detected_and_nonfatal() -> None:
         assert rt._web_uvicorn_server is None
         assert rt._web_channel is None
         assert rt.broadcaster is None
+        # The registry must not keep a ghost web channel — it would be
+        # visible to the dispatcher and selectable as a proactive
+        # delivery target with no HTTP server behind it.
+        assert rt.ctx.registry.get("web") is None
+        assert "web" not in rt.ctx.registry.channel_ids()
 
         # The rest of the runtime came up (dispatcher + workers).
         assert rt._dispatcher is not None

@@ -25,6 +25,7 @@ Only depends on `echovessel.core`. Must not import from voice/channels/runtime.
 
 from echovessel.memory.consolidate import consolidate_session
 from echovessel.memory.db import create_all_tables, create_engine
+from echovessel.memory.embedding_sync import ensure_embedding_model
 from echovessel.memory.episodic import update_episodic_state
 from echovessel.memory.imports import (
     EventInput,
@@ -90,6 +91,7 @@ __all__ = [
     "create_engine",
     "create_all_tables",
     "ensure_schema_up_to_date",
+    "ensure_embedding_model",
     # Observers
     "MemoryEventObserver",
     "NullObserver",

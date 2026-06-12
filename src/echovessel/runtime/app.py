@@ -46,6 +46,7 @@ from echovessel.memory import (
     User,
     create_all_tables,
     create_engine,
+    ensure_embedding_model,
     ensure_schema_up_to_date,
     register_observer,
     unregister_observer,
@@ -346,6 +347,7 @@ class Runtime:
         config_override: Config | None = None,
         embed_fn: EmbedCallable | None = None,
         llm: LLMProvider | None = None,
+        sync_embedder: bool = True,
     ) -> Runtime:
         """Run spec §3 startup steps 1-8 (no background task launches yet).
 
@@ -433,6 +435,16 @@ class Runtime:
 
         if embed_fn is None:
             embed_fn = build_zero_embedder()
+
+        # Stored vectors must all come from the configured embedder —
+        # mixing models corrupts KNN similarity. The sync re-embeds the
+        # whole store when [memory].embedder changed since the last run.
+        # Fatal on failure, like the schema migration: a half-synced
+        # vector store silently degrades every retrieval. Skipped when
+        # the caller injects an embedder that isn't the configured model
+        # (`--no-embedder` dry runs pass sync_embedder=False).
+        if sync_embedder:
+            ensure_embedding_model(engine, backend, config.memory.embedder, embed_fn)
 
         # --- Worker ζ · Cost tracking wrapper ---------------------------
         #
@@ -684,6 +696,12 @@ class Runtime:
                     e,
                     exc_info=True,
                 )
+                # _start_web_channel registers the WebChannel before the
+                # fallible uvicorn steps; drop it from the registry so the
+                # dispatcher and proactive delivery never see a web channel
+                # with no HTTP server behind it. unregister is a no-op when
+                # the failure happened before registration.
+                self.ctx.registry.unregister("web")
                 self._web_channel = None
                 self._web_uvicorn_server = None
                 self._web_uvicorn_task = None
@@ -1615,9 +1633,10 @@ class Runtime:
     async def reload(self) -> list[str]:
         """Reload config and swap LLM provider. See spec §6.5.
 
-        Only changes to [llm] / [consolidate] / [idle_scanner] / [proactive]
-        are honoured; structural sections (memory / channels / persona /
-        runtime) require a full restart.
+        Only changes to [llm] and the [consolidate] tunables mirrored in
+        ``_reload_unlocked`` are honoured; everything else — including
+        [idle_scanner] and [proactive], whose values are copied into live
+        objects at construction — requires a full restart.
 
         Returns a list of component names that were actually reloaded
         (e.g. ``["llm"]``). Empty list means the call was a no-op (no
@@ -1701,7 +1720,11 @@ class Runtime:
                 reloaded.append("consolidate.reflection_hard_gate_24h")
 
         self.ctx.config = new_config
-        log.info("config reloaded from %s", self.ctx.config_path)
+        log.info(
+            "config reloaded from %s (applied: %s)",
+            self.ctx.config_path,
+            ", ".join(reloaded) if reloaded else "none — other sections need a restart",
+        )
         return reloaded
 
     # ---- Worker ζ · cost ledger accessors (channels.web cannot import) -----
@@ -1799,39 +1822,67 @@ class Runtime:
                     e,
                 )
 
-    def _atomic_write_config_field(
+    def _merged_config_patches(
         self,
-        *,
-        section: str,
-        field: str,
-        value: Any,
-    ) -> None:
-        """Atomic read-modify-write on `config.toml` (spec §17a.7).
+        patches: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Read `config.toml` and return its dict with *patches* merged.
 
-        Implementation mirrors the spec pseudocode exactly:
-
-          1. Read + parse current TOML via stdlib `tomllib`.
-          2. Mutate the nested dict for the requested section/field.
-          3. Serialize via `tomli_w.dumps()` into a tempfile in the
-             same parent directory (so `os.replace` can be atomic).
-          4. `os.replace` the tempfile over the original path (POSIX
-             atomic rename).
-          5. Best-effort `fsync` on the parent directory inode so the
-             rename is durable across power loss.
-
-        No rollback in this function — the caller (`update_persona_voice_enabled`)
-        is responsible for not mutating any in-memory state until this
-        function returns cleanly.
+        `patches` is a nested dict ``{section: {field: value}}``. The
+        returned dict is what callers validate and/or hand to
+        :meth:`_atomic_write_config_toml` — the same object flows through
+        both steps, so the TOML that lands on disk is exactly the one
+        that passed validation.
         """
-        assert self.ctx.config_path is not None  # caller guarantees
+        assert self.ctx.config_path is not None, (
+            "caller guarantees a config file exists (config_override "
+            "mode is rejected before this point)"
+        )
 
         path = Path(self.ctx.config_path)
         with open(path, "rb") as f:
             data = tomllib.load(f)
 
-        if section not in data:
-            data[section] = {}
-        data[section][field] = value
+        for section, fields in patches.items():
+            if not isinstance(data.get(section), dict):
+                data[section] = {}
+            for fname, value in fields.items():
+                data[section][fname] = value
+        return data
+
+    @staticmethod
+    def _validate_config_dict(merged: dict[str, Any]) -> None:
+        """Validate a merged TOML dict against the :class:`Config` schema.
+
+        Re-raises pydantic's ``ValidationError`` as ``ValueError`` so
+        callers can treat any "invalid value" uniformly regardless of
+        which field triggered it.
+        """
+        from pydantic import ValidationError
+
+        try:
+            Config.model_validate(merged)
+        except ValidationError as e:
+            raise ValueError(str(e)) from e
+
+    def _atomic_write_config_toml(self, data: dict[str, Any]) -> None:
+        """Commit a full config dict to `config.toml` atomically (spec §17a.7).
+
+          1. Serialize via `tomli_w.dumps()` into a tempfile in the
+             same parent directory (so `os.replace` can be atomic).
+          2. `os.replace` the tempfile over the original path (POSIX
+             atomic rename) — no intermediate partial states are
+             visible on disk even if the process is killed mid-way.
+          3. Best-effort `fsync` on the parent directory inode so the
+             rename is durable across power loss.
+
+        No rollback in this function — callers must not mutate any
+        in-memory state until it returns cleanly, and they validate the
+        dict (`Config.model_validate`) beforehand where malformed TOML
+        on disk would be unacceptable.
+        """
+        assert self.ctx.config_path is not None  # caller guarantees
+        path = Path(self.ctx.config_path)
 
         # Tempfile in same dir → os.replace is atomic on POSIX.
         parent = path.parent
@@ -1861,67 +1912,15 @@ class Runtime:
         finally:
             os.close(dir_fd)
 
-    def _atomic_write_config_patches(
+    def _atomic_write_config_field(
         self,
-        patches: dict[str, dict[str, Any]],
+        *,
+        section: str,
+        field: str,
+        value: Any,
     ) -> None:
-        """Atomic multi-field write for the admin PATCH route (Worker η).
-
-        `patches` is a nested dict ``{section: {field: value}}``. The
-        whole payload is merged into the current TOML in one pass and
-        committed via a single ``os.replace`` — no intermediate partial
-        states are visible on disk even if the process is killed
-        mid-way.
-
-        Callers are responsible for:
-          - Allowlisting keys against `HOT_RELOADABLE_CONFIG_PATHS`
-          - Validating the merged dict with `Config.model_validate`
-            before calling this helper (so the TOML on disk is never
-            malformed)
-
-        Raises the same filesystem exceptions as
-        :meth:`_atomic_write_config_field`; the caller wraps them into
-        an ``HTTPException(500)``.
-        """
-        assert self.ctx.config_path is not None, (
-            "caller guarantees a config file exists (config_override "
-            "mode is rejected before this point)"
-        )
-
-        path = Path(self.ctx.config_path)
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
-
-        for section, fields in patches.items():
-            if section not in data or not isinstance(data.get(section), dict):
-                data[section] = {}
-            for fname, value in fields.items():
-                data[section][fname] = value
-
-        parent = path.parent
-        fd, tmp_path_str = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(parent))
-        tmp_path = Path(tmp_path_str)
-        try:
-            with os.fdopen(fd, "wb") as tf:
-                tf.write(tomli_w.dumps(data).encode("utf-8"))
-                tf.flush()
-                os.fsync(tf.fileno())
-            os.replace(tmp_path, path)
-        except Exception:
-            with contextlib.suppress(FileNotFoundError, OSError):
-                os.unlink(tmp_path)
-            raise
-
-        try:
-            dir_fd = os.open(str(parent), os.O_DIRECTORY)
-        except OSError:
-            return
-        try:
-            os.fsync(dir_fd)
-        except OSError:
-            pass
-        finally:
-            os.close(dir_fd)
+        """Atomic read-modify-write of a single `config.toml` field."""
+        self._atomic_write_config_toml(self._merged_config_patches({section: {field: value}}))
 
     async def apply_config_patches(
         self,
@@ -1965,28 +1964,14 @@ class Runtime:
         )
 
         # Step 1 · load current TOML + merge patches in memory.
-        path = Path(self.ctx.config_path)
-        with open(path, "rb") as f:
-            merged = tomllib.load(f)
-        for section, fields in patches.items():
-            if section not in merged or not isinstance(merged.get(section), dict):
-                merged[section] = {}
-            for fname, value in fields.items():
-                merged[section][fname] = value
+        merged = self._merged_config_patches(patches)
 
         # Step 2 · validate the MERGED dict against the Pydantic schema.
-        # We catch ValidationError and re-raise as ValueError so the
-        # caller can treat any "invalid value" uniformly regardless of
-        # which field triggered it.
-        from pydantic import ValidationError
+        self._validate_config_dict(merged)
 
-        try:
-            Config.model_validate(merged)
-        except ValidationError as e:
-            raise ValueError(str(e)) from e
-
-        # Step 3 · commit the merged TOML atomically.
-        self._atomic_write_config_patches(patches)
+        # Step 3 · commit the validated dict atomically — the exact
+        # object that passed validation, not a re-read of the file.
+        self._atomic_write_config_toml(merged)
 
         # Step 4 · propagate to live ctx. `reload()` re-reads from disk,
         # re-validates, swaps ctx.config, and rebuilds the LLM provider
@@ -2050,23 +2035,9 @@ class Runtime:
             f"{section}.{fname}" for section, fields in patches.items() for fname in fields
         )
 
-        path = Path(self.ctx.config_path)
-        with open(path, "rb") as f:
-            merged = tomllib.load(f)
-        for section, fields in patches.items():
-            if section not in merged or not isinstance(merged.get(section), dict):
-                merged[section] = {}
-            for fname, value in fields.items():
-                merged[section][fname] = value
-
-        from pydantic import ValidationError
-
-        try:
-            Config.model_validate(merged)
-        except ValidationError as e:
-            raise ValueError(str(e)) from e
-
-        self._atomic_write_config_patches(patches)
+        merged = self._merged_config_patches(patches)
+        self._validate_config_dict(merged)
+        self._atomic_write_config_toml(merged)
         return applied_paths
 
     # ---- Local-first disclosure (spec §13.1) -------------------------------

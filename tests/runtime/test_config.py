@@ -205,10 +205,14 @@ def test_voice_section_defaults_disabled():
     assert cfg.voice.tts_provider == "fishaudio"
     assert cfg.voice.stt_provider == "whisper_api"
     assert cfg.voice.default_audio_format == "mp3"
+    # Must match the env-var name shipped in env.sample / config.toml.sample
+    # so a minimal `[voice] enabled = true` config works with the
+    # documented key name.
+    assert cfg.voice.tts_api_key_env == "FISH_AUDIO_KEY"
 
 
 def test_voice_enabled_requires_tts_env_var(monkeypatch):
-    monkeypatch.delenv("FISH_API_KEY", raising=False)
+    monkeypatch.delenv("FISH_AUDIO_KEY", raising=False)
     toml = """
 [persona]
 id = "x"
@@ -223,12 +227,12 @@ enabled = true
 tts_provider = "fishaudio"
 stt_provider = "stub"
 """
-    with pytest.raises(ValueError, match="FISH_API_KEY"):
+    with pytest.raises(ValueError, match="FISH_AUDIO_KEY"):
         load_config_from_str(toml)
 
 
 def test_voice_enabled_requires_stt_env_var(monkeypatch):
-    monkeypatch.setenv("FISH_API_KEY", "fk")
+    monkeypatch.setenv("FISH_AUDIO_KEY", "fk")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     toml = """
 [persona]
@@ -249,7 +253,7 @@ stt_provider = "whisper_api"
 
 
 def test_voice_enabled_stub_stub_no_env_needed(monkeypatch):
-    monkeypatch.delenv("FISH_API_KEY", raising=False)
+    monkeypatch.delenv("FISH_AUDIO_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     toml = """
 [persona]
@@ -272,7 +276,7 @@ stt_provider = "stub"
 
 def test_voice_disabled_skips_env_var_checks(monkeypatch):
     """`enabled=false` must not block on missing env vars."""
-    monkeypatch.delenv("FISH_API_KEY", raising=False)
+    monkeypatch.delenv("FISH_AUDIO_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     toml = """
 [persona]

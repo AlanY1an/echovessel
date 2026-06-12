@@ -58,6 +58,10 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "sse-starlette>=2.1",
     "python-multipart>=0.0.9",
+    # CLI control-plane client: `echovessel stop/reload/status` talk to
+    # the daemon's HTTP control endpoint. Also serves as FastAPI
+    # TestClient's transport in the test suite.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -88,10 +92,6 @@ dev = [
     "ruff>=0.5",
     "import-linter>=2.0",
     "alembic>=1.13",
-    # Test-only: FastAPI's TestClient and httpx.AsyncClient ASGI
-    # transport are the standard way to hit Stage 2 FastAPI routes
-    # without binding real sockets. Not a runtime dependency.
-    "httpx>=0.27",
 ]
 
 [project.scripts]

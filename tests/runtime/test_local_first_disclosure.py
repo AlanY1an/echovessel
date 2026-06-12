@@ -43,5 +43,5 @@ async def test_disclosure_log_contains_auditable_fields(caplog):
     assert "llm_provider=stub" in combined
     assert "llm_model(large)=" in combined
     assert "channels=" in combined
-    assert "embedder=all-MiniLM-L6-v2" in combined
+    assert "embedder=intfloat/multilingual-e5-small" in combined
     assert "local-first disclosure" in combined
