@@ -72,21 +72,15 @@ def test_find_query_entities_matches_alias_token():
         db.commit()
 
     with DbSession(engine) as db:
-        matched = find_query_entities(
-            db, "Scott 最近怎么样", persona_id="p", user_id="self"
-        )
+        matched = find_query_entities(db, "Scott 最近怎么样", persona_id="p", user_id="self")
         assert matched == [1]
 
         # CJK alias also matches via the raw-text fallback.
-        matched_zh = find_query_entities(
-            db, "关于黄逸扬的事", persona_id="p", user_id="self"
-        )
+        matched_zh = find_query_entities(db, "关于黄逸扬的事", persona_id="p", user_id="self")
         assert matched_zh == [1]
 
         # No match at all.
-        assert find_query_entities(
-            db, "今天天气不错", persona_id="p", user_id="self"
-        ) == []
+        assert find_query_entities(db, "今天天气不错", persona_id="p", user_id="self") == []
 
 
 def test_query_alias_bumps_junction_linked_nodes_into_top_k():
@@ -150,6 +144,163 @@ def test_query_alias_bumps_junction_linked_nodes_into_top_k():
 
     anchored = next(sm for sm in result.memories if sm.node.id == event_id)
     assert anchored.entity_anchor_bonus == ENTITY_ANCHOR_BONUS_VALUE
+
+
+def test_ascii_alias_inside_longer_word_does_not_match():
+    """An ASCII alias must match whole words only — "Sam" inside
+    "Samsung" or "Ann" inside "Annie's" is not a mention of the
+    entity and must not anchor."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    _seed(engine)
+
+    with DbSession(engine) as db:
+        db.add(
+            Entity(
+                id=1,
+                persona_id="p",
+                user_id="self",
+                canonical_name="Sam",
+                kind="person",
+                merge_status="confirmed",
+            )
+        )
+        db.add(EntityAlias(alias="Sam", entity_id=1))
+        db.add(
+            Entity(
+                id=2,
+                persona_id="p",
+                user_id="self",
+                canonical_name="Ann",
+                kind="person",
+                merge_status="confirmed",
+            )
+        )
+        db.add(EntityAlias(alias="Ann", entity_id=2))
+        db.commit()
+
+    with DbSession(engine) as db:
+        assert (
+            find_query_entities(
+                db, "I bought a Samsung phone yesterday", persona_id="p", user_id="self"
+            )
+            == []
+        )
+        assert (
+            find_query_entities(
+                db, "we went to Annie's birthday party", persona_id="p", user_id="self"
+            )
+            == []
+        )
+
+
+def test_exact_word_ascii_alias_matches():
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    _seed(engine)
+
+    with DbSession(engine) as db:
+        db.add(
+            Entity(
+                id=1,
+                persona_id="p",
+                user_id="self",
+                canonical_name="Sam",
+                kind="person",
+                merge_status="confirmed",
+            )
+        )
+        db.add(EntityAlias(alias="Sam", entity_id=1))
+        db.commit()
+
+    with DbSession(engine) as db:
+        assert find_query_entities(db, "did Sam call you?", persona_id="p", user_id="self") == [1]
+        # Matching is case-sensitive (plan decision 4): a lowercase
+        # mention does not anchor, so common-word names like "Will"
+        # can't anchor on generic uses.
+        assert find_query_entities(db, "is sam around?", persona_id="p", user_id="self") == []
+
+
+def test_ascii_alias_adjacent_to_cjk_matches():
+    """Mixed-script queries often glue an ASCII name straight onto CJK
+    text ("Scott最近怎么样") — only ASCII alphanumeric neighbours count
+    as the same word, so the alias still matches."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    _seed(engine)
+
+    with DbSession(engine) as db:
+        db.add(
+            Entity(
+                id=1,
+                persona_id="p",
+                user_id="self",
+                canonical_name="黄逸扬",
+                kind="person",
+                merge_status="confirmed",
+            )
+        )
+        db.add(EntityAlias(alias="Scott", entity_id=1))
+        db.commit()
+
+    with DbSession(engine) as db:
+        assert find_query_entities(db, "Scott最近怎么样", persona_id="p", user_id="self") == [1]
+
+
+def test_false_substring_alias_does_not_bypass_relevance_floor():
+    """A node junction-linked to entity "Ann" must NOT surface for the
+    query "we were planning a trip" — "Ann" inside "planning" is not a
+    mention, so neither the anchor bonus nor the relevance-floor
+    exemption applies."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+    _seed(engine)
+
+    with DbSession(engine) as db:
+        db.add(
+            Entity(
+                id=1,
+                persona_id="p",
+                user_id="self",
+                canonical_name="Ann",
+                kind="person",
+                merge_status="confirmed",
+            )
+        )
+        db.add(EntityAlias(alias="Ann", entity_id=1))
+
+        ev = ConceptNode(
+            persona_id="p",
+            user_id="self",
+            type=NodeType.EVENT,
+            description="Ann adopted a kitten",
+            emotional_impact=3,
+        )
+        db.add(ev)
+        db.commit()
+        db.refresh(ev)
+        db.add(ConceptNodeEntity(node_id=ev.id, entity_id=1))
+        db.commit()
+        event_id = ev.id
+
+    backend.insert_vector(event_id, _unit_embed(123))
+
+    with DbSession(engine) as db:
+        result = retrieve(
+            db,
+            backend,
+            persona_id="p",
+            user_id="self",
+            query_text="we were pLAnning a trip",
+            embed_fn=_orthogonal_embed,
+            top_k=5,
+        )
+
+    hits = [sm.node.id for sm in result.memories]
+    assert event_id not in hits, (
+        f"node anchored via a substring of an unrelated word must stay below the floor; got {hits}"
+    )
 
 
 def test_query_without_alias_does_not_apply_bonus():
