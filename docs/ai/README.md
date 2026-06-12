@@ -26,7 +26,7 @@ to find the right code path fast.
 | daemon startup, LLM providers, per-turn pipeline, background loops | `runtime/` *(not yet drafted)* |
 | Web / Discord / iMessage / wechat transports, admin routes | `channels/` *(not yet drafted)* |
 | TTS, STT, voice cloning | `voice/` *(not yet drafted)* |
-| idle-trigger worker (engines + execution) | `proactive/` *(not yet drafted)* |
+| idle-trigger worker (engines + execution) | [`proactive/`](proactive/overview.md) |
 | chat-log import pipeline | `import_/` *(not yet drafted)* |
 | LLM prompt templates (extraction, reflection, judge) | `prompts/` *(not yet drafted)* |
 | asyncio rules · import contracts · commits · "no backcompat shims" | [`conventions.md`](conventions.md) |
