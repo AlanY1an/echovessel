@@ -165,7 +165,14 @@ async def run_pipeline(
         },
     )
 
-    all_new_concept_ids: list[int] = []
+    # Seed from the snapshot: a previous run may have committed
+    # concept nodes and then stopped (cancel, failure) before its
+    # embed pass, so the resume run must vectorize them too. The
+    # snapshot is the durable ledger of committed-not-yet-embedded
+    # node IDs; fresh runs start with an empty list.
+    all_new_concept_ids: list[int] = (
+        list(dict.fromkeys(progress.written_concept_node_ids)) if progress is not None else []
+    )
     any_chunk_succeeded = False
     any_chunk_failed = False
     fatal_error: str | None = None
@@ -226,22 +233,25 @@ async def run_pipeline(
         except asyncio.CancelledError:
             # Preserve partial progress into the snapshot and re-raise
             # so the task-level handler in ImporterFacade can observe.
+            # written_concept_node_ids is already current — it is
+            # extended chunk-by-chunk as dispatch commits.
             if progress is not None:
                 progress.current_chunk = chunk_index_global
                 progress.state = "cancelled"
-                progress.written_concept_node_ids.extend(all_new_concept_ids)
             report.status = "cancelled"
             raise
 
         report.dropped_items.extend(dropped)
 
         # --- Step 6. Dispatch + bookkeeping in a fresh DB session.
+        chunk_new_ids: list[int] = []
         try:
-            chunk_new_ids = _dispatch_chunk_items(
+            _dispatch_chunk_items(
                 items,
                 db_session_factory=db_session_factory,
                 source=file_hash,
                 report=report,
+                new_ids=chunk_new_ids,
             )
         except Exception as exc:  # noqa: BLE001 — record and continue
             any_chunk_failed = True
@@ -262,11 +272,18 @@ async def run_pipeline(
                     "stage": "dispatch",
                 },
             )
-            # Audit P1-8: advance progress past a failed dispatch.
-            # See the matching comment on the extraction branch above
-            # for the rationale.
+            # The memory import API commits per item, so items that
+            # dispatched before the failure are durable on disk. Keep
+            # their IDs so the embed pass still vectorizes them —
+            # otherwise the rows would exist but never be reachable
+            # via vector_search.
+            all_new_concept_ids.extend(chunk_new_ids)
+            # Advance progress past a failed dispatch. See the
+            # matching comment on the extraction branch above for the
+            # rationale.
             if progress is not None:
                 progress.current_chunk = chunk_index_global + 1
+                progress.written_concept_node_ids.extend(chunk_new_ids)
             continue
 
         all_new_concept_ids.extend(chunk_new_ids)
@@ -358,16 +375,12 @@ def _load_text(
     suffix: str,
 ) -> str:
     if upload_path is not None and raw_bytes is not None:
-        raise NormalizationError(
-            "run_pipeline: pass exactly one of upload_path / raw_bytes"
-        )
+        raise NormalizationError("run_pipeline: pass exactly one of upload_path / raw_bytes")
     if upload_path is not None:
         return normalize_file(upload_path)
     if raw_bytes is not None:
         return normalize_bytes(raw_bytes, suffix=suffix)
-    raise NormalizationError(
-        "run_pipeline: either upload_path or raw_bytes must be set"
-    )
+    raise NormalizationError("run_pipeline: either upload_path or raw_bytes must be set")
 
 
 def _dispatch_chunk_items(
@@ -376,8 +389,13 @@ def _dispatch_chunk_items(
     db_session_factory: DbSessionFactory,
     source: str,
     report: PipelineReport,
-) -> list[int]:
+    new_ids: list[int],
+) -> None:
     """Write every item in ``items`` to memory under one chunk.
+
+    Concept-node IDs are appended to the caller-owned ``new_ids`` list
+    item by item, so when a later item raises, the IDs of rows that
+    already committed survive for the embed pass.
 
     NOTE: the memory import API commits per-call, so "one transaction
     per chunk" is not strictly atomic today — M-round3 chose commit-
@@ -385,7 +403,6 @@ def _dispatch_chunk_items(
     earlier writes remain on disk and we record the failure as a
     dropped item. This matches the tracker §2.6 "partial" semantics.
     """
-    new_ids: list[int] = []
     with db_session_factory() as db:
         for item in items:
             result, ids = dispatch_item(item, db=db, source=source)
@@ -396,7 +413,6 @@ def _dispatch_chunk_items(
             for append_id in result.core_block_append_ids:
                 report.new_core_block_append_ids.append(append_id)
             new_ids.extend(ids)
-    return new_ids
 
 
 async def _emit(
