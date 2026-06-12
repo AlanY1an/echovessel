@@ -321,6 +321,7 @@ class CostTrackingProvider:
         model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        thinking_enabled: bool | None = None,
         timeout: float | None = None,
     ) -> tuple[str, Usage | None]:
         text, usage = await self._inner.complete(
@@ -329,6 +330,7 @@ class CostTrackingProvider:
             model_role=model_role,
             max_tokens=max_tokens,
             temperature=temperature,
+            thinking_enabled=thinking_enabled,
             timeout=timeout,
         )
         self._record(model_role, system, user, text, usage=usage)
@@ -342,6 +344,7 @@ class CostTrackingProvider:
         model_role: str = DEFAULT_ROLE,
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        thinking_enabled: bool | None = None,
         timeout: float | None = None,
     ) -> AsyncIterator[str | Usage]:
         chunks: list[str] = []
@@ -352,6 +355,7 @@ class CostTrackingProvider:
             model_role=model_role,
             max_tokens=max_tokens,
             temperature=temperature,
+            thinking_enabled=thinking_enabled,
             timeout=timeout,
         ):
             if isinstance(item, str):
