@@ -22,6 +22,7 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from echovessel.channels.web.app import build_web_app
@@ -236,8 +237,60 @@ def test_delete_voice_sample_removes_from_disk(tmp_path: Path) -> None:
 def test_delete_voice_sample_404_on_unknown_id(tmp_path: Path) -> None:
     _rt, client, _cfg = _build(tmp_path)
     with client:
-        r = client.delete("/api/admin/voice/samples/s-doesnotexist")
+        r = client.delete("/api/admin/voice/samples/s-0123456789ab")
     assert r.status_code == 404
+
+
+def test_delete_voice_sample_rejects_traversal_ids(tmp_path: Path) -> None:
+    """sample_id is a URL path segment; ids that resolve outside the
+    voice_samples root must be rejected without touching the filesystem.
+    ``%2e%2e`` decodes to ``..`` — root/".." is the data dir itself, so
+    an unguarded delete would rmtree the daemon's entire state."""
+    _rt, client, _cfg = _build(tmp_path)
+    data_dir = tmp_path / "data"
+    canary = data_dir / "canary.txt"
+    canary.write_text("must survive")
+    sibling = data_dir / "persona"
+    sibling.mkdir()
+    (sibling / "keep.txt").write_text("must survive")
+
+    with client:
+        for raw_id in ("%2e%2e", "a%2f..%2f..", "..%2fpersona", "s-..%2f..%2f.."):
+            r = client.delete(f"/api/admin/voice/samples/{raw_id}")
+            # %2f variants may decode to multi-segment paths that the
+            # router rejects itself (405); single-segment ids must hit
+            # the store guard (400) or fall through to not-found (404).
+            assert r.status_code in (400, 404, 405), (raw_id, r.status_code, r.text)
+            assert data_dir.is_dir(), raw_id
+            assert canary.read_text() == "must survive", raw_id
+            assert (sibling / "keep.txt").read_text() == "must survive", raw_id
+
+
+def test_delete_voice_sample_400_on_malformed_id(tmp_path: Path) -> None:
+    _rt, client, _cfg = _build(tmp_path)
+    with client:
+        r = client.delete("/api/admin/voice/samples/s-doesnotexist")
+    assert r.status_code == 400
+    assert "sample_id" in r.json()["detail"]
+
+
+def test_sample_store_rejects_non_generated_ids(tmp_path: Path) -> None:
+    """Every store method that maps a caller-supplied id to a path must
+    refuse ids that don't match the format ``save()`` generates."""
+    from echovessel.channels.web.routes.admin.helpers import _VoiceSampleStore
+
+    root = tmp_path / "voice_samples"
+    store = _VoiceSampleStore(root)
+    for bad in ("..", "a/../..", "../persona", "s-DOESNOTEXIST", "s-0123", ""):
+        with pytest.raises(ValueError):
+            store.read_bytes(bad)
+        with pytest.raises(ValueError):
+            store.delete(bad)
+
+    # The generated format itself still round-trips.
+    saved = store.save(b"bytes", filename="a.wav", content_type="audio/wav")
+    assert store.read_bytes(saved.sample_id) == b"bytes"
+    assert store.delete(saved.sample_id) is True
 
 
 # ---------------------------------------------------------------------------

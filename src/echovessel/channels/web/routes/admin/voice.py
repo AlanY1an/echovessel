@@ -121,7 +121,13 @@ def register_voice_routes(
 
     @router.delete("/api/admin/voice/samples/{sample_id}")
     async def delete_voice_sample(sample_id: str) -> dict[str, Any]:
-        ok = _sample_store().delete(sample_id)
+        try:
+            ok = _sample_store().delete(sample_id)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"invalid sample_id: {sample_id}",
+            ) from e
         if not ok:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
