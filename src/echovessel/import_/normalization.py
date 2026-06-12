@@ -42,7 +42,10 @@ def normalize_bytes(raw: bytes, *, suffix: str = "") -> str:
         the payload is not valid JSON.
     """
     try:
-        text = raw.decode("utf-8")
+        # utf-8-sig is byte-identical to utf-8 for BOM-less input and
+        # strips a leading U+FEFF (common in Windows-editor exports),
+        # which would otherwise break json.loads and the `---` check.
+        text = raw.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise NormalizationError(
             f"normalize_bytes: input is not valid UTF-8 (suffix={suffix!r}): {exc}"
