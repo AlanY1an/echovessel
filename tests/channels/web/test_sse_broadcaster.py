@@ -76,6 +76,31 @@ async def test_full_client_queue_is_dropped_without_blocking_others() -> None:
     assert b.client_count == 1
 
 
+async def test_overflowed_client_receives_close_sentinel() -> None:
+    """Dropping an overflowed client must also end its stream.
+
+    The consumer drains the backlog and then needs an EOF marker —
+    otherwise it blocks on ``get()`` forever while the connection stays
+    open and the browser never reconnects.
+    """
+
+    b = SSEBroadcaster()
+    q = await b.register()
+    while not q.full():
+        q.put_nowait({"event": "chat.message.token", "data": {}})
+
+    await b.broadcast("chat.message.token", {"delta": "x"})
+
+    assert b.client_count == 0
+    items = []
+    while not q.empty():
+        items.append(q.get_nowait())
+    # Oldest backlog frame was evicted to make room for the sentinel.
+    assert items[-1] is None
+    assert all(item is not None for item in items[:-1])
+    assert len(items) == q.maxsize
+
+
 async def test_heartbeat_task_emits_heartbeat_events() -> None:
     b = SSEBroadcaster()
     q = await b.register()
