@@ -47,7 +47,7 @@ def _unit_embed(slot: int) -> list[float]:
 
 def _orthogonal_embed(_text: str) -> list[float]:
     # Any fixed vector distinct from the node's vector → orthogonal by
-    # construction. Forces relevance ≈ 0.293 < min_relevance floor.
+    # construction. Forces relevance 0.5 < min_relevance floor (0.55).
     return _unit_embed(0)
 
 

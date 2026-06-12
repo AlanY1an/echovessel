@@ -30,6 +30,7 @@ CLOSED. Slow cycle failure MUST NOT unwind extraction or reflection.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -43,6 +44,7 @@ from sqlmodel import Session as DbSession
 from sqlmodel import select
 
 from echovessel.core.types import NodeType
+from echovessel.memory.backend import StorageBackend
 from echovessel.memory.consolidate.tracer import (
     ConsolidateTracer,
     NullConsolidateTracer,
@@ -162,6 +164,22 @@ class SlowCycleOutput:
 # passed to the prompt and returns the typed output. Async because the
 # LLM call itself is async on the runtime layer.
 SlowCycleFn = Callable[[dict[str, Any]], Awaitable[SlowCycleOutput]]
+
+
+# Sync embedder — same shape as ``memory.consolidate.EmbedFn``, declared
+# locally for the same reason as ``_SHOCK_IMPACT_THRESHOLD`` above (this
+# module never imports ``memory.consolidate`` proper, only the tracer).
+# ``run_slow_cycle`` runs it via ``asyncio.to_thread`` — the encode is
+# blocking CPU work (sentence-transformers) and must stay off the loop.
+EmbedFn = Callable[[str], list[float]]
+
+
+def _embed_all(embed_fn: EmbedFn, texts: list[str]) -> list[list[float]]:
+    return [embed_fn(t) for t in texts]
+
+
+def _expectation_description(exp: SlowCycleExpectationInput) -> str:
+    return f"{exp.about_text.strip()} — {exp.prediction_text.strip()}"
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +364,8 @@ def bulk_create_expectations(
     *,
     persona_id: str,
     user_id: str,
+    backend: StorageBackend,
+    vectors: list[list[float]],
     expectations: list[SlowCycleExpectationInput],
     observer: MemoryEventObserver | None = None,
     now: datetime | None = None,
@@ -359,6 +379,11 @@ def bulk_create_expectations(
         a "by ..." phrase consistently with L3 events)
       - ``description = "<about_text> — <prediction_text>"`` so retrieve's
         vector search has a single descriptive surface to hash.
+      - A ``concept_nodes_vec`` row so vector retrieval can actually
+        surface it. ``vectors`` holds one precomputed embedding per
+        expectation (same order) — the caller computes them off the
+        event loop so the DB transaction here never carries CPU-bound
+        encode work.
       - A ``ConceptNodeFilling`` row per ``reasoning_event_id`` so the
         "why does the persona believe this?" chain is inspectable.
 
@@ -382,7 +407,7 @@ def bulk_create_expectations(
                 f"bulk_create_expectations[{i}]: about_text and "
                 "prediction_text must both be non-empty"
             )
-        description = f"{exp.about_text.strip()} — {exp.prediction_text.strip()}"
+        description = _expectation_description(exp)
         node = ConceptNode(
             persona_id=persona_id,
             user_id=user_id,
@@ -408,6 +433,12 @@ def bulk_create_expectations(
     for node, exp in zip(created, expectations, strict=True):
         for child_id in dict.fromkeys(exp.reasoning_event_ids):
             db.add(ConceptNodeFilling(parent_id=node.id, child_id=child_id))
+
+    # Index the precomputed vectors, joining the current transaction so
+    # we don't deadlock against our own flushed INSERT on concept_nodes
+    # (SQLite has a single writer).
+    for node, vec in zip(created, vectors, strict=True):
+        backend.insert_vector(node.id, vec, conn=db.connection())
 
     db.commit()
     ids = [n.id for n in created if n.id is not None]
@@ -438,11 +469,13 @@ def bulk_create_slow_thoughts(
     *,
     persona_id: str,
     user_id: str,
+    backend: StorageBackend,
+    vectors: list[list[float]],
     thoughts: list[SlowCycleThoughtInput],
     observer: MemoryEventObserver | None = None,
     now: datetime | None = None,
 ) -> list[int]:
-    """Insert L4 thought rows with filling chain.
+    """Insert L4 thought rows with filling chain + vector index rows.
 
     Unlike the import-pipeline ``bulk_create_thoughts`` (which takes
     ``ThoughtInput`` with ``imported_from``), this writer is for
@@ -450,6 +483,12 @@ def bulk_create_slow_thoughts(
     a file import, and each MUST cite at least one event id in its
     ``filling_event_ids``. Empty filling is a schema violation here —
     parser raised, but we re-check at write time.
+
+    Each thought gets a ``concept_nodes_vec`` row in the same
+    transaction — retrieve's vector search inner-joins that table, so
+    a thought without a vector row can never surface semantically.
+    ``vectors`` holds one precomputed embedding per thought (same
+    order); the caller computes them off the event loop.
     """
     if not thoughts:
         return []
@@ -482,6 +521,11 @@ def bulk_create_slow_thoughts(
             )
         for child_id in dict.fromkeys(th.filling_event_ids):
             db.add(ConceptNodeFilling(parent_id=node.id, child_id=child_id))
+
+    # Index the precomputed vectors, joining the current transaction
+    # (same single-writer rationale as in ``bulk_create_expectations``).
+    for node, vec in zip(created, vectors, strict=True):
+        backend.insert_vector(node.id, vec, conn=db.connection())
 
     db.commit()
     ids = [n.id for n in created if n.id is not None]
@@ -687,6 +731,8 @@ async def run_slow_cycle(
     *,
     persona_id: str,
     user_id: str,
+    backend: StorageBackend,
+    embed_fn: EmbedFn,
     slow_cycle_fn: SlowCycleFn,
     now: datetime,
     daily_cap: int = DEFAULT_DAILY_CAP,
@@ -711,8 +757,11 @@ async def run_slow_cycle(
       3. Truncate events head-first to fit the per-cycle input token
          budget. Never retry; truncation is the fallback.
       4. Call ``slow_cycle_fn`` with the packed input dict.
-      5. Write thoughts + expectations via the typed bulk writers
-         (enforcing reasoning/filling non-empty).
+      5. Embed the new descriptions via ``asyncio.to_thread`` (the
+         encode is blocking CPU work), then write thoughts +
+         expectations via the typed bulk writers (enforcing
+         reasoning/filling non-empty); each node gets a
+         ``concept_nodes_vec`` row so vector retrieval can surface it.
       6. UPSERT today's stats row + update ``personas.last_slow_tick_at``.
       7. Best-effort: save a transcript for admin debugging.
     """
@@ -794,6 +843,20 @@ async def run_slow_cycle(
     # 5. Writers. v0.5 · L4 only. L1 is human-authored from v0.5 onward;
     # any "self-narrative" output from an older LLM is silently
     # dropped — slow_cycle has no L1 write path.
+    #
+    # Vectors are precomputed in one worker thread so the writers'
+    # DB transaction stays on the loop thread without ever blocking
+    # it on the encode.
+    thought_descriptions = [th.description for th in output.new_thoughts]
+    expectation_descriptions = [_expectation_description(exp) for exp in output.new_expectations]
+    all_vectors: list[list[float]] = []
+    if thought_descriptions or expectation_descriptions:
+        all_vectors = await asyncio.to_thread(
+            _embed_all, embed_fn, thought_descriptions + expectation_descriptions
+        )
+    thought_vectors = all_vectors[: len(thought_descriptions)]
+    expectation_vectors = all_vectors[len(thought_descriptions) :]
+
     thought_ids: list[int] = []
     expectation_ids: list[int] = []
     if output.new_thoughts:
@@ -801,6 +864,8 @@ async def run_slow_cycle(
             db,
             persona_id=persona_id,
             user_id=user_id,
+            backend=backend,
+            vectors=thought_vectors,
             thoughts=output.new_thoughts,
             observer=observer,
             now=now,
@@ -810,6 +875,8 @@ async def run_slow_cycle(
             db,
             persona_id=persona_id,
             user_id=user_id,
+            backend=backend,
+            vectors=expectation_vectors,
             expectations=output.new_expectations,
             observer=observer,
             now=now,
@@ -896,6 +963,7 @@ __all__ = [
     "DEFAULT_INPUT_TOKEN_LIMIT",
     "DEFAULT_OUTPUT_TOKEN_LIMIT",
     "DEFAULT_TRANSCRIPT_DIR",
+    "EmbedFn",
     "SlowCycleBudgetExceeded",
     "SlowCycleExpectationInput",
     "SlowCycleFn",

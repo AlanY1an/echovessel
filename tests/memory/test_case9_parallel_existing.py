@@ -183,23 +183,18 @@ async def test_case9_parallel_existing_dogfood():
         )
         assert len(thoughts) == 1
         assert thought_description in thoughts[0].description
-        thought_id = thoughts[0].id
 
-    # Embed the thought description into the vector table so retrieve
-    # can surface it. The memory-layer ``bulk_create_slow_thoughts``
-    # deliberately does NOT embed (plan §7: typed writers stay schema-
-    # focused; embedding is a backend hook owned by callers that know
-    # which embedder to use). The consolidate worker in the real
-    # runtime threads ``embed_fn`` through the slow-cycle path —
-    # we mimic that here post-hoc.
-    backend.insert_vector(thought_id, _keyword_embed(thought_description))
+    # The slow-cycle path embeds its thoughts as it writes them
+    # (``run_slow_cycle`` precomputes the vectors with the worker's
+    # ``embed_fn`` and ``bulk_create_slow_thoughts`` indexes them into
+    # ``concept_nodes_vec``), so no post-hoc backfill is needed before
+    # retrieve can surface them.
 
     # Now simulate the user asking "你最近想我吗" — retrieve should
     # surface the grad-school thought via keyword overlap. The dogfood
-    # embedder uses un-normalised indicator vectors so ``min_relevance``
+    # embedder uses multi-hot indicator vectors so ``min_relevance``
     # is pinned to 0 here — real deployments use sentence-transformers
-    # which produce unit-norm embeddings and the default 0.4 floor
-    # stays in play.
+    # embeddings and the default 0.55 floor stays in play.
     query = "你最近想我吗 grad school"
     with DbSession(engine) as db:
         result = retrieve(

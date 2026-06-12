@@ -152,22 +152,32 @@ BEGIN
 END
 """
 
-_VEC_CREATE = f"""
-CREATE VIRTUAL TABLE IF NOT EXISTS concept_nodes_vec USING vec0(
-    id INTEGER PRIMARY KEY,
-    embedding FLOAT[{VECTOR_DIM}]
-)
-"""
+
+def vec_table_ddl(table_name: str) -> str:
+    """DDL for a vec0 embedding table.
+
+    ``distance_metric=cosine`` is load-bearing: every distance→similarity
+    conversion in this codebase (``entities._distance_to_cosine``,
+    ``retrieve.scoring._relevance_score``) assumes sqlite-vec reports
+    cosine distance (``1 - cosine_similarity``, range [0, 2]).
+    ``migrations.ensure_schema_up_to_date`` rebuilds any vec table whose
+    on-disk DDL lacks the metric, so keep this the single source of the
+    vec0 column spec.
+    """
+    return (
+        f"CREATE VIRTUAL TABLE IF NOT EXISTS {table_name} USING vec0(\n"
+        f"    id INTEGER PRIMARY KEY,\n"
+        f"    embedding FLOAT[{VECTOR_DIM}] distance_metric=cosine\n"
+        f")"
+    )
+
+
+_VEC_CREATE = vec_table_ddl("concept_nodes_vec")
 
 # v0.4 · entities_vec carries the canonical-name embedding used by the
 # extraction-time dedup pass (plan §6.2 Level 2 cosine match). Same
 # dimension as concept_nodes_vec so the same embed function feeds both.
-_ENTITIES_VEC_CREATE = f"""
-CREATE VIRTUAL TABLE IF NOT EXISTS entities_vec USING vec0(
-    id INTEGER PRIMARY KEY,
-    embedding FLOAT[{VECTOR_DIM}]
-)
-"""
+_ENTITIES_VEC_CREATE = vec_table_ddl("entities_vec")
 
 # Worker θ · Memory search FTS5 index over ConceptNode.description.
 # We use the same trigram tokenizer as recall_messages_fts so CJK

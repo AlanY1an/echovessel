@@ -13,6 +13,11 @@ from sqlalchemy import text
 from echovessel.memory import create_all_tables, create_engine
 from echovessel.memory.migrations import ensure_schema_up_to_date
 
+# The llm_calls SQLModel lives in runtime.cost_logger; importing it here
+# registers the table in SQLModel.metadata so create_all_tables creates
+# it even when only tests/memory is collected.
+from echovessel.runtime.cost_logger import LLMCall  # noqa: F401
+
 
 def _column_names(engine, table: str) -> list[str]:
     with engine.connect() as conn:

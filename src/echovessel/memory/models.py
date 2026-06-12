@@ -47,6 +47,14 @@ EPISODIC_STATE_SQL_DEFAULT: str = (
     '{"mood":"neutral","energy":5,"last_user_signal":null,"updated_at":null}'
 )
 
+# Timestamp convention: the memory layer runs on ONE clock — naive local
+# time. Every writer stamps ``datetime.now()`` and every reader compares
+# against ``datetime.now()`` (retrieve recency, consolidation windows,
+# slow-cycle windows). Timestamp columns therefore carry a Python-side
+# ``default_factory=datetime.now``; the SQL ``server_default`` (SQLite
+# CURRENT_TIMESTAMP, which is UTC) stays only as a NOT NULL safety net
+# for raw SQL INSERTs and must never be the clock an ORM row lands on.
+
 
 def _str_enum_column() -> Column:
     """SQLModel stores Python enums by NAME by default, not VALUE.
@@ -109,15 +117,17 @@ class Persona(SQLModel, table=True):
     health_status: str | None = None  # healthy | chronic_illness | recovering | serious
 
     created_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+        default_factory=datetime.now,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
     )
     updated_at: datetime = Field(
+        default_factory=datetime.now,
         sa_column=Column(
             DateTime,
             nullable=False,
             server_default=func.now(),
-            onupdate=func.now(),
-        )
+            onupdate=datetime.now,
+        ),
     )
     deleted_at: datetime | None = None
 
@@ -153,7 +163,8 @@ class User(SQLModel, table=True):
     id: str = Field(primary_key=True)
     display_name: str
     created_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+        default_factory=datetime.now,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
     )
     deleted_at: datetime | None = None
 
@@ -182,7 +193,8 @@ class ExternalIdentity(SQLModel, table=True):
     external_id: str = Field(primary_key=True)
     internal_user_id: str = Field(foreign_key="users.id")
     created_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+        default_factory=datetime.now,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
     )
 
 
@@ -216,15 +228,17 @@ class CoreBlock(SQLModel, table=True):
     version: int = 1
     last_edited_by: str = "system"  # 'user' | 'reflection' | 'system'
     created_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+        default_factory=datetime.now,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
     )
     updated_at: datetime = Field(
+        default_factory=datetime.now,
         sa_column=Column(
             DateTime,
             nullable=False,
             server_default=func.now(),
-            onupdate=func.now(),
-        )
+            onupdate=datetime.now,
+        ),
     )
     deleted_at: datetime | None = None
 
@@ -279,10 +293,12 @@ class Session(SQLModel, table=True):
     status: SessionStatus = Field(default=SessionStatus.OPEN, sa_column=_str_enum_column())
 
     started_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+        default_factory=datetime.now,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
     )
     last_message_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+        default_factory=datetime.now,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
     )
     closed_at: datetime | None = None
 
@@ -294,6 +310,18 @@ class Session(SQLModel, table=True):
     # extracted=True implies extracted_events=True; never the reverse.
     extracted_events: bool = False
     extracted_events_at: datetime | None = None
+    # Resume point for the reflection phase: set True in the same commit
+    # as the reflection thoughts so a failure between that commit and the
+    # final close commit doesn't re-run reflection on retry (duplicate
+    # thoughts + a second LLM call).
+    reflected: bool = False
+    reflected_at: datetime | None = None
+    # JSON-serialized derived extraction outputs (entities, clarification,
+    # mood signal, summary, event-node index map), written in the same
+    # commit as the events so a retried consolidation can rebuild the
+    # post-extraction writes without a second LLM call. Cleared when the
+    # session closes.
+    extraction_payload: str | None = None
     trivial: bool = False
 
     message_count: int = 0
@@ -354,7 +382,8 @@ class RecallMessage(SQLModel, table=True):
     # the user turn it answers, letting L2 readers reconstruct pairings.
     turn_id: str | None = None
     created_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+        default_factory=datetime.now,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
     )
     deleted_at: datetime | None = None
 
@@ -473,7 +502,8 @@ class ConceptNode(SQLModel, table=True):
     source_turn_ids: list[str] = Field(default_factory=list, sa_type=JSON)
 
     created_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+        default_factory=datetime.now,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
     )
     deleted_at: datetime | None = None
 
@@ -503,7 +533,8 @@ class ConceptNodeFilling(SQLModel, table=True):
     child_id: int = Field(foreign_key="concept_nodes.id")
     orphaned: bool = False
     created_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+        default_factory=datetime.now,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
     )
     orphaned_at: datetime | None = None
 
@@ -570,7 +601,8 @@ class CoreBlockAppend(SQLModel, table=True):
     # Stored as JSON so provenance keys can evolve without schema churn.
     provenance_json: dict = Field(default_factory=dict, sa_type=JSON)
     created_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+        default_factory=datetime.now,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
     )
 
 
@@ -638,15 +670,17 @@ class Entity(SQLModel, table=True):
     )
 
     created_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+        default_factory=datetime.now,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
     )
     updated_at: datetime = Field(
+        default_factory=datetime.now,
         sa_column=Column(
             DateTime,
             nullable=False,
             server_default=func.now(),
-            onupdate=func.now(),
-        )
+            onupdate=datetime.now,
+        ),
     )
     deleted_at: datetime | None = None
 
@@ -709,15 +743,17 @@ class SlowCycleStats(SQLModel, table=True):
     output_tokens: int = Field(default=0)
     last_cycle_at: datetime | None = Field(default=None)
     created_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+        default_factory=datetime.now,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now()),
     )
     updated_at: datetime = Field(
+        default_factory=datetime.now,
         sa_column=Column(
             DateTime,
             nullable=False,
             server_default=func.now(),
-            onupdate=func.now(),
-        )
+            onupdate=datetime.now,
+        ),
     )
 
 

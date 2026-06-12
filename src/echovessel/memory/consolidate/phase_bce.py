@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from sqlmodel import Session as DbSession
-from sqlmodel import select
+from sqlmodel import or_, select
 
 from echovessel.core.types import NodeType
 from echovessel.memory.backend import StorageBackend
@@ -52,6 +52,20 @@ TIMER_REFLECTION_HOURS = 24
 # Hard gate: no more than this many reflections per rolling 24h window
 REFLECTION_HARD_LIMIT_24H = 3
 
+# Session summaries are stored as THOUGHT rows tagged
+# ``emotion_tags=['session_summary']`` (consolidate.core phase B, same
+# discriminator the runtime prompt assembly matches on). They are
+# bookkeeping, not reflection output — the TIMER cadence and the 24h
+# hard-gate budget must only see real reflections.
+SESSION_SUMMARY_TAG_LIKE = '%"session_summary"%'
+
+
+def _not_session_summary():
+    return or_(
+        ConceptNode.emotion_tags.is_(None),  # type: ignore[union-attr]
+        ~ConceptNode.emotion_tags.like(SESSION_SUMMARY_TAG_LIKE),  # type: ignore[union-attr]
+    )
+
 
 def _count_reflections_24h(db: DbSession, persona_id: str, user_id: str, now: datetime) -> int:
     cutoff = now - timedelta(hours=24)
@@ -63,6 +77,7 @@ def _count_reflections_24h(db: DbSession, persona_id: str, user_id: str, now: da
                 ConceptNode.type == NodeType.THOUGHT.value,
                 ConceptNode.created_at > cutoff,
                 ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+                _not_session_summary(),
             )
         )
     )
@@ -78,6 +93,7 @@ def _is_timer_due(db: DbSession, persona_id: str, user_id: str, now: datetime) -
             ConceptNode.user_id == user_id,
             ConceptNode.type == NodeType.THOUGHT.value,
             ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+            _not_session_summary(),
         )
         .order_by(ConceptNode.created_at.desc())  # type: ignore[union-attr]
         .limit(1)

@@ -47,6 +47,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import Engine, text
 
+from echovessel.memory.db import vec_table_ddl
 from echovessel.memory.models import (
     EPISODIC_STATE_SQL_DEFAULT as _EPISODIC_STATE_SQL_DEFAULT_FOR_MIGRATION,
 )
@@ -217,6 +218,20 @@ _V0_7_PROACTIVE_FOLLOW_UP_COLUMNS: tuple[_ColumnSpec, ...] = (
 # in place; fresh databases get it from the SQLModel definition.
 _V0_7_PROACTIVE_DECISIONS_COLUMNS: tuple[_ColumnSpec, ...] = (
     _ColumnSpec(table="proactive_decisions", column="phase", sql_type="TEXT"),
+)
+
+
+# Consolidate resume bookkeeping beyond phase B: the phase-E flag plus
+# the serialized extraction payload that lets a retried consolidation
+# rebuild entity / summary / mood writes without a second LLM call.
+_CONSOLIDATE_RESUME_COLUMNS: tuple[_ColumnSpec, ...] = (
+    _ColumnSpec(
+        table="sessions",
+        column="reflected",
+        sql_type="BOOLEAN NOT NULL DEFAULT 0",
+    ),
+    _ColumnSpec(table="sessions", column="reflected_at", sql_type="DATETIME"),
+    _ColumnSpec(table="sessions", column="extraction_payload", sql_type="TEXT"),
 )
 
 
@@ -419,6 +434,7 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
             *_V0_4_USER_COLUMNS,
             *_V0_7_PROACTIVE_FOLLOW_UP_COLUMNS,
             *_V0_7_PROACTIVE_DECISIONS_COLUMNS,
+            *_CONSOLIDATE_RESUME_COLUMNS,
         ):
             if not _table_exists(conn, spec.table):
                 # Legacy DB that predates the parent table entirely.
@@ -590,6 +606,40 @@ def ensure_schema_up_to_date(engine: Engine) -> None:
         if _table_exists(conn, "follow_up_threads"):
             conn.execute(text("DROP TABLE follow_up_threads"))
             log.info("schema migration: dropped deprecated follow_up_threads table")
+
+        # Rebuild vec0 tables that predate the declared cosine metric.
+        # Without ``distance_metric=cosine`` in the DDL, sqlite-vec
+        # reports L2 distance, while every distance→similarity
+        # conversion in this codebase assumes cosine distance
+        # (``1 - cosine_similarity``). vec0 tables can't be ALTERed and
+        # their shadow tables don't survive ALTER TABLE RENAME, so the
+        # rebuild copies the embedding blobs out to a scratch table,
+        # recreates the table under its original name with the metric,
+        # and copies the rows back. Embedding blobs are metric-agnostic
+        # — no re-embed needed. Idempotent: the recreated DDL contains
+        # the metric, so subsequent runs skip. Fresh databases skip too
+        # (the tables don't exist yet; ``create_all_tables`` builds them
+        # with the metric afterwards).
+        for vec_table in ("concept_nodes_vec", "entities_vec"):
+            row = conn.execute(
+                text("SELECT sql FROM sqlite_master WHERE type='table' AND name=:name"),
+                {"name": vec_table},
+            ).first()
+            if row is None or "distance_metric=cosine" in (row[0] or ""):
+                continue
+            scratch = f"{vec_table}_rebuild"
+            conn.exec_driver_sql(f"DROP TABLE IF EXISTS {scratch}")
+            conn.exec_driver_sql(vec_table_ddl(scratch))
+            conn.exec_driver_sql(
+                f"INSERT INTO {scratch}(id, embedding) SELECT id, embedding FROM {vec_table}"
+            )
+            conn.exec_driver_sql(f"DROP TABLE {vec_table}")
+            conn.exec_driver_sql(vec_table_ddl(vec_table))
+            conn.exec_driver_sql(
+                f"INSERT INTO {vec_table}(id, embedding) SELECT id, embedding FROM {scratch}"
+            )
+            conn.exec_driver_sql(f"DROP TABLE {scratch}")
+            log.info("schema migration: rebuilt %s with distance_metric=cosine", vec_table)
 
 
 # ---------------------------------------------------------------------------

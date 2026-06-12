@@ -287,9 +287,9 @@ def retrieve(
     # with any entity-anchored node ids so the Scott/黄逸扬 case still
     # surfaces nodes whose description does not contain the query
     # string (plan case 8). Vector distance for an entity-anchored node
-    # that did NOT come from vector search is left at the orthogonal
-    # default so the anchor bonus is the only thing driving it above
-    # the relevance floor.
+    # that did NOT come from vector search is left at the maximum-
+    # distance default so the anchor bonus is the only thing driving it
+    # above the relevance floor.
     anchored_only_ids = entity_anchored_node_ids - {h.concept_node_id for h in hits}
     if hits or anchored_only_ids:
         node_ids = [h.concept_node_id for h in hits] + list(anchored_only_ids)
@@ -309,9 +309,9 @@ def retrieve(
         scored = [
             _score_node(
                 n,
-                # Anchored-only nodes use the orthogonal distance
-                # sentinel so they clear the min_relevance floor only
-                # via the anchor bonus path below.
+                # Anchored-only nodes use the maximum-distance sentinel
+                # (relevance 0) so they clear the min_relevance floor
+                # only via the anchor bonus path below.
                 distance_by_id.get(n.id, 2.0),
                 now,
                 relational_bonus_weight=relational_bonus_weight,

@@ -21,6 +21,8 @@ reflection input loader). This module owns the orchestration —
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -38,6 +40,7 @@ from echovessel.memory.consolidate.phase_a import (
 )
 from echovessel.memory.consolidate.phase_bce import (
     REFLECTION_HARD_LIMIT_24H,
+    SESSION_SUMMARY_TAG_LIKE,
     SHOCK_IMPACT_THRESHOLD,
     _consolidate_entities,
     _count_reflections_24h,
@@ -210,9 +213,130 @@ ReflectFn = Callable[[list[ConceptNode], str], Awaitable[list[ExtractedThought]]
 
 # Embedder turns text into a 384-dim vector. The memory module never
 # imports sentence-transformers or anthropic directly. Kept SYNC because
-# sentence-transformers itself is sync; runtime wraps it in asyncio.to_thread
-# if the caller cares about blocking the loop.
+# sentence-transformers itself is sync; consolidate_session calls it via
+# asyncio.to_thread so the CPU-bound encode never blocks the event loop.
 EmbedFn = Callable[[str], list[float]]
+
+
+# ---------------------------------------------------------------------------
+# Resume payload (de)serialization
+# ---------------------------------------------------------------------------
+#
+# Everything phase B derives beyond the event nodes themselves —
+# entities, clarification, mood signal, summary, and the extraction-index
+# → node-id map the junction wiring needs — is serialized onto
+# ``sessions.extraction_payload`` in the same commit as the events. A
+# retried consolidation rehydrates it here instead of re-running the
+# extraction LLM, then replays the derived writes (each of which is
+# idempotent: entity resolution and junction inserts dedup, the summary
+# write checks for an existing node, the mood update replaces in place).
+
+
+def _dump_extraction_payload(
+    extraction_output: ExtractionResult, event_by_ext_idx: dict[int, ConceptNode]
+) -> str:
+    clarification = extraction_output.entity_clarification
+    mood = extraction_output.session_mood_signal
+    return json.dumps(
+        {
+            "event_node_ids": {
+                str(idx): node.id for idx, node in event_by_ext_idx.items() if node.id is not None
+            },
+            "mentioned_entities": [
+                {
+                    "canonical_name": e.canonical_name,
+                    "aliases": e.aliases,
+                    "kind": e.kind,
+                    "in_events": e.in_events,
+                }
+                for e in extraction_output.mentioned_entities
+            ],
+            "entity_clarification": (
+                {
+                    "canonical_a": clarification.canonical_a,
+                    "canonical_b": clarification.canonical_b,
+                    "same": clarification.same,
+                }
+                if clarification is not None
+                else None
+            ),
+            "session_mood_signal": (
+                {
+                    "mood": mood.mood,
+                    "energy": mood.energy,
+                    "last_user_signal": mood.last_user_signal,
+                }
+                if mood is not None
+                else None
+            ),
+            "session_summary": extraction_output.session_summary,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _load_extraction_payload(
+    db: DbSession, session: Session
+) -> tuple[ExtractionResult | None, dict[int, ConceptNode]]:
+    raw = session.extraction_payload
+    if not raw:
+        # Session extracted before the payload column existed — the
+        # derived writes either already landed or can't be rebuilt
+        # without a second LLM call, so skip them.
+        return None, {}
+    data = json.loads(raw)
+    clarification = data.get("entity_clarification")
+    mood = data.get("session_mood_signal")
+    output = ExtractionResult(
+        mentioned_entities=[
+            ExtractedEntity(
+                canonical_name=e["canonical_name"],
+                aliases=list(e.get("aliases") or []),
+                kind=e.get("kind", "person"),
+                in_events=list(e.get("in_events") or []),
+            )
+            for e in data.get("mentioned_entities") or []
+        ],
+        entity_clarification=(
+            ExtractedEntityClarification(
+                canonical_a=clarification["canonical_a"],
+                canonical_b=clarification["canonical_b"],
+                same=bool(clarification["same"]),
+            )
+            if clarification is not None
+            else None
+        ),
+        session_mood_signal=(
+            ExtractedSessionMoodSignal(
+                mood=mood["mood"],
+                energy=int(mood.get("energy", 5)),
+                last_user_signal=mood.get("last_user_signal"),
+            )
+            if mood is not None
+            else None
+        ),
+        session_summary=data.get("session_summary") or "",
+    )
+    event_by_ext_idx: dict[int, ConceptNode] = {}
+    for idx, node_id in (data.get("event_node_ids") or {}).items():
+        node = db.get(ConceptNode, node_id)
+        if node is not None and node.deleted_at is None:
+            event_by_ext_idx[int(idx)] = node
+    return output, event_by_ext_idx
+
+
+def _session_summary_exists(db: DbSession, session_id: str) -> bool:
+    row = db.exec(
+        select(ConceptNode)
+        .where(
+            ConceptNode.source_session_id == session_id,
+            ConceptNode.type == NodeType.THOUGHT.value,
+            ConceptNode.emotion_tags.like(SESSION_SUMMARY_TAG_LIKE),  # type: ignore[union-attr]
+            ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+        )
+        .limit(1)
+    ).first()
+    return row is not None
 
 
 # ---------------------------------------------------------------------------
@@ -334,10 +458,16 @@ async def consolidate_session(
     # --- B. Extraction --------------------------------------------------
     created_events: list[ConceptNode] = []
     extraction_output: ExtractionResult | None = None
+    # For entity-junction wiring we need the ConceptNode behind each
+    # extracted-event index, whether it was freshly inserted, matched a
+    # prior mention, or rehydrated from the resume payload.
+    event_by_ext_idx: dict[int, ConceptNode] = {}
     if skip_extraction:
         # Load already-committed events from the prior attempt. No LLM
         # call, no new rows, no new vectors — just rehydrate what B
-        # already wrote so stages C / D / E can see them.
+        # already wrote so stages C / D / E can see them. The payload
+        # restores the derived outputs (entities / mood / summary) so
+        # the post-extraction writes below can replay idempotently.
         created_events = list(
             db.exec(
                 select(ConceptNode)
@@ -349,6 +479,7 @@ async def consolidate_session(
                 .order_by(ConceptNode.created_at)
             )
         )
+        extraction_output, event_by_ext_idx = _load_extraction_payload(db, session)
     else:
         if messages:
             extraction_output = await extract_fn(messages)
@@ -370,11 +501,6 @@ async def consolidate_session(
             new_event_descriptions=[e.description for e in extracted_events],
             now=now,
         )
-
-        # For entity-junction wiring we need the ConceptNode behind each
-        # extracted-event index, whether it was freshly inserted or
-        # matched a prior mention.
-        event_by_ext_idx: dict[int, ConceptNode] = {}
 
         for ev_idx, ev in enumerate(extracted_events):
             # Review R2: per-session extraction is preserved. `source_turn_id`
@@ -440,6 +566,7 @@ async def consolidate_session(
                 estimated_arc_days=ev.estimated_arc_days,
                 advance_pre_hours=ev.advance_pre_hours,
                 advance_post_hours=ev.advance_post_hours,
+                created_at=now,
             )
             db.add(node)
             db.flush()
@@ -449,7 +576,7 @@ async def consolidate_session(
             # Embed + index into the vector table, joining the current
             # transaction so we don't deadlock against our own flushed
             # INSERT on concept_nodes (SQLite has a single writer).
-            vec = embed_fn(ev.description)
+            vec = await asyncio.to_thread(embed_fn, ev.description)
             backend.insert_vector(node.id, vec, conn=db.connection())
 
         # Spec 5 · plan §6.2 step 2 supersedes. For each freshly-written
@@ -488,11 +615,14 @@ async def consolidate_session(
                 old.superseded_by_id = new_node.id
                 db.add(old)
 
-        # Atomic: events + the resume-point flag commit together. If this
-        # commit fails, neither the nodes nor the flag persist, and the
-        # next retry re-enters this branch cleanly.
+        # Atomic: events + the resume-point flag + the serialized derived
+        # outputs commit together. If this commit fails, none of it
+        # persists and the next retry re-enters this branch cleanly; if
+        # it lands, a retry can rebuild every downstream write from the
+        # payload without a second extraction call.
         session.extracted_events = True
         session.extracted_events_at = now
+        session.extraction_payload = _dump_extraction_payload(extraction_output, event_by_ext_idx)
         db.add(session)
         db.commit()
         for n in created_events:
@@ -514,109 +644,119 @@ async def consolidate_session(
                         )
                 _fire_lifecycle("on_event_created", n)
 
-        # L5 · write_entities + junction (plan §6.2 step 1 · decision 4).
-        # Happens post-event-commit so every ConceptNode.id we reference
-        # in the junction is already persisted. A commit failure in the
-        # entity branch leaves events intact — junction is rebuildable
-        # from extraction output on the next run.
-        junction_writes_out: list[dict] = []
-        junction_rejects_out: list[dict] = []
-        entities_resolved_out: list[dict] = []
-        if extraction_output.mentioned_entities or (
-            extraction_output.entity_clarification is not None
-        ):
-            _consolidate_entities(
-                db,
-                backend,
-                embed_fn,
-                session=session,
-                extraction_output=extraction_output,
-                event_by_ext_idx=event_by_ext_idx,
-                junction_writes_out=junction_writes_out,
-                junction_rejects_out=junction_rejects_out,
-                entities_resolved_out=entities_resolved_out,
-            )
+    # --- B-post. Derived writes (run on fresh AND resume paths) ---------
+    # Everything below replays safely on a retried consolidation: entity
+    # resolution and junction inserts dedup against existing rows, and
+    # the summary write is guarded by an existence check — so a retry
+    # converges on exactly one set of junctions and one summary node.
 
-        # Phase B trace · every field filled even when lists are empty
-        # so the drawer can always distinguish "ran but nothing to
-        # show" from "didn't reach this phase".
-        mood = extraction_output.session_mood_signal
-        tracer.record_phase_b(
-            extract_prompt=None,
-            extract_response_raw=None,
-            events_created=[
-                {
-                    "id": n.id,
-                    "description": (n.description or "")[:120],
-                    "impact": n.emotional_impact,
-                    "type": getattr(n.type, "value", n.type),
-                    "subject": n.subject,
-                }
-                for n in created_events
-            ],
-            entities_resolved=entities_resolved_out,
-            junction_writes=junction_writes_out,
-            junction_rejects=junction_rejects_out,
-            session_mood_signal=(
-                {
-                    "mood": mood.mood,
-                    "energy": mood.energy,
-                    "last_user_signal": mood.last_user_signal,
-                }
-                if mood is not None
-                else None
-            ),
-            commitments_extracted=[
-                {"id": n.id, "description": n.description}
-                for n in created_events
-                if getattr(n.type, "value", n.type) == "intention"
-            ],
+    # L5 · write_entities + junction (plan §6.2 step 1 · decision 4).
+    # Happens post-event-commit so every ConceptNode.id we reference
+    # in the junction is already persisted. A commit failure in the
+    # entity branch leaves events intact — the junction is rebuilt
+    # from the persisted extraction payload on the next run.
+    junction_writes_out: list[dict] = []
+    junction_rejects_out: list[dict] = []
+    entities_resolved_out: list[dict] = []
+    if extraction_output is not None and (
+        extraction_output.mentioned_entities or extraction_output.entity_clarification is not None
+    ):
+        _consolidate_entities(
+            db,
+            backend,
+            embed_fn,
+            session=session,
+            extraction_output=extraction_output,
+            event_by_ext_idx=event_by_ext_idx,
+            junction_writes_out=junction_writes_out,
+            junction_rejects_out=junction_rejects_out,
+            entities_resolved_out=entities_resolved_out,
         )
 
-        # Spec 5 · plan §6.2 step 5. Persist session_summary as an L4
-        # ConceptNode(type='thought', source_session_id=session.id) so
-        # the runtime can later pull it for the # Recent sessions
-        # prompt section. Tagged via emotion_tags=['session_summary']
-        # because we deliberately don't add a new ConceptNode column —
-        # JSON tag matching is the cheapest discrimination path.
-        if extraction_output.session_summary:
-            try:
-                summary_node = ConceptNode(
-                    persona_id=session.persona_id,
-                    user_id=session.user_id,
-                    type=NodeType.THOUGHT,
-                    description=extraction_output.session_summary,
-                    emotional_impact=0,
-                    emotion_tags=["session_summary"],
-                    relational_tags=[],
-                    source_session_id=session.id,
-                )
-                db.add(summary_node)
-                db.flush()
-                vec = embed_fn(extraction_output.session_summary)
-                backend.insert_vector(summary_node.id, vec, conn=db.connection())
-                db.commit()
-                db.refresh(summary_node)
-                if observer is not None:
-                    try:
-                        observer.on_thought_created(summary_node, "reflection")
-                    except Exception as e:  # noqa: BLE001
-                        log.warning(
-                            "observer.on_thought_created raised "
-                            "(session_summary thought id=%s): %s",
-                            summary_node.id,
-                            e,
-                        )
-                _fire_lifecycle("on_thought_created", summary_node, "reflection")
-            except Exception as e:  # noqa: BLE001
-                # Summary write is decorative — never let it fail the
-                # session-close transition.
-                log.warning(
-                    "session_summary write failed (session %s): %s",
-                    session.id,
-                    e,
-                )
-                db.rollback()
+    # Phase B trace · every field filled even when lists are empty
+    # so the drawer can always distinguish "ran but nothing to
+    # show" from "didn't reach this phase".
+    mood = extraction_output.session_mood_signal if extraction_output is not None else None
+    tracer.record_phase_b(
+        extract_prompt=None,
+        extract_response_raw=None,
+        events_created=[
+            {
+                "id": n.id,
+                "description": (n.description or "")[:120],
+                "impact": n.emotional_impact,
+                "type": getattr(n.type, "value", n.type),
+                "subject": n.subject,
+            }
+            for n in created_events
+        ],
+        entities_resolved=entities_resolved_out,
+        junction_writes=junction_writes_out,
+        junction_rejects=junction_rejects_out,
+        session_mood_signal=(
+            {
+                "mood": mood.mood,
+                "energy": mood.energy,
+                "last_user_signal": mood.last_user_signal,
+            }
+            if mood is not None
+            else None
+        ),
+        commitments_extracted=[
+            {"id": n.id, "description": n.description}
+            for n in created_events
+            if getattr(n.type, "value", n.type) == "intention"
+        ],
+    )
+
+    # Spec 5 · plan §6.2 step 5. Persist session_summary as an L4
+    # ConceptNode(type='thought', source_session_id=session.id) so
+    # the runtime can later pull it for the # Recent sessions
+    # prompt section. Tagged via emotion_tags=['session_summary']
+    # because we deliberately don't add a new ConceptNode column —
+    # JSON tag matching is the cheapest discrimination path.
+    if (
+        extraction_output is not None
+        and extraction_output.session_summary
+        and not _session_summary_exists(db, session.id)
+    ):
+        try:
+            summary_node = ConceptNode(
+                persona_id=session.persona_id,
+                user_id=session.user_id,
+                type=NodeType.THOUGHT,
+                description=extraction_output.session_summary,
+                emotional_impact=0,
+                emotion_tags=["session_summary"],
+                relational_tags=[],
+                source_session_id=session.id,
+                created_at=now,
+            )
+            db.add(summary_node)
+            db.flush()
+            vec = await asyncio.to_thread(embed_fn, extraction_output.session_summary)
+            backend.insert_vector(summary_node.id, vec, conn=db.connection())
+            db.commit()
+            db.refresh(summary_node)
+            if observer is not None:
+                try:
+                    observer.on_thought_created(summary_node, "reflection")
+                except Exception as e:  # noqa: BLE001
+                    log.warning(
+                        "observer.on_thought_created raised (session_summary thought id=%s): %s",
+                        summary_node.id,
+                        e,
+                    )
+            _fire_lifecycle("on_thought_created", summary_node, "reflection")
+        except Exception as e:  # noqa: BLE001
+            # Summary write is decorative — never let it fail the
+            # session-close transition.
+            log.warning(
+                "session_summary write failed (session %s): %s",
+                session.id,
+                e,
+            )
+            db.rollback()
 
     # --- C. SHOCK trigger ----------------------------------------------
     shock_event: ConceptNode | None = None
@@ -636,7 +776,10 @@ async def consolidate_session(
     reflection_gate = "none"
 
     # --- E. Reflection execution (hard gate) ---------------------------
-    should_reflect = shock_event is not None or timer_due
+    # `session.reflected` is the phase-E resume point: a prior attempt
+    # that committed its thoughts but failed before the close commit
+    # must not reflect again on retry.
+    should_reflect = (shock_event is not None or timer_due) and not session.reflected
     if should_reflect:
         recent_count_24h = reflections_last_24h
         if recent_count_24h >= reflection_hard_limit_24h:
@@ -667,6 +810,7 @@ async def consolidate_session(
                         emotion_tags=th.emotion_tags,
                         relational_tags=th.relational_tags,
                         source_turn_id=th.source_turn_id,
+                        created_at=now,
                     )
                     db.add(thought)
                     db.flush()
@@ -674,13 +818,19 @@ async def consolidate_session(
 
                     # Embed thought — join the current transaction
                     # (see note in the event branch above).
-                    vec = embed_fn(th.description)
+                    vec = await asyncio.to_thread(embed_fn, th.description)
                     backend.insert_vector(thought.id, vec, conn=db.connection())
 
                     # Filling links
                     for child_id in th.filling:
                         link = ConceptNodeFilling(parent_id=thought.id, child_id=child_id)
                         db.add(link)
+                # Atomic with the thoughts: the phase-E resume point
+                # commits in the same transaction, so a failure before
+                # the close commit can't replay reflection.
+                session.reflected = True
+                session.reflected_at = now
+                db.add(session)
                 db.commit()
                 for t in created_thoughts:
                     db.refresh(t)
@@ -742,6 +892,8 @@ async def consolidate_session(
     session.status = SessionStatus.CLOSED
     session.extracted = True
     session.extracted_at = now
+    # The resume payload has served its purpose once the session closes.
+    session.extraction_payload = None
     db.add(session)
     db.commit()
     db.refresh(session)

@@ -70,6 +70,9 @@ def _build_retrieve_fixture():
 
     with DbSession(engine) as db:
         _seed_persona(db)
+        # Same created_at on both nodes so recency contributes an exact
+        # tie and only the relational bonus separates them.
+        now = datetime.now()
         tagged = ConceptNode(
             persona_id="p_test",
             user_id="self",
@@ -77,6 +80,7 @@ def _build_retrieve_fixture():
             description="关系相关事件",
             emotional_impact=0,
             relational_tags=["identity-bearing"],
+            created_at=now,
         )
         plain = ConceptNode(
             persona_id="p_test",
@@ -85,6 +89,7 @@ def _build_retrieve_fixture():
             description="普通事件",
             emotional_impact=0,
             relational_tags=[],
+            created_at=now,
         )
         db.add(tagged)
         db.add(plain)
