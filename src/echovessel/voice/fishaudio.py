@@ -56,7 +56,7 @@ class FishAudioProvider:
         if not self._api_key:
             raise VoicePermanentError(
                 "FishAudioProvider: api_key is empty. "
-                "Set FISH_API_KEY environment variable."
+                "Set FISH_AUDIO_KEY environment variable."
             )
         try:
             from fish_audio_sdk import Session
@@ -300,7 +300,7 @@ def _extract_status(e: Exception) -> int | None:
 
 
 def build_fishaudio_from_env(
-    *, api_key_env: str = "FISH_API_KEY"
+    *, api_key_env: str = "FISH_AUDIO_KEY"
 ) -> FishAudioProvider:
     api_key = os.environ.get(api_key_env) if api_key_env else None
     return FishAudioProvider(api_key=api_key)

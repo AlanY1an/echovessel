@@ -38,7 +38,7 @@ class VoiceServiceConfig:
     enabled: bool = True
     tts_provider: str = "fishaudio"  # 'fishaudio' | 'stub'
     stt_provider: str = "whisper_api"  # 'whisper_api' | 'stub'
-    tts_api_key_env: str = "FISH_API_KEY"
+    tts_api_key_env: str = "FISH_AUDIO_KEY"
     stt_api_key_env: str = "OPENAI_API_KEY"
     default_audio_format: AudioFormat = "mp3"
     default_voice_id: str | None = None

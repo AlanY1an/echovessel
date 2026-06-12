@@ -28,13 +28,16 @@ log = logging.getLogger(__name__)
 
 
 # Source: docs/voice/01-spec-v0.1.md §4.7a · Cost estimation (方案 Z).
-# FishAudio rate of USD 0.001 per character is a 2026-04 spec estimate;
-# re-check against https://fish.audio/ pricing before shipping v1.0.
+# fish.audio TTS list price: $15 per 1M UTF-8 bytes → $0.000015/byte.
+# We bill per `len(text)` (code points), which equals bytes for ASCII;
+# CJK text is ~3 bytes/char, so the real spend can be up to ~3x this
+# estimate — acceptable for an order-of-magnitude hint. Re-check against
+# https://fish.audio/ pricing before shipping v1.0.
 # Stub is always free. Unknown providers degrade to 0.0 with a warning.
 COST_PER_CHAR_USD: dict[str, float] = {
-    "fishaudio": 0.001,
+    "fishaudio": 15.0 / 1_000_000,
     "stub": 0.0,
-    # "elevenlabs": 0.0005,  # v1.0 reference value — not wired yet.
+    # "elevenlabs": 0.0003,  # v1.0 reference value — not wired yet.
 }
 
 
