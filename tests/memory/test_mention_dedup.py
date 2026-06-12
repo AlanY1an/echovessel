@@ -125,6 +125,119 @@ def test_old_match_outside_window_does_not_dedup():
     assert matches == {}
 
 
+def test_superseded_match_credits_live_successor():
+    """A hit on a superseded node must resolve to its live successor.
+
+    Node A is superseded by node B. A's vector is the closer candidate
+    (supersede leaves the old vector row in place), but the returned
+    match must be B — retrieve never surfaces A, so a bump on A is lost.
+    """
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+    _seed(engine)
+
+    now = datetime(2026, 4, 23, 12, 0, 0)
+    with DbSession(engine) as db:
+        a = ConceptNode(
+            persona_id="p",
+            user_id="self",
+            type=NodeType.EVENT,
+            description="user is job hunting at Acme",
+            emotional_impact=2,
+            created_at=now - timedelta(days=10),
+        )
+        b = ConceptNode(
+            persona_id="p",
+            user_id="self",
+            type=NodeType.EVENT,
+            description="user accepted the offer at Acme",
+            emotional_impact=3,
+            created_at=now - timedelta(days=3),
+        )
+        db.add(a)
+        db.add(b)
+        db.commit()
+        db.refresh(a)
+        db.refresh(b)
+        a.superseded_by_id = b.id
+        db.add(a)
+        db.commit()
+        a_id, b_id = a.id, b.id
+    # A's vector is the exact query direction; B's is slightly off so A
+    # wins the KNN ranking.
+    backend.insert_vector(a_id, _unit_vec(11))
+    backend.insert_vector(b_id, _cosine_vec(11, cosine=0.95))
+
+    def _embed(text: str) -> list[float]:
+        return _cosine_vec(11, cosine=0.99)
+
+    with DbSession(engine) as db:
+        matches = detect_mention_dedup(
+            db,
+            backend,
+            _embed,
+            persona_id="p",
+            user_id="self",
+            new_event_descriptions=["user talks about the Acme job again"],
+            now=now,
+        )
+    assert matches == {0: b_id}
+
+
+def test_superseded_chain_ending_in_deleted_node_does_not_match():
+    """If the supersede chain's live head is soft-deleted, skip the hit."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+    _seed(engine)
+
+    now = datetime(2026, 4, 23, 12, 0, 0)
+    with DbSession(engine) as db:
+        a = ConceptNode(
+            persona_id="p",
+            user_id="self",
+            type=NodeType.EVENT,
+            description="user adopted a cat",
+            emotional_impact=2,
+            created_at=now - timedelta(days=10),
+        )
+        b = ConceptNode(
+            persona_id="p",
+            user_id="self",
+            type=NodeType.EVENT,
+            description="user adopted two cats",
+            emotional_impact=2,
+            created_at=now - timedelta(days=3),
+            deleted_at=now - timedelta(days=1),
+        )
+        db.add(a)
+        db.add(b)
+        db.commit()
+        db.refresh(a)
+        db.refresh(b)
+        a.superseded_by_id = b.id
+        db.add(a)
+        db.commit()
+        a_id = a.id
+    backend.insert_vector(a_id, _unit_vec(21))
+
+    def _embed(text: str) -> list[float]:
+        return _cosine_vec(21, cosine=0.99)
+
+    with DbSession(engine) as db:
+        matches = detect_mention_dedup(
+            db,
+            backend,
+            _embed,
+            persona_id="p",
+            user_id="self",
+            new_event_descriptions=["user mentions the cat adoption"],
+            now=now,
+        )
+    assert matches == {}
+
+
 def test_low_cosine_does_not_dedup():
     engine = create_engine(":memory:")
     create_all_tables(engine)

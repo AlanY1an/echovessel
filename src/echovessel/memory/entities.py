@@ -338,12 +338,7 @@ def detect_mention_dedup(
             cosine = _distance_to_cosine(hit.distance)
             if cosine < cosine_threshold:
                 break
-            node = db.exec(
-                select(ConceptNode).where(
-                    ConceptNode.id == hit.concept_node_id,
-                    ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
-                )
-            ).one_or_none()
+            node = _resolve_live_event(db, hit.concept_node_id)
             if node is None:
                 continue
             if node.created_at < cutoff:
@@ -351,6 +346,27 @@ def detect_mention_dedup(
             matches[new_idx] = node.id
             break
     return matches
+
+
+def _resolve_live_event(db: DbSession, node_id: int) -> ConceptNode | None:
+    """Hydrate a candidate node, following supersede pointers to the live head.
+
+    Supersede keeps the old node's vector row in place, so a KNN hit can
+    land on a node retrieve will never surface (``superseded_by_id`` set
+    or soft-deleted). Crediting that node would strand the mention bump;
+    walk to the live head and credit it instead. Chains are short; the
+    visited set guards against a malformed cycle in stored data.
+    """
+    seen: set[int] = set()
+    node = db.get(ConceptNode, node_id)
+    while node is not None and node.superseded_by_id is not None:
+        if node.id in seen:
+            return None
+        seen.add(node.id)
+        node = db.get(ConceptNode, node.superseded_by_id)
+    if node is None or node.deleted_at is not None:
+        return None
+    return node
 
 
 def add_concept_entity_link(db: DbSession, *, node_id: int, entity_id: int) -> None:
