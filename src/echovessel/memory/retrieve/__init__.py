@@ -35,6 +35,9 @@ from echovessel.memory.retrieve.core import (
 from echovessel.memory.retrieve.scoring import (
     DEFAULT_MIN_RELEVANCE,
     ENTITY_ANCHOR_BONUS_VALUE,
+    IMPACT_DECAY_FLOOR,
+    IMPACT_HALF_LIFE_DAYS,
+    IMPACT_REINFORCEMENT_GAIN,
     RECENCY_HALF_LIFE_DAYS,
     RELATIONAL_BONUS_VALUE,
     WEIGHT_ENTITY_ANCHOR,
@@ -60,6 +63,9 @@ __all__ = [
     "RELATIONAL_BONUS_VALUE",
     "ENTITY_ANCHOR_BONUS_VALUE",
     "RECENCY_HALF_LIFE_DAYS",
+    "IMPACT_HALF_LIFE_DAYS",
+    "IMPACT_DECAY_FLOOR",
+    "IMPACT_REINFORCEMENT_GAIN",
     "DEFAULT_MIN_RELEVANCE",
     # Result types
     "ScoredMemory",

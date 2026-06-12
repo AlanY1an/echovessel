@@ -4,16 +4,18 @@ The retrieve pipeline ranks candidate concept nodes with
 
     score = WEIGHT_RECENCY     * recency
           + WEIGHT_RELEVANCE   * relevance
-          + WEIGHT_IMPACT      * impact
+          + WEIGHT_IMPACT      * impact          (impact decays slowly; see
+                                                  ``_impact_decay_factor``)
           + relational_bonus_w * relational_bonus
           + WEIGHT_ENTITY_ANCHOR * entity_anchor_bonus
 
-This module owns the weights and the four score helpers + ``_score_node``
+This module owns the weights and the score helpers + ``_score_node``
 so tuning happens in one place. Architecture v0.3 §3.2 + §4.14 + plan §6.3.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -39,6 +41,24 @@ ENTITY_ANCHOR_BONUS_VALUE = 1.0
 # Architecture uses positional decay 0.99^i; we use time-based for stability
 # across varying session densities. 14 days half-life is a reasonable default.
 RECENCY_HALF_LIFE_DAYS = 14
+
+# Impact decay: the impact term loses weight slowly with age so a store
+# full of old peak events can't permanently crowd fresh relevant
+# material out of the prompt. Much slower than recency (emotional
+# weight fades slower than topical freshness), with a floor: a year-old
+# impact-9 event still contributes ~30% of its full term — old trauma
+# still matters, just not at full strength.
+IMPACT_HALF_LIFE_DAYS = 90
+IMPACT_DECAY_FLOOR = 0.3
+
+# Reinforcement raises the effective decay floor: a node that keeps
+# being retrieved (access_count) or re-mentioned at consolidate time
+# (mention_count) is a durable fact, not a one-off peak, and should
+# wash out slower. log1p keeps the gain sub-linear; the floor caps at
+# 1.0, so a heavily-reinforced node simply stops decaying. mention_count
+# is born at 1, so only re-mentions count as reinforcement. At gain
+# 0.15, ~20 signals lift the floor to ≈0.76 and ~105 saturate it.
+IMPACT_REINFORCEMENT_GAIN = 0.15
 
 # Default minimum relevance floor applied at rerank time.
 #
@@ -67,6 +87,8 @@ class ScoredMemory:
     node: ConceptNode
     recency: float
     relevance: float
+    # Dampened: normalized |impact| × decay factor (``_impact_decay_factor``),
+    # i.e. exactly the value the rerank total weights.
     impact: float
     relational_bonus: float
     total: float
@@ -98,6 +120,28 @@ def _impact_score(emotional_impact: int) -> float:
     return min(abs(emotional_impact) / 10.0, 1.0)
 
 
+def _impact_decay_factor(node: ConceptNode, now: datetime) -> float:
+    """Slow exponential decay for the impact term, floored by reinforcement.
+
+    Returns (0, 1]; exactly 1.0 at age 0 regardless of signals, so a
+    fresh node always carries its full impact.
+    """
+    days = max((now - node.created_at).total_seconds() / 86400.0, 0.0)
+    decay = 0.5 ** (days / IMPACT_HALF_LIFE_DAYS)
+    reinforcement = node.access_count + max(node.mention_count - 1, 0)
+    floor = min(1.0, IMPACT_DECAY_FLOOR + IMPACT_REINFORCEMENT_GAIN * math.log1p(reinforcement))
+    return max(decay, floor)
+
+
+def _dampened_impact_score(node: ConceptNode, now: datetime) -> float:
+    """The impact term exactly as ranked: normalized |impact| × decay factor.
+
+    Shared by ``_score_node`` and the force-load user-thoughts ranking
+    in ``retrieve.core`` so the two formulas can't diverge.
+    """
+    return _impact_score(node.emotional_impact) * _impact_decay_factor(node, now)
+
+
 def _relational_bonus(node: ConceptNode) -> float:
     return RELATIONAL_BONUS_VALUE if node.relational_tags else 0.0
 
@@ -112,7 +156,7 @@ def _score_node(
 ) -> ScoredMemory:
     recency = _recency_score(node.created_at, now)
     relevance = _relevance_score(distance)
-    impact = _impact_score(node.emotional_impact)
+    impact = _dampened_impact_score(node, now)
     rel_bonus = _relational_bonus(node)
     anchor_bonus = ENTITY_ANCHOR_BONUS_VALUE if entity_anchored else 0.0
 

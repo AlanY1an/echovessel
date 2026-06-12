@@ -58,7 +58,7 @@ from echovessel.memory.retrieve.scoring import (
     DEFAULT_MIN_RELEVANCE,
     WEIGHT_RELATIONAL_BONUS,
     ScoredMemory,
-    _impact_score,
+    _dampened_impact_score,
     _recency_score,
     _score_node,
 )
@@ -99,7 +99,7 @@ class RetrievalResult:
     # L2 FTS fallback hits (if triggered)
     fts_fallback: list[RecallMessage]
     # Spec 5 · plan §6.3 force-load. Top-N L4 thoughts of the current
-    # speaker, ranked by recency × importance — bypasses query
+    # speaker, ranked by recency × dampened impact — bypasses query
     # similarity so the persona always carries some background
     # awareness of who the speaker is, even when the current message
     # has no obvious topical anchor. Empty when ``retrieve()`` was
@@ -518,7 +518,13 @@ def _load_user_thoughts_force(
     now: datetime,
     exclude_ids: set[int] | None = None,
 ) -> list[ConceptNode]:
-    """Top-N L4 thoughts for ``user_id``, ranked by recency × importance.
+    """Top-N L4 thoughts for ``user_id``, ranked by recency × dampened impact.
+
+    The impact term is the shared ``_dampened_impact_score`` from the
+    rerank formula — slow age decay with a reinforcement floor — so a
+    repeatedly-confirmed fact ("retired teacher, cat named Mochi")
+    outlasts a one-off observation of the same age and magnitude
+    instead of washing out on pure recency.
 
     Bypasses query similarity entirely — this is the force-load path
     that lives behind ``# About {speaker}`` in the user prompt. The
@@ -550,7 +556,7 @@ def _load_user_thoughts_force(
         rows = [n for n in rows if n.id not in exclude_ids]
 
     def _score(n: ConceptNode) -> float:
-        return _recency_score(n.created_at, now) * _impact_score(n.emotional_impact)
+        return _recency_score(n.created_at, now) * _dampened_impact_score(n, now)
 
     rows.sort(key=_score, reverse=True)
     return rows[:limit]
