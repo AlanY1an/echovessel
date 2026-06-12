@@ -283,16 +283,15 @@ def _create_entity(
 
 
 def _distance_to_cosine(distance: float) -> float:
-    """Convert an sqlite-vec distance to a cosine similarity in [0, 1].
+    """Convert a sqlite-vec cosine distance to cosine similarity.
 
-    sqlite-vec's vec0 virtual table returns L2 distance by default for
-    unit-normed embeddings, which maps to cosine via ``1 - d/2``. This
-    matches the convention already used by
-    ``echovessel.memory.retrieve._relevance_score`` — keep them in
-    lockstep so the threshold values in plan decision 4 have the same
-    meaning across files.
+    Both vec0 tables are declared with ``distance_metric=cosine``
+    (``db.vec_table_ddl``), so the reported distance is
+    ``1 - cosine_similarity``. Clamped to [0, 1]: negative similarities
+    (opposing vectors) carry no merge signal beyond "not a match", and
+    the thresholds above are all positive.
     """
-    return max(0.0, min(1.0, 1.0 - (distance / 2.0)))
+    return max(0.0, min(1.0, 1.0 - distance))
 
 
 def detect_mention_dedup(

@@ -8,7 +8,9 @@ async def + pytest-asyncio's `asyncio_mode = "auto"` from pyproject.toml.
 
 from __future__ import annotations
 
-from datetime import date
+import json
+import threading
+from datetime import date, datetime
 
 import pytest
 from sqlmodel import Session as DbSession
@@ -27,13 +29,19 @@ from echovessel.memory import (
 from echovessel.memory.backends.sqlite import SQLiteBackend
 from echovessel.memory.consolidate import (
     SHOCK_IMPACT_THRESHOLD,
+    ExtractedEntity,
     ExtractedEvent,
+    ExtractedSessionMoodSignal,
     ExtractedThought,
     ExtractionResult,
     consolidate_session,
     is_trivial,
 )
-from echovessel.memory.models import ConceptNode
+from echovessel.memory.consolidate.phase_bce import (
+    _count_reflections_24h,
+    _is_timer_due,
+)
+from echovessel.memory.models import ConceptNode, ConceptNodeEntity
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -711,3 +719,428 @@ async def test_consolidate_sets_extracted_events_flag_before_reflection():
         # F never ran.
         assert saved.status == SessionStatus.CLOSING
         assert saved.extracted is False
+
+
+# ---------------------------------------------------------------------------
+# Resume bookkeeping beyond phase B — entities / summary / mood / reflection
+# ---------------------------------------------------------------------------
+
+
+def _summary_nodes(db: DbSession, session_id: str) -> list[ConceptNode]:
+    return list(
+        db.exec(
+            select(ConceptNode).where(
+                ConceptNode.source_session_id == session_id,
+                ConceptNode.type == NodeType.THOUGHT.value,
+                ConceptNode.emotion_tags.like('%"session_summary"%'),  # type: ignore[union-attr]
+            )
+        )
+    )
+
+
+def _rich_extraction_result() -> ExtractionResult:
+    return ExtractionResult(
+        events=[
+            ExtractedEvent(
+                description="用户说 Scott 升职了，自己也很受触动",
+                emotional_impact=9,
+                emotion_tags=["joy"],
+            )
+        ],
+        mentioned_entities=[
+            ExtractedEntity(canonical_name="Scott", aliases=[], kind="person", in_events=[0])
+        ],
+        session_mood_signal=ExtractedSessionMoodSignal(
+            mood="warm-open", energy=7, last_user_signal="warm"
+        ),
+        session_summary="聊了 Scott 升职的事，气氛很好",
+    )
+
+
+async def test_retry_after_reflect_failure_keeps_one_set_of_derived_writes():
+    """A reflect failure after the extraction commit must not lose any
+    derived write on retry: the retried run ends with exactly one event,
+    one set of junctions, one session_summary node, one mood update, and
+    one reflection thought.
+    """
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+
+    with DbSession(engine) as db:
+        _seed(db)
+        sess = _make_session(db)
+        _add_messages(db, "s_test", ["a" * 40, "b" * 40, "c" * 40, "d" * 40, "e" * 40])
+
+        async def extractor(_msgs):
+            return _rich_extraction_result()
+
+        async def exploding_reflect(_nodes, _reason):
+            raise RuntimeError("reflection outage")
+
+        with pytest.raises(RuntimeError, match="reflection outage"):
+            await consolidate_session(
+                db=db,
+                backend=backend,
+                session=sess,
+                extract_fn=extractor,
+                reflect_fn=exploding_reflect,
+                embed_fn=_deterministic_embed,
+            )
+
+    with DbSession(engine) as db:
+        sess_again = db.get(Session, "s_test")
+        assert sess_again is not None
+
+        async def must_not_extract(_msgs):
+            raise AssertionError("extract_fn must not run on resume")
+
+        result = await consolidate_session(
+            db=db,
+            backend=backend,
+            session=sess_again,
+            extract_fn=must_not_extract,
+            reflect_fn=_make_async_reflector(
+                [ExtractedThought(description="Scott 的事对用户意义很大", emotional_impact=4)]
+            ),
+            embed_fn=_deterministic_embed,
+        )
+        assert result.reflection_reason == "shock"
+
+    with DbSession(engine) as db:
+        events = db.exec(
+            select(ConceptNode).where(
+                ConceptNode.source_session_id == "s_test",
+                ConceptNode.type == NodeType.EVENT.value,
+            )
+        ).all()
+        assert len(events) == 1
+
+        junctions = db.exec(select(ConceptNodeEntity)).all()
+        assert len(junctions) == 1
+        assert junctions[0].node_id == events[0].id
+
+        assert len(_summary_nodes(db, "s_test")) == 1
+
+        persona = db.get(Persona, "p_test")
+        assert persona is not None
+        assert persona.episodic_state["mood"] == "warm-open", "mood update must survive the retry"
+
+        thoughts = db.exec(
+            select(ConceptNode).where(
+                ConceptNode.type == NodeType.THOUGHT.value,
+                ConceptNode.emotion_tags.not_like('%"session_summary"%'),  # type: ignore[union-attr]
+            )
+        ).all()
+        assert len(thoughts) == 1
+
+        sess_done = db.get(Session, "s_test")
+        assert sess_done is not None
+        assert sess_done.status == SessionStatus.CLOSED
+        assert sess_done.reflected is True
+        assert sess_done.extraction_payload is None
+
+
+async def test_resume_rehydrates_extraction_payload_for_derived_writes():
+    """A retry where the prior attempt committed only events + payload
+    (e.g. the entity-phase commit failed) must rebuild the junctions,
+    the session_summary node, and the mood update from the payload —
+    without calling the extraction LLM again.
+    """
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+
+    with DbSession(engine) as db:
+        _seed(db)
+        pre_existing = ConceptNode(
+            persona_id="p_test",
+            user_id="self",
+            type=NodeType.EVENT,
+            description="用户说 Scott 升职了",
+            emotional_impact=4,
+            source_session_id="s_resume",
+        )
+        db.add(pre_existing)
+        db.commit()
+        db.refresh(pre_existing)
+
+        payload = json.dumps(
+            {
+                "event_node_ids": {"0": pre_existing.id},
+                "mentioned_entities": [
+                    {
+                        "canonical_name": "Scott",
+                        "aliases": [],
+                        "kind": "person",
+                        "in_events": [0],
+                    }
+                ],
+                "entity_clarification": None,
+                "session_mood_signal": {
+                    "mood": "warm-open",
+                    "energy": 6,
+                    "last_user_signal": "warm",
+                },
+                "session_summary": "聊了 Scott 升职的事",
+            }
+        )
+        sess = Session(
+            id="s_resume",
+            persona_id="p_test",
+            user_id="self",
+            channel_id="test",
+            status=SessionStatus.CLOSING,
+            message_count=5,
+            total_tokens=500,
+            extracted_events=True,
+            extraction_payload=payload,
+        )
+        db.add(sess)
+        db.commit()
+        _add_messages(db, "s_resume", ["a" * 40, "b" * 40, "c" * 40, "d" * 40, "e" * 40])
+
+        async def must_not_extract(_msgs):
+            raise AssertionError("extract_fn must not run on resume")
+
+        await consolidate_session(
+            db=db,
+            backend=backend,
+            session=sess,
+            extract_fn=must_not_extract,
+            reflect_fn=_empty_reflect,
+            embed_fn=_deterministic_embed,
+        )
+
+        junctions = db.exec(select(ConceptNodeEntity)).all()
+        assert len(junctions) == 1
+        assert junctions[0].node_id == pre_existing.id
+
+        assert len(_summary_nodes(db, "s_resume")) == 1
+
+        persona = db.get(Persona, "p_test")
+        assert persona is not None
+        assert persona.episodic_state["mood"] == "warm-open"
+
+        db.refresh(sess)
+        assert sess.status == SessionStatus.CLOSED
+        assert sess.extraction_payload is None
+
+
+async def test_resume_skips_reflection_when_already_reflected():
+    """A failure between the reflection commit and the close commit must
+    not re-run reflection on retry — the ``reflected`` flag committed with
+    the thoughts makes the retry skip phase E entirely.
+    """
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+
+    with DbSession(engine) as db:
+        _seed(db)
+        # Prior attempt: events + payload + thoughts all committed, but the
+        # close commit never landed.
+        shock = ConceptNode(
+            persona_id="p_test",
+            user_id="self",
+            type=NodeType.EVENT,
+            description="重大事件",
+            emotional_impact=-9,
+            source_session_id="s_reflected",
+        )
+        prior_thought = ConceptNode(
+            persona_id="p_test",
+            user_id="self",
+            type=NodeType.THOUGHT,
+            description="prior reflection from the first attempt",
+            emotional_impact=-4,
+        )
+        db.add(shock)
+        db.add(prior_thought)
+        sess = Session(
+            id="s_reflected",
+            persona_id="p_test",
+            user_id="self",
+            channel_id="test",
+            status=SessionStatus.CLOSING,
+            message_count=5,
+            total_tokens=500,
+            extracted_events=True,
+            reflected=True,
+        )
+        db.add(sess)
+        db.commit()
+        _add_messages(db, "s_reflected", ["a" * 40, "b" * 40, "c" * 40, "d" * 40, "e" * 40])
+
+        async def must_not_extract(_msgs):
+            raise AssertionError("extract_fn must not run on resume")
+
+        async def must_not_reflect(_nodes, _reason):
+            raise AssertionError("reflect_fn must not run again after the reflection commit")
+
+        result = await consolidate_session(
+            db=db,
+            backend=backend,
+            session=sess,
+            extract_fn=must_not_extract,
+            reflect_fn=must_not_reflect,
+            embed_fn=_deterministic_embed,
+        )
+        assert result.reflection_reason is None
+
+        thoughts = db.exec(
+            select(ConceptNode).where(ConceptNode.type == NodeType.THOUGHT.value)
+        ).all()
+        assert len(thoughts) == 1, "retry must not add a second reflection"
+
+        db.refresh(sess)
+        assert sess.status == SessionStatus.CLOSED
+
+
+# ---------------------------------------------------------------------------
+# Reflection gating ignores session_summary thoughts
+# ---------------------------------------------------------------------------
+
+
+def test_reflection_gates_ignore_session_summary_thoughts():
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+
+    with DbSession(engine) as db:
+        _seed(db)
+        for i in range(3):
+            db.add(
+                ConceptNode(
+                    persona_id="p_test",
+                    user_id="self",
+                    type=NodeType.THOUGHT,
+                    description=f"session summary {i}",
+                    emotional_impact=0,
+                    emotion_tags=["session_summary"],
+                )
+            )
+        db.commit()
+
+        now = datetime.now()
+        assert _count_reflections_24h(db, "p_test", "self", now) == 0
+        assert _is_timer_due(db, "p_test", "self", now) is True
+
+        db.add(
+            ConceptNode(
+                persona_id="p_test",
+                user_id="self",
+                type=NodeType.THOUGHT,
+                description="real reflection",
+                emotional_impact=2,
+            )
+        )
+        db.commit()
+        assert _count_reflections_24h(db, "p_test", "self", now) == 1
+        assert _is_timer_due(db, "p_test", "self", now) is False
+
+
+async def test_timer_fires_even_when_extraction_emits_session_summary():
+    """The session_summary thought committed during phase B must not be
+    mistaken for a fresh reflection by the TIMER gate in the same run."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+
+    with DbSession(engine) as db:
+        _seed(db)
+        sess = _make_session(db)
+        _add_messages(db, "s_test", ["a" * 40, "b" * 40, "c" * 40, "d" * 40, "e" * 40])
+
+        async def extractor(_msgs):
+            return ExtractionResult(
+                events=[ExtractedEvent(description="平常的一天", emotional_impact=2)],
+                session_summary="今天聊了日常",
+            )
+
+        reasons: list[str] = []
+
+        async def reflector(nodes, reason):
+            reasons.append(reason)
+            return [
+                ExtractedThought(
+                    description="日常也值得记下",
+                    emotional_impact=1,
+                    filling=[n.id for n in nodes],
+                )
+            ]
+
+        result = await consolidate_session(
+            db=db,
+            backend=backend,
+            session=sess,
+            extract_fn=extractor,
+            reflect_fn=reflector,
+            embed_fn=_deterministic_embed,
+        )
+
+        assert result.reflection_reason == "timer"
+        assert reasons == ["timer"]
+        assert len(_summary_nodes(db, "s_test")) == 1
+
+
+# ---------------------------------------------------------------------------
+# Embedding runs off the event loop
+# ---------------------------------------------------------------------------
+
+
+async def test_node_embeddings_run_off_the_event_loop():
+    """The embed callable is sync (sentence-transformers); the vector
+    writes for events, the session summary, and reflection thoughts must
+    run it via a worker thread, never on the loop thread."""
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+
+    calls: list[tuple[str, bool]] = []
+
+    def recording_embed(text: str) -> list[float]:
+        calls.append((text, threading.current_thread() is threading.main_thread()))
+        return _deterministic_embed(text)
+
+    with DbSession(engine) as db:
+        _seed(db)
+        sess = _make_session(db)
+        _add_messages(db, "s_test", ["a" * 40, "b" * 40, "c" * 40, "d" * 40, "e" * 40])
+
+        event_text = "用户说今天发生了一件大事"
+        summary_text = "聊了一件大事"
+        thought_text = "这件事值得记住"
+
+        async def extractor(_msgs):
+            return ExtractionResult(
+                events=[ExtractedEvent(description=event_text, emotional_impact=9)],
+                session_summary=summary_text,
+            )
+
+        async def reflector(nodes, _reason):
+            return [
+                ExtractedThought(
+                    description=thought_text,
+                    emotional_impact=3,
+                    filling=[n.id for n in nodes],
+                )
+            ]
+
+        await consolidate_session(
+            db=db,
+            backend=backend,
+            session=sess,
+            extract_fn=extractor,
+            reflect_fn=reflector,
+            embed_fn=recording_embed,
+        )
+
+    on_main_by_text: dict[str, list[bool]] = {}
+    for text, on_main in calls:
+        on_main_by_text.setdefault(text, []).append(on_main)
+
+    assert on_main_by_text[summary_text] == [False]
+    assert on_main_by_text[thought_text] == [False]
+    # The event description is also embedded by the mention-dedup helper;
+    # the node-vector embed itself must come from a worker thread.
+    assert False in on_main_by_text[event_text]

@@ -48,27 +48,19 @@ def _make_unit_embed(vector_slot: int) -> list[float]:
 
 
 def _cosine_target_embed(base_slot: int, cosine: float) -> list[float]:
-    """Build a 384-dim unit-norm vector whose true cosine similarity with
+    """Build a 384-dim unit-norm vector whose cosine similarity with
     the unit vector at ``base_slot`` equals ``cosine``.
 
-    Uses a two-component mix: cos*e_base + sin*e_other.
-    Note: sqlite-vec returns L2 distance, which ``entities._distance_to_cosine``
-    maps via ``1 - d/2``. For unit-norm vectors, that recovered score is
-    NOT the true cosine — it is ``1 - sqrt(2 - 2c) / 2``. Use
-    :func:`_recovered_sim_for` to convert when asserting thresholds.
+    Uses a two-component mix: cos*e_base + sin*e_other. The vec tables
+    are declared with ``distance_metric=cosine``, so the similarity
+    ``entities._distance_to_cosine`` recovers IS this value — the
+    merge thresholds compare directly against true cosine.
     """
     v = [0.0] * 384
     sin = math.sqrt(max(0.0, 1.0 - cosine * cosine))
     v[base_slot % 384] = cosine
     v[(base_slot + 10) % 384] = sin
     return v
-
-
-def _recovered_sim_for(true_cosine: float) -> float:
-    """Return what ``entities._distance_to_cosine`` will yield for two
-    unit-norm vectors whose true cosine is ``true_cosine``."""
-    d = math.sqrt(max(0.0, 2.0 - 2.0 * true_cosine))
-    return max(0.0, min(1.0, 1.0 - d / 2.0))
 
 
 def test_level1_alias_exact_match_returns_existing_entity():
@@ -125,9 +117,10 @@ def test_level2_high_cosine_auto_merges():
     _seed(engine)
 
     base_embed = _make_unit_embed(5)
-    # True cosine 0.97 → recovered sim ≈ 0.877, above the HIGH threshold.
-    new_embed = _cosine_target_embed(5, cosine=0.97)
-    assert _recovered_sim_for(0.97) > EMBEDDING_MERGE_THRESHOLD_HIGH
+    # Cosine 0.86 sits just above the HIGH threshold (0.85) — the
+    # designed auto-merge boundary, not a comfortable margin above it.
+    new_embed = _cosine_target_embed(5, cosine=0.86)
+    assert EMBEDDING_MERGE_THRESHOLD_HIGH < 0.86
 
     # Seed the existing entity + its vector.
     with DbSession(engine) as db:
@@ -183,11 +176,9 @@ def test_level2_mid_cosine_creates_uncertain_candidate():
     _seed(engine)
 
     base_embed = _make_unit_embed(5)
-    # True cosine 0.75 → recovered sim ≈ 0.647 — straddles the LOW bound
-    # in (LOW, HIGH) once we account for the distance conversion.
-    new_embed = _cosine_target_embed(5, cosine=0.85)
-    sim = _recovered_sim_for(0.85)
-    assert EMBEDDING_MERGE_THRESHOLD_LOW < sim < EMBEDDING_MERGE_THRESHOLD_HIGH
+    # Cosine 0.75 lands inside the (LOW, HIGH) uncertainty band.
+    new_embed = _cosine_target_embed(5, cosine=0.75)
+    assert EMBEDDING_MERGE_THRESHOLD_LOW < 0.75 < EMBEDDING_MERGE_THRESHOLD_HIGH
 
     with DbSession(engine) as db:
         db.add(
@@ -233,9 +224,10 @@ def test_level3_far_cosine_creates_new_confirmed_entity():
     _seed(engine)
 
     base_embed = _make_unit_embed(5)
-    # True cosine 0.1 → recovered sim ≈ 0.329, well below LOW.
-    new_embed = _cosine_target_embed(5, cosine=0.10)
-    assert _recovered_sim_for(0.10) < EMBEDDING_MERGE_THRESHOLD_LOW
+    # Cosine 0.5 — clearly related-but-different, below LOW (0.65).
+    # Must NOT merge and must NOT even flag as uncertain.
+    new_embed = _cosine_target_embed(5, cosine=0.50)
+    assert EMBEDDING_MERGE_THRESHOLD_LOW > 0.50
 
     with DbSession(engine) as db:
         db.add(

@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import pytest
+from sqlalchemy import text
 from sqlmodel import Session as DbSession
 from sqlmodel import select
 
@@ -21,6 +22,7 @@ from echovessel.memory import (
     create_all_tables,
     create_engine,
 )
+from echovessel.memory.backends.sqlite import SQLiteBackend
 from echovessel.memory.models import (
     ConceptNode,
     ConceptNodeFilling,
@@ -43,6 +45,23 @@ from echovessel.memory.slow_cycle import (
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+def _deterministic_embed(text: str) -> list[float]:
+    v = [0.0] * 384
+    v[hash(text) % 384] = 1.0
+    return v
+
+
+def _vec_row_count(db: DbSession, node_id: int) -> int:
+    return (
+        db.connection()
+        .execute(
+            text("SELECT COUNT(*) FROM concept_nodes_vec WHERE id = :id"),
+            {"id": node_id},
+        )
+        .scalar()
+    )
 
 
 def _seed(engine) -> None:
@@ -245,6 +264,8 @@ async def test_daily_cap_triggers_budget_exceeded():
             db,
             persona_id="p",
             user_id="self",
+            backend=SQLiteBackend(engine),
+            embed_fn=_deterministic_embed,
             slow_cycle_fn=slow_fn,
             now=now,
             daily_cap=36,
@@ -276,6 +297,8 @@ async def test_daily_input_token_budget_triggers_exceeded():
             db,
             persona_id="p",
             user_id="self",
+            backend=SQLiteBackend(engine),
+            embed_fn=_deterministic_embed,
             slow_cycle_fn=slow_fn,
             now=now,
             daily_input_token_budget=150_000,
@@ -332,6 +355,12 @@ def test_bulk_create_expectations_writes_nodes_and_filling():
             db,
             persona_id="p",
             user_id="self",
+            backend=SQLiteBackend(engine),
+            vectors=[
+                _deterministic_embed(
+                    "grad school applications — Alan will share progress next week"
+                )
+            ],
             expectations=[
                 SlowCycleExpectationInput(
                     about_text="grad school applications",
@@ -358,6 +387,8 @@ def test_bulk_create_expectations_writes_nodes_and_filling():
         )
         assert len(filling) == 1
         assert filling[0].child_id == evt_id
+        # Vector row exists so retrieve's vector search can join it.
+        assert _vec_row_count(db, ids[0]) == 1
 
 
 def test_bulk_create_expectations_rejects_empty_reasoning():
@@ -369,6 +400,8 @@ def test_bulk_create_expectations_rejects_empty_reasoning():
             db,
             persona_id="p",
             user_id="self",
+            backend=SQLiteBackend(engine),
+            vectors=[_deterministic_embed("x — y")],
             expectations=[
                 SlowCycleExpectationInput(
                     about_text="x",
@@ -388,6 +421,8 @@ def test_bulk_create_slow_thoughts_rejects_empty_filling():
             db,
             persona_id="p",
             user_id="self",
+            backend=SQLiteBackend(engine),
+            vectors=[_deterministic_embed("orphan thought")],
             thoughts=[
                 SlowCycleThoughtInput(
                     description="orphan thought",
@@ -441,6 +476,8 @@ async def test_run_slow_cycle_writes_thoughts_and_expectations(tmp_path):
             db,
             persona_id="p",
             user_id="self",
+            backend=SQLiteBackend(engine),
+            embed_fn=_deterministic_embed,
             slow_cycle_fn=slow_fn,
             now=now,
             transcript_dir=tmp_path,
@@ -473,6 +510,75 @@ async def test_run_slow_cycle_writes_thoughts_and_expectations(tmp_path):
     assert captured_input["now_iso"] == now.isoformat()
 
 
+async def test_run_slow_cycle_embeds_thoughts_and_expectations():
+    """Every node the slow cycle writes lands in concept_nodes_vec, so
+    vector retrieval can surface it — not just FTS/keyword paths. The
+    embed callable is sync (sentence-transformers); run_slow_cycle must
+    run it via a worker thread, never on the loop thread."""
+    import threading
+
+    engine = create_engine(":memory:")
+    create_all_tables(engine)
+    backend = SQLiteBackend(engine)
+    _seed(engine)
+    e1 = _add_event(engine, description="user is applying to grad school")
+
+    embedded_texts: list[str] = []
+    embed_on_main_thread: list[bool] = []
+
+    def tracking_embed(text: str) -> list[float]:
+        embedded_texts.append(text)
+        embed_on_main_thread.append(threading.current_thread() is threading.main_thread())
+        return _deterministic_embed(text)
+
+    async def slow_fn(_inp):
+        return SlowCycleOutput(
+            new_thoughts=[
+                SlowCycleThoughtInput(
+                    description="Alan is carrying the grad school stress alone",
+                    filling_event_ids=[e1],
+                    emotional_impact=-3,
+                )
+            ],
+            new_expectations=[
+                SlowCycleExpectationInput(
+                    about_text="grad school submissions",
+                    prediction_text="Alan will mention a deadline next week",
+                    due_at=datetime(2026, 5, 1),
+                    reasoning_event_ids=[e1],
+                    emotional_impact=2,
+                )
+            ],
+            input_tokens=100,
+            output_tokens=40,
+        )
+
+    now = datetime(2026, 4, 24, 12, 0, 0)
+    with DbSession(engine) as db:
+        result = await run_slow_cycle(
+            db,
+            persona_id="p",
+            user_id="self",
+            backend=backend,
+            embed_fn=tracking_embed,
+            slow_cycle_fn=slow_fn,
+            now=now,
+        )
+
+        assert result.ran
+        for node_id in [*result.thought_ids, *result.expectation_ids]:
+            assert _vec_row_count(db, node_id) == 1, (
+                f"node {node_id} missing its concept_nodes_vec row"
+            )
+            node = db.get(ConceptNode, node_id)
+            assert node.description in embedded_texts
+
+    # One embed per created node (thought + expectation), all of them
+    # computed off the event-loop thread.
+    assert len(embedded_texts) == 2
+    assert embed_on_main_thread == [False, False]
+
+
 async def test_run_slow_cycle_no_events_is_noop():
     engine = create_engine(":memory:")
     create_all_tables(engine)
@@ -494,6 +600,8 @@ async def test_run_slow_cycle_no_events_is_noop():
             db,
             persona_id="p",
             user_id="self",
+            backend=SQLiteBackend(engine),
+            embed_fn=_deterministic_embed,
             slow_cycle_fn=slow_fn,
             now=now,
         )
@@ -526,6 +634,8 @@ async def test_run_slow_cycle_rejects_unknown_filling_event_id():
             db,
             persona_id="p",
             user_id="self",
+            backend=SQLiteBackend(engine),
+            embed_fn=_deterministic_embed,
             slow_cycle_fn=slow_fn,
             now=now,
         )
@@ -576,6 +686,8 @@ async def test_run_slow_cycle_never_writes_l1(caplog):
             db,
             persona_id="p",
             user_id="self",
+            backend=SQLiteBackend(engine),
+            embed_fn=_deterministic_embed,
             slow_cycle_fn=slow_fn,
             now=now,
         )
@@ -644,6 +756,8 @@ async def test_run_slow_cycle_truncates_events_over_input_budget():
             db,
             persona_id="p",
             user_id="self",
+            backend=SQLiteBackend(engine),
+            embed_fn=_deterministic_embed,
             slow_cycle_fn=slow_fn,
             now=now,
             input_token_limit=600,  # very tight: only 1-2 events fit

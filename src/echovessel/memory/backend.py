@@ -26,9 +26,10 @@ from typing import Any, Protocol
 class VectorHit:
     """A single candidate returned from a vector search, pre-rerank.
 
-    `distance` is the backend's native distance metric (cosine distance for
-    sqlite-vec). Smaller = more similar. The rerank step converts this to
-    a [0, 1] relevance score.
+    `distance` is the backend's native distance metric — cosine distance
+    for sqlite-vec (``1 - cosine_similarity``, range [0, 2]: 0 = identical,
+    1 = orthogonal, 2 = opposite). Smaller = more similar. The rerank step
+    converts this to a [0, 1] relevance score.
     """
 
     concept_node_id: int
@@ -117,8 +118,9 @@ class StorageBackend(Protocol):
         :func:`echovessel.memory.entities.resolve_entity`.
         Implementations MUST filter by persona/user, exclude soft-deleted
         rows, and order ascending by distance. Returned distance uses the
-        same metric as :func:`vector_search` so callers share the
-        ``1 - distance/2`` cosine conversion.
+        same metric as :func:`vector_search` (cosine distance,
+        ``1 - cosine_similarity``) so callers recover similarity via
+        ``1 - distance``.
         """
         ...
 

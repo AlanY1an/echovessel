@@ -42,29 +42,22 @@ RECENCY_HALF_LIFE_DAYS = 14
 
 # Default minimum relevance floor applied at rerank time.
 #
-# `_relevance_score(distance)` maps sqlite-vec's distance output to a
-# relevance in [0, 1]. The older docstring on `_relevance_score` labels
-# the metric "cosine distance" but `vec0` virtual tables use L2 distance
-# by default, so for unit-norm embeddings the orthogonal case is
-# `||u - v|| = sqrt(2) ≈ 1.414` and `relevance = 1 - 1.414/2 ≈ 0.293`,
-# while partial overlap (cos=0.5) gives `||u - v|| = 1` and relevance =
-# 0.5. (Identical and opposite endpoints still match the docstring.)
-#
-# Given that, the floor sits at **0.4** — tight enough to drop truly
-# orthogonal candidates (~0.293) but loose enough to keep events that
-# share a single dimension with the query (~0.5). Without the floor,
-# strictly-orthogonal candidates flow through rerank, where the impact
-# + relational_bonus tie-breakers consistently promote high-|impact|
-# peak events for completely unrelated queries — the root of the
-# Over-recall MVP miss documented in
+# `_relevance_score(distance)` maps sqlite-vec's cosine distance
+# ([0, 2]: 0 = identical, 1 = orthogonal, 2 = opposite) to a relevance
+# in [0, 1] via `1 - d/2`, so a strictly-orthogonal candidate scores
+# exactly 0.5. The floor sits just above that at **0.55** — tight
+# enough to drop candidates with zero directional overlap, loose
+# enough to keep anything with cosine similarity ≥ 0.1 toward the
+# query. Without the floor, orthogonal candidates flow through rerank,
+# where the impact + relational_bonus tie-breakers consistently
+# promote high-|impact| peak events for completely unrelated queries —
+# the root of the Over-recall MVP miss documented in
 # `docs/memory/eval-runs/2026-04-15-baseline-nogit.md` §6.
 #
 # With a real sentence-transformers embedder this floor rarely fires
 # because natural language rarely hits exact-zero overlap; it is
-# principally a stub-embedder safety net in the eval harness, but the
-# math is the same for any embedder whose orthogonal case lands near
-# distance=sqrt(2).
-DEFAULT_MIN_RELEVANCE = 0.4
+# principally a stub-embedder safety net in the eval harness.
+DEFAULT_MIN_RELEVANCE = 0.55
 
 
 @dataclass(slots=True)

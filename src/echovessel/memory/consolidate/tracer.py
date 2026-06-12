@@ -169,7 +169,7 @@ class ConsolidateTracer:
         def _j(v: dict[str, Any] | None) -> str | None:
             return None if v is None else json.dumps(v, ensure_ascii=False, default=str)
 
-        finished_at = self.finished_at or datetime.utcnow()
+        finished_at = self.finished_at or datetime.now()
         db.execute(
             text(
                 "INSERT OR REPLACE INTO session_traces ("

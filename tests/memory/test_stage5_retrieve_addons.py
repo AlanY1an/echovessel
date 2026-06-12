@@ -59,9 +59,9 @@ def _seed(db: DbSession) -> None:
 
 
 def _unit_vec(idx: int, dim: int = 384) -> list[float]:
-    """Single-axis unit vector — distance between any two distinct
-    indices is sqrt(2), giving relevance ≈ 0.29 (well below the
-    default min_relevance floor of 0.4)."""
+    """Single-axis unit vector — any two distinct indices are
+    orthogonal (cosine distance 1.0), giving relevance 0.5 (below the
+    default min_relevance floor of 0.55)."""
 
     v = [0.0] * dim
     v[idx % dim] = 1.0
