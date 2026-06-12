@@ -45,7 +45,7 @@ Memory 模块的存储和检索旋钮。
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `db_path` | `"memory.db"` | SQLite 文件路径。相对路径基于 `data_dir`。特殊值 `":memory:"` 跑在进程内内存数据库里,shutdown 后一切消失——适合测试和本地实验。 |
-| `embedder` | `"all-MiniLM-L6-v2"` | sentence-transformers 模型名。Daemon 首次启动时下载(~90 MB),缓存到 `data_dir/embedder.cache/`。如果改这个,也要连带把数据库删掉——已有 embedding 是旧模型产出的,和新模型不可比。 |
+| `embedder` | `"intfloat/multilingual-e5-small"` | sentence-transformers 模型名。Daemon 首次启动时下载(~450 MB),缓存到 `data_dir/embedder.cache/`。改这个是安全的:memory DB 里记录着现有向量是哪个模型产出的,下次启动会自动用新模型把所有存量向量重嵌一遍(单事务完成)。 |
 | `retrieve_k` | `10` | retrieve 管道给 prompt 组装器返回的 memory 命中数。值越高 persona 上下文越多,但 token 成本也涨。 |
 | `relational_bonus_weight` | `1.0` | rerank 打分器里"关系加成"项的乘数。调高能让 persona 更倾向召回涉及用户命名关系的记忆。 |
 | `recent_window_size` | `20` | prompt 组装器无条件带上的最近 L2 消息数——不受 retrieve 结果影响。 |

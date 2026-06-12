@@ -119,10 +119,10 @@ backend.vector_search(embed_fn(query), types=('event','thought'))
 load ConceptNode rows where deleted_at IS NULL
       |
       v
-score each = 0.5*recency + 3*relevance + 2*impact + 1*relational_bonus
+score each = 0.5*recency + 3*relevance + 2*impact*decay + 1*relational_bonus
       |
       v
-drop rows where relevance < min_relevance (default 0.4)
+drop rows where relevance < min_relevance (default 0.55)
       |
       v
 sort by total, keep top_k
@@ -141,9 +141,9 @@ if raw vector hits < fallback_threshold:
 return RetrievalResult(core_blocks, memories, context_messages, fts_fallback)
 ```
 
-The four rerank factors matter individually. Recency is a time-based exponential with a 14-day half-life so that old-but-still-relevant memories do not vanish. Relevance comes straight from the vector backend's distance converted to `[0, 1]`. Impact is `|emotional_impact| / 10` so that a peak event outweighs a forgettable one when relevance ties. The relational bonus is a small flat boost (`0.5`) whenever a node carries any relational tag — `identity-bearing`, `unresolved`, `vulnerability`, `turning-point`, `correction`, `commitment` — so that identity facts are preferred on ties.
+The four rerank factors matter individually. Recency is a time-based exponential with a 14-day half-life so that old-but-still-relevant memories do not vanish. Relevance comes straight from the vector backend's distance converted to `[0, 1]`. Impact is `|emotional_impact| / 10` dampened by a much slower age decay so that a store full of old peak events cannot permanently crowd out fresh relevant material: the term multiplies by `max(0.5^(age_days / 90), floor)`, where the floor is `min(1, 0.3 + 0.15 · log1p(access_count + max(mention_count − 1, 0)))`. A year-old peak event therefore still contributes about 30% of its full impact term, and reinforcement raises the floor — a node that keeps being retrieved or re-mentioned at consolidate time is a durable fact and washes out slower (a heavily reinforced node stops decaying entirely). The constants live in `retrieve/scoring.py` as `IMPACT_HALF_LIFE_DAYS = 90`, `IMPACT_DECAY_FLOOR = 0.3`, `IMPACT_REINFORCEMENT_GAIN = 0.15`. The relational bonus is a small flat boost (`0.5`) whenever a node carries any relational tag — `identity-bearing`, `unresolved`, `vulnerability`, `turning-point`, `correction`, `commitment` — so that identity facts are preferred on ties.
 
-The `min_relevance` floor is load-bearing. Without it, strictly-orthogonal vector matches tie at a relevance of `0.5` and the impact weight silently promotes high-intensity events for completely unrelated queries. The default `0.4` is low enough to keep partial-overlap candidates and high enough to reject true strangers. Callers who want the old behaviour pass `min_relevance=0.0`.
+The `min_relevance` floor is load-bearing. Without it, strictly-orthogonal vector matches tie at a relevance of `0.5` and the impact weight silently promotes high-intensity events for completely unrelated queries. The default `0.55` sits just above the `0.5` an orthogonal match scores under the cosine mapping — high enough to reject true strangers, low enough to keep partial-overlap candidates. Callers who want the old behaviour pass `min_relevance=0.0`.
 
 ### Entity-anchored retrieval (L5 sidecar)
 
@@ -151,7 +151,7 @@ A cheap alias sidecar runs alongside the main vector path: every retrieve call t
 
 ### Force-loaded pinned thoughts (bypasses query similarity)
 
-`retrieve(force_load_user_thoughts=N)` is the sidecar that powers the `# About {speaker}` user-prompt section: it returns the top-N L4 thoughts about the current speaker by `recency × importance`, **without ever consulting the query embedding**. The reason: when the user message is "?" or "嗯" or a single character, the query has nothing to index against, but the persona still ought to know who it's talking to. Runtime defaults to `force_load_user_thoughts=10` from `assemble_turn`, and excludes node ids already returned by the main rerank so render doesn't double-bullet. Returned via `RetrievalResult.pinned_thoughts`.
+`retrieve(force_load_user_thoughts=N)` is the sidecar that powers the `# About {speaker}` user-prompt section: it returns the top-N L4 thoughts about the current speaker by `recency × dampened impact` — the impact term is the same slow-decay-with-reinforcement-floor value the main rerank uses, so a repeatedly-confirmed fact outlasts a one-off observation of the same age — **without ever consulting the query embedding**. The reason: when the user message is "?" or "嗯" or a single character, the query has nothing to index against, but the persona still ought to know who it's talking to. Runtime defaults to `force_load_user_thoughts=10` from `assemble_turn`, and excludes node ids already returned by the main rerank so render doesn't double-bullet. Returned via `RetrievalResult.pinned_thoughts`.
 
 ### Seven kinds of stimulus reactivity
 
@@ -248,6 +248,10 @@ on_session_closed fires via the lifecycle queue
 
 Every step commits before the next one begins, and the observer dispatch sits strictly after the commit that transitioned `session.status`. A consolidation that crashes midway leaves the database in a recoverable state: the session stays in `CLOSING`, the next startup's catch-up pass picks it up, and no lifecycle hook fires for a session that was never really closed.
 
+### Soft delete and the dead-vector retention sweep
+
+All user-facing deletion in `forget.py` is soft — the node row gets a `deleted_at` timestamp and retrieval filters it out; supersede likewise keeps the old row and only sets `superseded_by_id`. The search indexes are cleaned up separately by `sweep_dead_vectors`: a node soft-deleted more than 30 days ago loses its `concept_nodes_vec` row and its `concept_nodes_fts` entry, and a node superseded more than 30 days ago (measured from the successor's `created_at`) loses its vector row only — superseded history stays FTS-searchable because admin search filters on `deleted_at` alone. The `concept_nodes` rows themselves are never physically removed, so supersede chains and deletion records stay intact. The consolidate worker runs the sweep once per day from its idle branch.
+
 ### Triggers and thresholds
 
 The numeric thresholds that shape the flow above are module-level constants, not config knobs:
@@ -304,8 +308,9 @@ t ≈ 0.1s           runtime prepares the reply
 │    L5 entity-anchor cheap match · alias hits pull linked ConceptNodes into pool
 │    backend.vector_search(query_vec, types=('event','thought','intention','expectation'), top_k=40)
 │    load ConceptNode rows where deleted_at IS NULL AND superseded_by_id IS NULL
-│    rerank each: 0.5·recency + 3·relevance + 2·impact + relational_bonus + entity_anchor_bonus
-│    drop where relevance < min_relevance (default 0.4)       ← over-recall floor
+│    rerank each: 0.5·recency + 3·relevance + 2·impact·decay + relational_bonus + entity_anchor_bonus
+│      (impact decay: 90-day half-life, floored at 0.3 + reinforcement from access/mention counts)
+│    drop where relevance < min_relevance (default 0.55)      ← over-recall floor
 │    keep top_k, UPDATE access_count++, last_accessed_at
 │    derive_event_status(event_time_*, user_now) · render_event_delta_phrase
 │    optional: pull ±N L2 neighbours per event hit
@@ -529,18 +534,18 @@ After registration, every lifecycle hook (`on_new_session_started` / `on_session
 
 ### 2. Add a new retrieve scorer
 
-The rerank weights live as module constants in `retrieve.py`. Bumping a weight is a one-line patch, but a cleaner extension wraps the scorer so the default behaviour is untouched and your bias is opt-in.
+The rerank weights live as module constants in `retrieve/scoring.py`. Bumping a weight is a one-line patch, but a cleaner extension wraps the scorer so the default behaviour is untouched and your bias is opt-in. (Frequently-accessed nodes already get a built-in boost — reinforcement raises the impact-decay floor — so an access-count scorer would be redundant; the example below biases toward a chosen emotion tag instead.)
 
 ```python
-from datetime import datetime
 from echovessel.memory import retrieve as m_retrieve
 from echovessel.memory.retrieve import ScoredMemory, RetrievalResult
 
 
-def retrieve_with_access_boost(
-    db, backend, persona_id, user_id, query, embed_fn, *, top_k=10
+def retrieve_with_emotion_bias(
+    db, backend, persona_id, user_id, query, embed_fn, *, top_k=10,
+    emotion="nostalgia",
 ) -> RetrievalResult:
-    """Same as memory.retrieve.retrieve but boosts often-accessed nodes."""
+    """Same as memory.retrieve.retrieve but favours nodes tagged with one emotion."""
 
     result = m_retrieve.retrieve(
         db,
@@ -550,15 +555,14 @@ def retrieve_with_access_boost(
         query,
         embed_fn,
         top_k=top_k * 2,            # over-fetch so our rerank has headroom
-        min_relevance=0.4,          # keep the orthogonality floor in place
+        min_relevance=0.55,         # keep the orthogonality floor in place
     )
 
     boosted: list[ScoredMemory] = []
     for sm in result.memories:
-        # simple log-bonus on access_count; tune or replace freely
-        import math
-        bonus = 0.25 * math.log1p(sm.node.access_count)
-        sm.total += bonus
+        # flat bonus when the target emotion tag is present; tune or replace freely
+        if emotion in sm.node.emotion_tags:
+            sm.total += 0.5
         boosted.append(sm)
 
     boosted.sort(key=lambda s: -s.total)

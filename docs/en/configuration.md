@@ -45,7 +45,7 @@ The memory module's knobs for storage and retrieval.
 | Field | Default | Notes |
 | --- | --- | --- |
 | `db_path` | `"memory.db"` | Path to the SQLite file. Relative paths are resolved against `data_dir`. The special value `":memory:"` runs everything in a throwaway in-memory database, which is useful for tests and local experiments but loses all state on shutdown. |
-| `embedder` | `"all-MiniLM-L6-v2"` | Sentence-transformers model name. The daemon downloads this on first boot (~90 MB) and caches it under `data_dir/embedder.cache/`. If you change it, delete the database too — existing embeddings were produced by the old model and are not comparable. |
+| `embedder` | `"intfloat/multilingual-e5-small"` | Sentence-transformers model name. The daemon downloads this on first boot (~450 MB) and caches it under `data_dir/embedder.cache/`. Changing it is safe: the memory DB records which model produced its stored vectors, and the next startup automatically re-embeds every stored vector with the new model in a single transaction. |
 | `retrieve_k` | `10` | How many memory hits the retrieve pipeline returns to the prompt assembler. Higher values give the persona more context but inflate token cost. |
 | `relational_bonus_weight` | `1.0` | Multiplier on the relational-bonus term in the rerank scorer. Raise it to make the persona lean harder on memories that involve the user's named relationships. |
 | `recent_window_size` | `20` | How many recent L2 messages the prompt assembler always includes unconditionally, regardless of what retrieval returns. |

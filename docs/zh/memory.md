@@ -119,10 +119,10 @@ backend.vector_search(embed_fn(query), types=('event','thought'))
 load ConceptNode rows where deleted_at IS NULL
       |
       v
-score each = 0.5*recency + 3*relevance + 2*impact + 1*relational_bonus
+score each = 0.5*recency + 3*relevance + 2*impact*decay + 1*relational_bonus
       |
       v
-drop rows where relevance < min_relevance (默认 0.4)
+drop rows where relevance < min_relevance (默认 0.55)
       |
       v
 按 total 排序，保留 top_k
@@ -141,9 +141,9 @@ drop rows where relevance < min_relevance (默认 0.4)
 返回 RetrievalResult(core_blocks, memories, context_messages, fts_fallback)
 ```
 
-四项 rerank 因子各有各的作用。Recency 是基于时间的指数衰减，半衰期 14 天，这样老但仍相关的记忆不会凭空消失。Relevance 直接来自向量 backend 的距离，被映射到 `[0, 1]`。Impact 是 `|emotional_impact| / 10`，这样在 relevance 平手时，peak event 会压过平平无奇的 event。relational bonus 是一个小幅度的平坦加分（`0.5`），任何带 relational tag 的节点都能拿到——这些 tag 是 `identity-bearing`、`unresolved`、`vulnerability`、`turning-point`、`correction`、`commitment`——这样身份级的事实在平手时被优先召回。
+四项 rerank 因子各有各的作用。Recency 是基于时间的指数衰减，半衰期 14 天，这样老但仍相关的记忆不会凭空消失。Relevance 直接来自向量 backend 的距离，被映射到 `[0, 1]`。Impact 是 `|emotional_impact| / 10` 再乘上一个慢得多的年龄衰减，这样一仓库的陈年 peak event 没办法永久挤掉新鲜的相关材料：impact 项乘以 `max(0.5^(age_days / 90), floor)`，其中 floor 是 `min(1, 0.3 + 0.15 · log1p(access_count + max(mention_count − 1, 0)))`。一条一年前的 peak event 仍然贡献约 30% 的完整 impact 项，而 reinforcement 会抬高 floor——一个不断被检索、或在 consolidate 时反复被重新提及的节点是耐久事实，衰减得更慢（被强化得足够多的节点干脆停止衰减）。这些常量住在 `retrieve/scoring.py`：`IMPACT_HALF_LIFE_DAYS = 90`、`IMPACT_DECAY_FLOOR = 0.3`、`IMPACT_REINFORCEMENT_GAIN = 0.15`。relational bonus 是一个小幅度的平坦加分（`0.5`），任何带 relational tag 的节点都能拿到——这些 tag 是 `identity-bearing`、`unresolved`、`vulnerability`、`turning-point`、`correction`、`commitment`——这样身份级的事实在平手时被优先召回。
 
-`min_relevance` floor 是承重墙。没有它，严格正交的向量命中会停在 relevance `0.5`，impact 权重就会悄无声息地把高强度 event 推到完全无关的 query 下。默认的 `0.4` 低到足够保住那些只有部分重叠的候选，同时高到足以拒绝真正的陌生人。想恢复旧行为的调用方可以传 `min_relevance=0.0`。
+`min_relevance` floor 是承重墙。没有它，严格正交的向量命中会停在 relevance `0.5`，impact 权重就会悄无声息地把高强度 event 推到完全无关的 query 下。默认的 `0.55` 刚好高于正交命中在 cosine 映射下的 `0.5`——高到足以拒绝真正的陌生人，低到足够保住那些只有部分重叠的候选。想恢复旧行为的调用方可以传 `min_relevance=0.0`。
 
 ### Entity-anchored retrieval（L5 旁路）
 
@@ -151,7 +151,7 @@ drop rows where relevance < min_relevance (默认 0.4)
 
 ### Force-loaded pinned thoughts（绕过 query similarity）
 
-`retrieve(force_load_user_thoughts=N)` 是给 `# About {speaker}` 段用的旁路：直接按 `recency × importance` 取当前 speaker 的 top-N L4 thoughts，**完全不查 query embedding**。理由是：当用户消息是 "?" / "嗯" / 一句单字时，query 几乎没有可索引的 topic，但 persona 仍然应该知道自己在跟谁说话。runtime 默认在 `assemble_turn` 里传 `force_load_user_thoughts=10`，并把已经在 rerank top_k 里出现的 node id 排除掉，避免渲染重复。返回值挂在 `RetrievalResult.pinned_thoughts` 上。
+`retrieve(force_load_user_thoughts=N)` 是给 `# About {speaker}` 段用的旁路：直接按 `recency × dampened impact` 取当前 speaker 的 top-N L4 thoughts——impact 项与主 rerank 用的是同一个"慢衰减 + reinforcement floor"的值，所以被反复确认的事实会比同龄的一次性观察活得更久——**完全不查 query embedding**。理由是：当用户消息是 "?" / "嗯" / 一句单字时，query 几乎没有可索引的 topic，但 persona 仍然应该知道自己在跟谁说话。runtime 默认在 `assemble_turn` 里传 `force_load_user_thoughts=10`，并把已经在 rerank top_k 里出现的 node id 排除掉，避免渲染重复。返回值挂在 `RetrievalResult.pinned_thoughts` 上。
 
 ### 7 类 stimulus reactivity
 
@@ -248,6 +248,10 @@ on_session_closed 通过生命周期队列触发
 
 每一步都是在下一步开始前先 commit，observer 的 dispatch 严格位于把 `session.status` 改掉的那次 commit 之后。一次 consolidation 如果中途崩了，数据库仍然处于可恢复状态：session 停留在 `CLOSING`，下次启动时 catch-up pass 会把它捡回来，而一个从未真正关闭过的 session 绝不会触发生命周期 hook。
 
+### 软删除与死向量保留期清扫
+
+`forget.py` 里所有面向用户的删除都是软删除——节点行只是被打上 `deleted_at` 时间戳，retrieval 把它过滤掉；supersede 同理，老行保留，只设置 `superseded_by_id`。搜索索引由 `sweep_dead_vectors` 单独清理：软删除超过 30 天的节点失去它的 `concept_nodes_vec` 行和 `concept_nodes_fts` 条目；被 supersede 超过 30 天的节点（以接替者的 `created_at` 计时）只失去向量行——superseded 历史仍然能被 FTS 搜到，因为 admin search 只按 `deleted_at` 过滤。`concept_nodes` 行本身永远不会被物理删除，supersede 链和删除记录始终完整。consolidate worker 每天在它的 idle 分支跑一次这个清扫。
+
 ### 触发条件与阈值
 
 上面那张流程图里每个数值都是模块级常量，不是 config 可调项:
@@ -304,8 +308,9 @@ t ≈ 0.1s           runtime 准备回复
 │    L5 entity-anchor 预先 cheap match · 命中 entity 关联 ConceptNode 进候选
 │    backend.vector_search(query_vec, types=('event','thought','intention','expectation'), top_k=40)
 │    读出 ConceptNode 行(未删除的 · 未被 superseded_by_id 替代的)
-│    rerank: 0.5·recency + 3·relevance + 2·impact + relational_bonus + entity_anchor_bonus
-│    砍掉 relevance < min_relevance(默认 0.4)            ← over-recall 地板
+│    rerank: 0.5·recency + 3·relevance + 2·impact·decay + relational_bonus + entity_anchor_bonus
+│      (impact 衰减:90 天半衰期,floor = 0.3 + access/mention 计数带来的 reinforcement)
+│    砍掉 relevance < min_relevance(默认 0.55)            ← over-recall 地板
 │    保留 top_k · UPDATE access_count++ · last_accessed_at
 │    derive_event_status(event_time_*, user_now) · render_event_delta_phrase
 │    可选:每条 event 命中 ±N 条 L2 邻居扩展
@@ -524,18 +529,18 @@ register_observer(logger)
 
 ### 2. 加一个新的 retrieve scorer
 
-rerank 权重以模块常量形式住在 `retrieve.py` 里。抬高一个权重只是一行 patch，但更干净的扩展是包一层 scorer，这样默认行为完全不动、你的偏好是 opt-in 的。
+rerank 权重以模块常量形式住在 `retrieve/scoring.py` 里。抬高一个权重只是一行 patch，但更干净的扩展是包一层 scorer，这样默认行为完全不动、你的偏好是 opt-in 的。（被频繁访问的节点已经有内建加成——reinforcement 会抬高 impact 衰减的 floor——所以 access-count scorer 是多余的；下面的例子改为偏向某个指定的情绪 tag。）
 
 ```python
-from datetime import datetime
 from echovessel.memory import retrieve as m_retrieve
 from echovessel.memory.retrieve import ScoredMemory, RetrievalResult
 
 
-def retrieve_with_access_boost(
-    db, backend, persona_id, user_id, query, embed_fn, *, top_k=10
+def retrieve_with_emotion_bias(
+    db, backend, persona_id, user_id, query, embed_fn, *, top_k=10,
+    emotion="nostalgia",
 ) -> RetrievalResult:
-    """等同于 memory.retrieve.retrieve，但对被频繁访问的节点额外加分。"""
+    """等同于 memory.retrieve.retrieve，但偏向带某个情绪 tag 的节点。"""
 
     result = m_retrieve.retrieve(
         db,
@@ -545,15 +550,14 @@ def retrieve_with_access_boost(
         query,
         embed_fn,
         top_k=top_k * 2,            # 超额抓取，给我们的 rerank 留余地
-        min_relevance=0.4,          # 保留正交 floor
+        min_relevance=0.55,          # 保留正交 floor
     )
 
     boosted: list[ScoredMemory] = []
     for sm in result.memories:
-        # 对 access_count 做简单的 log bonus；你可以随意调或替换
-        import math
-        bonus = 0.25 * math.log1p(sm.node.access_count)
-        sm.total += bonus
+        # 目标情绪 tag 在场就给一个平坦 bonus；你可以随意调或替换
+        if emotion in sm.node.emotion_tags:
+            sm.total += 0.5
         boosted.append(sm)
 
     boosted.sort(key=lambda s: -s.total)

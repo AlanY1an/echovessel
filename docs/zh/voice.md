@@ -241,7 +241,7 @@ async def register_voice(sample_path: Path, label: str) -> str:
     cfg = VoiceServiceConfig(
         tts_provider="fishaudio",
         stt_provider="whisper_api",
-        tts_api_key_env="FISH_API_KEY",
+        tts_api_key_env="FISH_AUDIO_KEY",
         stt_api_key_env="OPENAI_API_KEY",
         clone_cache_path=Path.home() / ".echovessel" / "voice-cache.json",
     )
