@@ -56,6 +56,23 @@ def test_self_check_includes_speaker_attribution_check():
     assert "speaker attribution" in EXTRACTION_SYSTEM_PROMPT.lower()
 
 
+def test_self_check_emotional_peak_check_contains_its_question():
+    # Check 2's "If yes, add a MISSING event" conditional only works if
+    # the question it refers to is actually spelled out between
+    # "Ask yourself:" and "If yes". Guard that the quoted question is
+    # present so the highest-stakes self-check stays explicit.
+    check2_start = EXTRACTION_SYSTEM_PROMPT.find("## Check 2 · Emotional peaks")
+    assert check2_start != -1
+    section = EXTRACTION_SYSTEM_PROMPT[check2_start:]
+    ask_pos = section.find("Ask yourself:")
+    if_yes_pos = section.find("If yes,")
+    assert 0 <= ask_pos < if_yes_pos
+    question = section[ask_pos + len("Ask yourself:") : if_yes_pos]
+    assert '"' in question
+    assert "emotional peak" in question
+    assert "?" in question
+
+
 def test_relational_tag_vocabulary_is_exactly_six_values():
     assert frozenset(
         {

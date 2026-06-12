@@ -175,6 +175,10 @@ persona-only assertion does not count.
 
 Ask yourself:
 
+  "Did this session contain an emotional peak — a moment of unusual
+   weight, disclosure, or vulnerability — that NONE of my drafted
+   events covers?"
+
 If yes, add a MISSING event to cover that peak. Typical missed peaks:
 
   - a single casual mention of someone dying ("我爸两年前走了" / "my
