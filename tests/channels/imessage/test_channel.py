@@ -14,6 +14,7 @@ import pytest
 
 from echovessel.channels.base import Channel, OutgoingMessage
 from echovessel.channels.imessage.channel import IMessageChannel
+from echovessel.channels.imessage.client import ImsgRpcTimeoutError
 
 
 class FakeRpcClient:
@@ -767,6 +768,67 @@ async def test_send_dropped_while_subprocess_dead():
         assert not any(m == "send" for (m, _) in client.calls)
     finally:
         await ch.stop()
+
+
+# ---------------------------------------------------------------------------
+# start() failure cleanup · no orphaned subprocess
+# ---------------------------------------------------------------------------
+
+
+class TimeoutOnSubscribeClient(FakeRpcClient):
+    """Fake whose ``watch.subscribe`` times out, mimicking a locked chat.db."""
+
+    async def request(self, method: str, params: dict[str, Any], **_: Any) -> Any:
+        self.calls.append((method, dict(params)))
+        if method == "watch.subscribe":
+            raise ImsgRpcTimeoutError("imsg 'watch.subscribe' timed out after 30s")
+        if method == "send":
+            return self._send_response
+        return {}
+
+
+async def test_subscribe_timeout_stops_owned_client():
+    """When the channel built the client itself, a watch.subscribe timeout
+    must stop the spawned subprocess before start() propagates the error —
+    otherwise the imsg process outlives the failed start as an orphan."""
+    client = TimeoutOnSubscribeClient()
+    ch = IMessageChannel(
+        persona_apple_id="anya-persona@icloud.com",
+        cli_path="fake-imsg",
+        debounce_ms=50,
+    )
+    assert ch._owns_client is True
+    ch._build_client = lambda: client  # type: ignore[method-assign]
+
+    with pytest.raises(ImsgRpcTimeoutError):
+        await ch.start()
+
+    assert client._started is False
+    assert client._proc is None
+    assert ch._client is None
+    assert ch.is_ready() is False
+    assert ch._supervisor_task is None
+
+
+async def test_subscribe_timeout_leaves_injected_client_running():
+    """An injected client's lifecycle belongs to the injector — a failed
+    start() must not stop it (mirrors stop()'s ownership rule)."""
+    client = TimeoutOnSubscribeClient()
+    ch = IMessageChannel(
+        persona_apple_id="anya-persona@icloud.com",
+        cli_path="fake-imsg",
+        debounce_ms=50,
+        client=client,
+    )
+    assert ch._owns_client is False
+
+    with pytest.raises(ImsgRpcTimeoutError):
+        await ch.start()
+
+    assert client._started is True
+    assert client._proc is not None
+    assert ch.is_ready() is False
+    assert ch._supervisor_task is None
 
 
 # ---------------------------------------------------------------------------
