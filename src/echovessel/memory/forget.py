@@ -9,17 +9,22 @@ Implements the three deletion paths from architecture v0.3 §4.12:
                 choice (cascade / orphan / cancel)
     4.12.3 "Forget event, keep lesson" → handled automatically by orphan path
 
-All deletes are SOFT (set deleted_at). Physical cleanup happens via a
-separate cron job 30 days later (not implemented yet — v1.1).
+All deletes are SOFT (set deleted_at). `sweep_dead_vectors` later removes
+the search-index rows (concept_nodes_vec + concept_nodes_fts) for nodes
+that have been dead past the retention threshold; the concept_nodes rows
+themselves are never physically removed — supersede chains and the
+deletion record stay intact.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 
+from sqlalchemy import text
+from sqlalchemy.orm import aliased
 from sqlmodel import Session as DbSession
 from sqlmodel import select
 
@@ -161,7 +166,6 @@ def delete_concept_node(
     db: DbSession,
     node_id: int,
     choice: DeletionChoice = DeletionChoice.ORPHAN,
-    backend: StorageBackend | None = None,
     now: datetime | None = None,
 ) -> None:
     """Perform a soft delete, handling L4 dependencies per the user's choice.
@@ -171,10 +175,11 @@ def delete_concept_node(
         node_id: The ConceptNode to delete.
         choice: What to do with dependent thoughts (default ORPHAN — preserve
             insights but strip the deleted event from their filling chains).
-        backend: Optional StorageBackend; if given, we also remove the row from
-            the vector table. If None, the vector row is left (it's safe — the
-            concept_nodes join will filter it out by deleted_at).
         now: Override current time for tests.
+
+    The vector and FTS index rows are left in place — the concept_nodes
+    join filters them by deleted_at, and `sweep_dead_vectors` removes
+    them once retention expires.
 
     Raises:
         ValueError: If choice == CANCEL. The caller should never pass CANCEL
@@ -198,16 +203,10 @@ def delete_concept_node(
     filling_rows = list(db.exec(filling_stmt))
     dependent_thought_ids = [row.parent_id for row in filling_rows]
 
-    # Collect vector-table ids to scrub AFTER the outer db.commit() — opening
-    # a second SQLite connection (via backend._engine) while this session
-    # still holds a write lock is a classic "database is locked" deadlock.
-    vector_ids_to_delete: list[int] = []
-
     if choice == DeletionChoice.CASCADE:
         # Soft-delete the node and every thought that depended on it
         node.deleted_at = now
         db.add(node)
-        vector_ids_to_delete.append(node.id)
 
         if dependent_thought_ids:
             stmt = select(ConceptNode).where(
@@ -217,14 +216,12 @@ def delete_concept_node(
             for thought in db.exec(stmt):
                 thought.deleted_at = now
                 db.add(thought)
-                vector_ids_to_delete.append(thought.id)
 
     elif choice == DeletionChoice.ORPHAN:
         # Soft-delete just the node; mark its filling links as orphaned so
         # thoughts survive but can't retrace to a deleted event.
         node.deleted_at = now
         db.add(node)
-        vector_ids_to_delete.append(node.id)
 
         for row in filling_rows:
             row.orphaned = True
@@ -233,20 +230,109 @@ def delete_concept_node(
 
     db.commit()
 
-    # Best-effort vector scrub. Safe to fail: the concept_nodes join filters
-    # by deleted_at, so a leaked vector row is never returned to retrieve().
-    if backend is not None:
-        for vec_id in vector_ids_to_delete:
-            try:
-                backend.delete_vector(vec_id)
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "delete_concept_node: vector scrub failed "
-                    "node_id=%s: %s: %s",
-                    vec_id,
-                    type(exc).__name__,
-                    exc,
-                )
+
+# ---------------------------------------------------------------------------
+# Retention sweep · physical search-index cleanup for long-dead nodes
+# ---------------------------------------------------------------------------
+
+DEAD_VECTOR_RETENTION_DAYS = 30
+
+
+@dataclass(slots=True)
+class SweepCounts:
+    """How many nodes `sweep_dead_vectors` cleaned, per category."""
+
+    soft_deleted: int = 0
+    superseded: int = 0
+
+
+def sweep_dead_vectors(
+    db: DbSession,
+    backend: StorageBackend,
+    *,
+    older_than_days: int = DEAD_VECTOR_RETENTION_DAYS,
+    now: datetime | None = None,
+) -> SweepCounts:
+    """Remove search-index rows for nodes retrieval can never surface.
+
+    Soft delete and supersede both leave the node's vector in
+    `concept_nodes_vec` (and, for soft delete, its `concept_nodes_fts`
+    entry): retrieval filters dead nodes out AFTER the KNN/MATCH step,
+    so the scan space grows monotonically and stale near-duplicate
+    vectors keep matching first (mention-dedup then has to chain-resolve
+    to the live head). This sweep cleans nodes dead longer than
+    `older_than_days`:
+
+    - Soft-deleted (`deleted_at` past the threshold): vector + FTS entry
+      removed. The `concept_fts_update` trigger is scoped to
+      `UPDATE OF description`, so a soft delete never touches the FTS
+      index — the explicit external-content 'delete' here is the only
+      cleanup path.
+    - Superseded (`superseded_by_id` set; the successor's `created_at`
+      is the supersede time — both writes land in the same commit):
+      vector removed only. The FTS entry stays because admin search
+      filters on `deleted_at` alone and superseded history remains
+      searchable.
+
+    The `concept_nodes` rows are kept in both cases.
+
+    Idempotency gate: a candidate must still have a vec row, and the vec
+    + FTS deletes commit together. This matters — an external-content
+    FTS 'delete' for a rowid that is no longer in the index raises
+    "database disk image is malformed", so the FTS delete must fire at
+    most once per row. Chain-resolve in mention-dedup keeps covering the
+    window where a superseded node's vector is still present (younger
+    than the threshold).
+    """
+    now = now or datetime.now()
+    cutoff = now - timedelta(days=older_than_days)
+    conn = db.connection()
+    counts = SweepCounts()
+
+    soft_deleted_rows = db.exec(
+        select(ConceptNode.id, ConceptNode.description).where(  # type: ignore[call-overload]
+            ConceptNode.deleted_at.is_not(None),  # type: ignore[union-attr]
+            ConceptNode.deleted_at < cutoff,  # type: ignore[operator]
+        )
+    ).all()
+    for node_id, description in soft_deleted_rows:
+        if not _has_vec_row(conn, node_id):
+            continue
+        backend.delete_vector(node_id, conn=conn)
+        conn.execute(
+            text(
+                "INSERT INTO concept_nodes_fts(concept_nodes_fts, rowid, description) "
+                "VALUES('delete', :id, :description)"
+            ),
+            {"id": node_id, "description": description},
+        )
+        counts.soft_deleted += 1
+
+    successor = aliased(ConceptNode)
+    superseded_ids = db.exec(
+        select(ConceptNode.id)  # type: ignore[call-overload]
+        .join(successor, successor.id == ConceptNode.superseded_by_id)
+        .where(
+            ConceptNode.deleted_at.is_(None),  # type: ignore[union-attr]
+            successor.created_at < cutoff,
+        )
+    ).all()
+    for node_id in superseded_ids:
+        if not _has_vec_row(conn, node_id):
+            continue
+        backend.delete_vector(node_id, conn=conn)
+        counts.superseded += 1
+
+    db.commit()
+    return counts
+
+
+def _has_vec_row(conn, node_id: int) -> bool:
+    row = conn.execute(
+        text("SELECT id FROM concept_nodes_vec WHERE id = :id"),
+        {"id": node_id},
+    ).first()
+    return row is not None
 
 
 # ---------------------------------------------------------------------------

@@ -37,7 +37,10 @@ memory/
 │   └── tracer.py            per-session dev-mode trace recorder
 │
 ├── slow_cycle.py            phase G — cross-session reflection writer
-├── forget.py                soft-delete + retention sweep
+├── forget.py                soft-delete + sweep_dead_vectors (removes vec/FTS
+│                            index rows for nodes soft-deleted or superseded
+│                            >30 days ago; node rows are kept; the consolidate
+│                            worker runs it once per day on its idle branch)
 ├── observers.py             MemoryEventObserver Protocol + registry
 └── events.py                re-export shim for memory.observers symbols
 ```
@@ -132,7 +135,7 @@ Every sub-stage is on by default; "empty" means "no data matched", not
 retrieve(db, backend, persona_id, user_id, query_text, embed_fn,
          top_k=10, now,
          fallback_threshold=3, expand_session_context=True,
-         context_window=3, min_relevance=0.4,
+         context_window=3, min_relevance=0.55,
          relational_bonus_weight=1.0,
          force_load_user_thoughts=10,    ← coordinator default
          force_load_persona_thoughts=5)  ← coordinator default
@@ -141,14 +144,17 @@ retrieve(db, backend, persona_id, user_id, query_text, embed_fn,
   ├→ get_nodes_linked_to_entities()  (anchored nodes: synthetic distance=2.0,
   │                                   bypass min_relevance floor)
   ├→ vector_search()                 (L3+L4 unified, top_k)
-  ├→ rerank = 0.5*recency + 3*relevance + 2*impact
+  ├→ rerank = 0.5*recency + 3*relevance + 2*impact*decay
   │           + 1.0*relational_bonus + 1.5*entity_anchor
+  │           decay = max(0.5^(age_days/90),
+  │                       min(1, 0.3 + 0.15*log1p(access_count + max(mention_count-1, 0))))
   ├→ side effect: access_count += 1, last_accessed_at = now (per returned)
   ├→ L2 session expansion            (context_window=3 around event hits)
   ├→ L2 FTS fallback                 (when raw vector hits < fallback_threshold=3;
   │                                   NOT post-rerank)
   ├→ pinned_thoughts                 (force_load_user_thoughts=10 default;
-  │                                   ranked recency × impact, subject='user')
+  │                                   ranked recency × dampened impact — same
+  │                                   decay term as rerank, subject='user')
   └→ persona_thoughts                (force_load_persona_thoughts=5 default;
                                       ranked recency-only, subject='persona')
 ```
@@ -181,7 +187,7 @@ upstream.
 `WEIGHT_RELEVANCE=3.0`, `WEIGHT_IMPACT=2.0`,
 `WEIGHT_RELATIONAL_BONUS=1.0`, `WEIGHT_ENTITY_ANCHOR=1.5`,
 `RELATIONAL_BONUS_VALUE=0.5`, `ENTITY_ANCHOR_BONUS_VALUE=1.0`,
-`RECENCY_HALF_LIFE_DAYS=14`, `DEFAULT_MIN_RELEVANCE=0.4`.
+`RECENCY_HALF_LIFE_DAYS=14`, `DEFAULT_MIN_RELEVANCE=0.55`.
 
 **Config** in `runtime/config.py::MemorySection`: `retrieve_k=10`,
 `recent_window_size=20`, `relational_bonus_weight=1.0`.
