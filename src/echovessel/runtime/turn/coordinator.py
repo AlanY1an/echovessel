@@ -27,6 +27,7 @@ owns text production.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -258,6 +259,9 @@ async def assemble_turn(
     # subsequent tracer call a no-op so the hot path pays ~nothing for
     # the instrumentation scaffolding.
     turn_started_at = _now()
+    # Latency metrics (first_token_ms / duration_ms) come from monotonic
+    # deltas; wall-clock datetimes are only persisted as row columns.
+    turn_started_mono = time.monotonic()
     tracer = make_turn_tracer(
         enabled=ctx.dev_trace_enabled,
         turn_id=turn.turn_id,
@@ -712,7 +716,7 @@ async def assemble_turn(
         pending_message_id = _pending_id_for_turn(turn)
         accumulated: list[str] = []
         last_error: str | None = None
-        first_token_at: datetime | None = None
+        first_token_mono: float | None = None
         llm_usage: object | None = None
 
         tracer.stage_start("llm_stream")
@@ -729,8 +733,8 @@ async def assemble_turn(
                     llm_usage = item  # trailing Usage sentinel
                     continue
                 token = item
-                if first_token_at is None:
-                    first_token_at = datetime.utcnow()
+                if first_token_mono is None:
+                    first_token_mono = time.monotonic()
                 accumulated.append(token)
                 if on_token is not None:
                     try:
@@ -768,10 +772,8 @@ async def assemble_turn(
         tracer.llm_model = llm_model_str
         tracer.input_tokens = input_tokens
         tracer.output_tokens = output_tokens
-        if first_token_at is not None:
-            tracer.first_token_ms = max(
-                0, int((first_token_at - turn_started_at).total_seconds() * 1000)
-            )
+        if first_token_mono is not None:
+            tracer.first_token_ms = int((first_token_mono - turn_started_mono) * 1000)
 
         if last_error is not None and not full_reply:
             # Nothing made it through — treat as skipped.
@@ -843,11 +845,8 @@ async def assemble_turn(
         # about the assemble_turn return value, and dev-mode tracing
         # is opt-in so a broken trace write during a production turn
         # would still sink the user-visible reply otherwise.
-        finished_at = datetime.utcnow()
-        tracer.finished_at = finished_at
-        tracer.duration_ms = max(
-            0, int((finished_at - turn_started_at).total_seconds() * 1000)
-        )
+        tracer.finished_at = _now()
+        tracer.duration_ms = int((time.monotonic() - turn_started_mono) * 1000)
         if isinstance(tracer, TurnTracer):
             try:
                 tracer.persist(ctx.db)

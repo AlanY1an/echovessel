@@ -185,3 +185,33 @@ async def test_runtime_stop_tears_down_uvicorn_cleanly() -> None:
         s.bind(("127.0.0.1", port))
     finally:
         s.close()
+
+
+async def test_runtime_web_bind_failure_is_detected_and_nonfatal() -> None:
+    """Port already held by another process: uvicorn's serve() task
+    dies with SystemExit after _start_web_channel returns. The startup
+    poll must detect it, the daemon must keep booting without the web
+    surface (no 'serving' state left behind), and the event loop must
+    survive the SystemExit."""
+
+    blocker = socket.socket()
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    port = blocker.getsockname()[1]
+
+    rt = _make_runtime(web_enabled=True, port=port)
+    try:
+        await rt.start(register_signals=False)
+
+        # start()'s web rollback ran: no web surface, daemon alive.
+        assert rt._web_uvicorn_task is None
+        assert rt._web_uvicorn_server is None
+        assert rt._web_channel is None
+        assert rt.broadcaster is None
+
+        # The rest of the runtime came up (dispatcher + workers).
+        assert rt._dispatcher is not None
+        assert rt._tasks
+    finally:
+        await rt.stop()
+        blocker.close()

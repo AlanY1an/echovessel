@@ -43,11 +43,15 @@ def make_engagement_maintenance_fn(
     async def _run(now: datetime) -> None:
         with db_factory() as db:
             maintain_engagement(
-                db,
+                db,  # type: ignore[arg-type]
                 persona_id=persona_id,
                 user_id=user_id,
                 now_fn=lambda: now,
             )
+            # The four paths commit when they act; the no-op cycle only
+            # flushes the freshly-inited baseline row. Commit here so
+            # that row (and its last_updated watermark) persists.
+            db.commit()  # type: ignore[attr-defined]
 
     return _run
 

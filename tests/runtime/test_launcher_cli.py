@@ -563,3 +563,103 @@ def test_run_sigterm_exits_cleanly_and_removes_pidfile(tmp_path: Path) -> None:
         if proc.poll() is None:
             proc.kill()
             proc.wait(timeout=5.0)
+
+
+# ---------------------------------------------------------------------------
+# .env loading for stop / reload / status (pidfile resolution)
+# ---------------------------------------------------------------------------
+#
+# Config validation requires the LLM api_key_env var at load time. When
+# the key only lives in .env (the documented `echovessel init` flow),
+# stop/reload/status must load it the same way `run` does — otherwise
+# _pidfile_for silently falls back to ~/.echovessel/runtime.pid and
+# misses a daemon running with a custom data_dir.
+
+ENV_KEYED_TOML = """
+[runtime]
+data_dir = "{data_dir}"
+log_level = "warn"
+
+[persona]
+id = "dotenv-cli"
+display_name = "Dotenv CLI"
+
+[memory]
+db_path = ":memory:"
+
+[llm]
+provider = "openai_compat"
+api_key_env = "ECHOVESSEL_TEST_DOTENV_KEY"
+"""
+
+
+def _write_env_keyed_setup(tmp_path: Path) -> tuple[Path, Path]:
+    """Config with custom data_dir + a .env holding the only copy of
+    the API key. Returns (config_path, data_dir)."""
+    data_dir = tmp_path / "custom-data"
+    data_dir.mkdir()
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(ENV_KEYED_TOML.format(data_dir=str(data_dir)))
+    (tmp_path / ".env").write_text("ECHOVESSEL_TEST_DOTENV_KEY=sk-test-dotenv\n")
+    return cfg, data_dir
+
+
+def test_status_loads_dotenv_for_custom_data_dir(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("ECHOVESSEL_TEST_DOTENV_KEY", raising=False)
+    cfg, data_dir = _write_env_keyed_setup(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    # Live pidfile (this very process) in the CUSTOM data_dir.
+    (data_dir / "runtime.pid").write_text(str(os.getpid()))
+
+    try:
+        result = _runner().invoke(cli, ["status", "--config", str(cfg)])
+        assert result.exit_code == 0, _stream(result)
+        assert f"pid={os.getpid()}" in result.output
+        assert "stopped" not in result.output
+    finally:
+        os.environ.pop("ECHOVESSEL_TEST_DOTENV_KEY", None)
+
+
+def test_stop_loads_dotenv_for_custom_data_dir(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("ECHOVESSEL_TEST_DOTENV_KEY", raising=False)
+    cfg, data_dir = _write_env_keyed_setup(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    (data_dir / "runtime.pid").write_text("4242424")
+
+    killed: list[tuple[int, int]] = []
+
+    def fake_kill(pid: int, sig: int) -> None:
+        killed.append((pid, sig))
+
+    try:
+        with patch("echovessel.runtime.launcher.os.kill", fake_kill):
+            result = _runner().invoke(cli, ["stop", "--config", str(cfg)])
+        assert result.exit_code == 0, _stream(result)
+        # v1 pidfile → no control port → SIGTERM to the pid recorded in
+        # the custom data_dir, not a 'no pidfile' refusal.
+        assert killed == [(4242424, signal.SIGTERM)]
+    finally:
+        os.environ.pop("ECHOVESSEL_TEST_DOTENV_KEY", None)
+
+
+def test_reload_loads_dotenv_for_custom_data_dir(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("ECHOVESSEL_TEST_DOTENV_KEY", raising=False)
+    cfg, data_dir = _write_env_keyed_setup(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    (data_dir / "runtime.pid").write_text("4242424")
+
+    killed: list[tuple[int, int]] = []
+
+    def fake_kill(pid: int, sig: int) -> None:
+        killed.append((pid, sig))
+
+    try:
+        with patch("echovessel.runtime.launcher.os.kill", fake_kill):
+            result = _runner().invoke(cli, ["reload", "--config", str(cfg)])
+        assert result.exit_code == 0, _stream(result)
+        assert killed == [(4242424, signal.SIGHUP)]
+    finally:
+        os.environ.pop("ECHOVESSEL_TEST_DOTENV_KEY", None)

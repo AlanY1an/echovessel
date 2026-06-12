@@ -42,6 +42,27 @@ def test_stage_start_end_pair_records_one_step() -> None:
     assert steps[0].detail == {"message_count": 1}
 
 
+def test_stage_timing_uses_monotonic_clock(monkeypatch) -> None:
+    """Stage offsets and durations come from ``time.monotonic()`` — the
+    ``started_at`` wall stamp (whatever clock it's on) never leaks into
+    the timeline math."""
+    ticks = iter([100.0, 100.5, 101.25])
+    monkeypatch.setattr("echovessel.runtime.turn.tracer.time.monotonic", lambda: next(ticks))
+    t = TurnTracer(
+        turn_id="t1",
+        persona_id="p1",
+        user_id="u1",
+        channel_id="web",
+        # Wall stamp years away from now — must not skew t_ms/duration_ms.
+        started_at=datetime(2020, 1, 1),
+    )
+    t.stage_start("retrieve")
+    t.stage_end("retrieve")
+    (step,) = t.steps()
+    assert step.t_ms == 500
+    assert step.duration_ms == 750
+
+
 def test_stage_end_without_start_silently_skips() -> None:
     t = TurnTracer(
         turn_id="t1",

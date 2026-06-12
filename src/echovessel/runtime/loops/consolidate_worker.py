@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -147,6 +147,11 @@ class ConsolidateWorker:
     # writes a session_traces row + each slow_cycle run appends its
     # phase_g payload. Default off → zero overhead.
     dev_trace_enabled: bool = False
+    # BA engagement maintainer (proactive v2 Stage 4). Built by
+    # ``runtime.wiring.proactive.make_engagement_maintenance_fn`` and
+    # threaded in by the composition root; runs on every idle cycle.
+    # None (default) keeps the loop proactive-free.
+    engagement_maintenance_fn: Callable[[datetime], Awaitable[None]] | None = None
     _queue: list[str] = field(default_factory=list, init=False)
 
     def __post_init__(self) -> None:
@@ -165,6 +170,7 @@ class ConsolidateWorker:
                 log.error("consolidate worker poll failed: %s", e, exc_info=True)
 
             if not self._queue:
+                await self._maybe_maintain_engagement()
                 await asyncio.sleep(self.poll_seconds)
                 continue
 
@@ -186,6 +192,20 @@ class ConsolidateWorker:
 
     def _shutting_down(self) -> bool:
         return self.shutdown_event is not None and self.shutdown_event.is_set()
+
+    async def _maybe_maintain_engagement(self) -> None:
+        """Idle-branch hook for the BA engagement maintainer.
+
+        ``maintain_engagement`` is idempotent (watermark + sentinel +
+        once-per-day decay), so calling it once per idle poll is safe.
+        Failure never blocks consolidation — log and move on.
+        """
+        if self.engagement_maintenance_fn is None:
+            return
+        try:
+            await self.engagement_maintenance_fn(self.now_fn())
+        except Exception as e:  # noqa: BLE001
+            log.warning("engagement maintenance failed: %s", e)
 
     def _poll_closing_sessions(self) -> None:
         with self.db_factory() as db:  # type: ignore[operator]
@@ -387,6 +407,8 @@ class ConsolidateWorker:
                 db,  # type: ignore[arg-type]
                 persona_id=session.persona_id,
                 user_id=session.user_id,
+                backend=self.backend,
+                embed_fn=self.embed_fn,
                 slow_cycle_fn=self.slow_cycle_fn,
                 now=now,
                 daily_cap=self.slow_tick_daily_cap,
