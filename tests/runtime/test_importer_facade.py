@@ -81,6 +81,26 @@ async def test_importer_facade_subscribe_unknown_pipeline_raises():
         facade.subscribe_events("nope")
 
 
+async def test_subscribe_after_cancel_replays_history_then_terminates():
+    """A subscriber attaching after the pipeline reached a terminal
+    state must get the replayed history and then a clean end of
+    iteration — not block forever on a queue nothing will feed."""
+
+    facade = _make_facade()
+    pipeline_id = await facade.start_pipeline("upload-late")
+    await facade.cancel_pipeline(pipeline_id)
+
+    async def _consume() -> list[PipelineEvent]:
+        return [ev async for ev in facade.subscribe_events(pipeline_id)]
+
+    events = await asyncio.wait_for(_consume(), timeout=1.0)
+
+    kinds = [e.type for e in events]
+    assert kinds == ["pipeline.registered", "pipeline.cancelled"]
+    # The finished iterator detached its queue from the pipeline state.
+    assert facade._pipelines[pipeline_id].subscribers == []
+
+
 # ---------------------------------------------------------------------------
 # Terminal-state payload release
 # ---------------------------------------------------------------------------
@@ -141,6 +161,37 @@ async def test_completed_pipeline_releases_upload_bytes(monkeypatch):
     assert state.kwargs == {}
     # Summary survives: history still replays for late subscribers.
     assert any(ev.type == "pipeline.done" for ev in state.history)
+
+
+async def test_subscribe_after_completion_yields_history_then_stops(monkeypatch):
+    """SSE reconnects (and fast pipelines that finish before their
+    consumer attaches) subscribe after ``pipeline.done``. The iterator
+    must yield the full history and then stop, so the admin events
+    route's response actually closes."""
+
+    async def fake_run_pipeline(*, pipeline_id, event_sink, **kwargs):
+        await event_sink(SimpleNamespace(type="pipeline.done", payload={"status": "success"}))
+
+    monkeypatch.setattr("echovessel.runtime.wiring.importer.run_pipeline", fake_run_pipeline)
+    facade = _make_real_facade()
+    pid = await _start_real_pipeline(facade)
+    state = facade._pipelines[pid]
+    await asyncio.wait_for(state.task, timeout=2.0)
+
+    it = facade.subscribe_events(pid)
+
+    async def _consume() -> list[PipelineEvent]:
+        return [ev async for ev in it]
+
+    events = await asyncio.wait_for(_consume(), timeout=2.0)
+
+    kinds = [e.type for e in events]
+    assert kinds == ["pipeline.registered", "pipeline.done"]
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(it.__anext__(), timeout=1.0)
+    # Each finished iterator detaches its queue — repeated reconnects
+    # must not accumulate dead queues on the pipeline state.
+    assert state.subscribers == []
 
 
 async def test_cancelled_pipeline_keeps_kwargs_for_resume(monkeypatch):

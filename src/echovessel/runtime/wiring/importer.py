@@ -322,6 +322,13 @@ class ImporterFacade:
         for past in state.history:
             queue.put_nowait(past)
         state.subscribers.append(queue)
+        if state.status != "running":
+            # Terminal pipeline: the sentinel pushes from _run_pipeline /
+            # cancel_pipeline only reached subscribers present at that
+            # moment. Close this late subscriber right after the replay
+            # so its consumer (e.g. the admin SSE route) terminates
+            # instead of waiting on a queue that will never produce.
+            queue.put_nowait(None)
         return self._iter_queue(queue, state)
 
     async def emit_event(self, event: PipelineEvent) -> None:
@@ -471,12 +478,17 @@ class ImporterFacade:
         state: _PipelineState,
     ) -> AsyncIterator[PipelineEvent]:
         """Async iterator driver used by ``subscribe_events``."""
-        while True:
-            item = await queue.get()
-            if item is None:
-                return
-            yield item
-        _ = state  # pragma: no cover
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    return
+                yield item
+        finally:
+            # Detach so finished/abandoned consumers don't accumulate
+            # dead queues on the pipeline state (one per SSE reconnect).
+            if queue in state.subscribers:
+                state.subscribers.remove(queue)
 
 
 __all__ = ["ImporterFacade", "PipelineEvent"]
