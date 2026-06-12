@@ -30,6 +30,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -601,6 +602,11 @@ _VOICE_SAMPLE_MIN_COUNT = (
 _VOICE_SAMPLE_MAX_BYTES = 50 * 1024 * 1024  # 50 MB per sample
 _VOICE_PREVIEW_TEXT = "你好，我是你刚刚克隆出的声音。"
 
+# Exact shape of the ids ``_VoiceSampleStore.save`` generates. Caller-supplied
+# ids (URL path segments) are mapped to filesystem paths, so anything outside
+# this format — ``..``, ``a/../..`` — must never reach a path build.
+_VOICE_SAMPLE_ID_RE = re.compile(r"s-[0-9a-f]{12}")
+
 
 @dataclass(frozen=True)
 class _VoiceSampleEntry:
@@ -623,6 +629,8 @@ class _VoiceSampleStore:
         self._root = root
 
     def _sample_dir(self, sample_id: str) -> Path:
+        if not _VOICE_SAMPLE_ID_RE.fullmatch(sample_id):
+            raise ValueError(f"invalid sample_id: {sample_id!r}")
         return self._root / sample_id
 
     def save(self, data: bytes, *, filename: str, content_type: str) -> _VoiceSampleEntry:
